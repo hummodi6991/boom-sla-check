@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import nodemailer from "nodemailer";
+import fs from "fs";
 
 const {
   CONVERSATION_URL,
@@ -12,7 +13,7 @@ const {
   SMTP_PORT = "587",
   FROM_NAME,
   REPLY_TO,
-  // Optional override: set to "right" or "left" in repo Secrets if you know which side is Agent
+  // Set in repo Secrets to force side mapping: "right" or "left"
   AGENT_SIDE
 } = process.env;
 
@@ -20,15 +21,18 @@ if (!CONVERSATION_URL) { console.error("Missing CONVERSATION_URL"); process.exit
 if (!BOOM_USER || !BOOM_PASS) { console.error("Missing BOOM_USER/BOOM_PASS"); process.exit(1); }
 
 const MESSAGE_SELECTORS = [
+  // Common Boom/CRM patterns
+  "div.message-item",
+  "[data-testid='message-item']",
   "[data-testid*='message']",
+  "[class*='message-item']",
+  "[class*='message__item']",
   "[class*='message']",
   "[class*='chat-message']",
-  "div.message",
-  "li.message",
-  ".message-row",
-  ".chat__message",
-  ".conversation__message",
-  "[role='listitem']",
+  "div[class*='bubble']",
+  "[data-message-id]",
+  "li[class*='message']",
+  "[role='listitem'][class*='message']",
 ];
 
 const GUEST_HINTS = ["guest", "customer", "user"];
@@ -37,15 +41,28 @@ const RIGHT_HINTS = ["right", "end", "outgoing", "sent", "self", "me"];
 const LEFT_HINTS  = ["left", "start", "incoming", "received"];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const hasAny = (hints, s) => s && hints.some(h => s.includes(h));
 const countAny = (hints, s) => s ? hints.reduce((n,h)=>n + (s.split(h).length-1), 0) : 0;
 
+async function dumpArtifacts(page, tag) {
+  try {
+    const png = `/tmp/${tag}.png`;
+    const html = `/tmp/${tag}.html`;
+    await page.screenshot({ path: png, fullPage: true });
+    fs.writeFileSync(html, await page.content(), "utf8");
+    console.log(`Saved artifacts: ${png}, ${html}`);
+  } catch (e) {
+    console.log("Artifact save failed:", e.message || e);
+  }
+}
+
 async function waitForAnySelector(frame, selectors, timeoutMs = 45000) {
-  const waits = selectors.map(sel =>
-    frame.waitForSelector(sel, { timeout: timeoutMs }).then(() => sel).catch(() => null)
-  );
-  const results = await Promise.all(waits);
-  return results.find(Boolean);
+  for (const sel of selectors) {
+    try {
+      await frame.waitForSelector(sel, { timeout: Math.max(2000, Math.floor(timeoutMs / selectors.length)) });
+      return sel;
+    } catch (_) {}
+  }
+  return null;
 }
 
 async function queryAllFramesForMessages(page, selector) {
@@ -56,7 +73,7 @@ async function queryAllFramesForMessages(page, selector) {
   return { frame: null, elements: [] };
 }
 
-async function collectMessages(frame, elements, take = 10) {
+async function collectMessages(frame, elements, take = 12) {
   const docWidth = await frame.evaluate(() => document.documentElement.clientWidth || 1200);
   const out = [];
   for (const el of elements.slice(-take)) {
@@ -65,15 +82,12 @@ async function collectMessages(frame, elements, take = 10) {
     const cls = ((await el.getAttribute("class")) || "").toLowerCase();
     const txt = ((await el.innerText()) || "").toLowerCase().slice(0, 400);
 
-    // climb a bit, lots of frameworks put role classes on ancestors
     const parent = await el.evaluateHandle(n => n.parentElement);
     const grand  = await el.evaluateHandle(n => n.parentElement?.parentElement || null);
-    const g2 = grand ? await grand.getProperty("className") : null;
-
     const parentCls = (await (await parent.getProperty("className")).jsonValue() || "").toString().toLowerCase();
+    const g2 = grand ? await grand.getProperty("className") : null;
     const grandCls  = (await (g2?.jsonValue?.() ?? Promise.resolve(""))).toString().toLowerCase();
 
-    // merged strings for heuristics
     const blob = [cls, parentCls, grandCls, txt].join(" ");
 
     const isRightByPos = center > (docWidth / 2);
@@ -82,27 +96,20 @@ async function collectMessages(frame, elements, take = 10) {
                     || null;
 
     out.push({
-      element: el, center, docWidth,
-      cls, parentCls, grandCls, txt, blob,
       side: alignHints || (isRightByPos ? "right" : "left"),
-      guestScore: countAny(GUEST_HINTS, blob),
-      agentScore: countAny(AGENT_HINTS, blob)
+      agentScore: countAny(AGENT_HINTS, blob),
+      guestScore: countAny(GUEST_HINTS, blob)
     });
   }
   return out;
 }
 
 function decideSides(msgs) {
-  // group by side
-  const left  = msgs.filter(m => m.side === "left");
-  const right = msgs.filter(m => m.side === "right");
-
-  // If user explicitly configured AGENT_SIDE, honor it
   if (AGENT_SIDE === "left" || AGENT_SIDE === "right") {
     return { agentSide: AGENT_SIDE, guestSide: AGENT_SIDE === "left" ? "right" : "left" };
   }
-
-  // Use scores if any side has stronger "agent" or "guest" hints
+  const left  = msgs.filter(m => m.side === "left");
+  const right = msgs.filter(m => m.side === "right");
   const leftAgent  = left.reduce((n,m)=>n+m.agentScore,0);
   const leftGuest  = left.reduce((n,m)=>n+m.guestScore,0);
   const rightAgent = right.reduce((n,m)=>n+m.agentScore,0);
@@ -110,70 +117,73 @@ function decideSides(msgs) {
 
   if ((rightAgent > leftAgent) || (leftGuest > rightGuest)) return { agentSide: "right", guestSide: "left" };
   if ((leftAgent > rightAgent) || (rightGuest > leftGuest)) return { agentSide: "left", guestSide: "right" };
-
-  // Fallback: many CRMs render staff on the right
-  return { agentSide: "right", guestSide: "left" };
+  return { agentSide: "right", guestSide: "left" }; // sensible default
 }
 
-async function checkOnce(url) {
+async function openConversation(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  // Login if needed
+  const loginUserSel = 'input[type="email"], input[name="email"], input[name="username"]';
+  if (await page.$(loginUserSel)) {
+    await page.fill(loginUserSel, BOOM_USER);
+    await page.fill('input[type="password"]', BOOM_PASS);
+    await Promise.race([
+      page.click('button[type="submit"]').catch(()=>{}),
+      page.click('button:has-text("Sign in")').catch(()=>{}),
+      page.click('button:has-text("Log in")').catch(()=>{}),
+    ]);
+  }
+  await page.waitForLoadState("networkidle", { timeout: 60_000 });
+}
+
+async function findMessages(page) {
+  // Try on main page first
+  let sel = await waitForAnySelector(page, MESSAGE_SELECTORS, 45000);
+  if (sel) {
+    // Scroll to bottom to load latest bubbles
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await sleep(800);
+    const els = await page.$$(sel);
+    if (els.length) return { frame: page, sel, elements: els };
+  }
+  // Try every frame
+  for (const s of MESSAGE_SELECTORS) {
+    const r = await queryAllFramesForMessages(page, s);
+    if (r.elements.length) return { frame: r.frame, sel: s, elements: r.elements };
+  }
+  return { frame: null, sel: null, elements: [] };
+}
+
+async function checkOnce(url, tag) {
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-
-    // Login if needed
-    const loginUserSel = 'input[type="email"], input[name="email"], input[name="username"]';
-    if (await page.$(loginUserSel)) {
-      await page.fill(loginUserSel, BOOM_USER);
-      await page.fill('input[type="password"]', BOOM_PASS);
-      await Promise.race([
-        page.click('button[type="submit"]').catch(()=>{}),
-        page.click('button:has-text("Sign in")').catch(()=>{}),
-        page.click('button:has-text("Log in")').catch(()=>{}),
-      ]);
-    }
-
-    await page.waitForLoadState("networkidle", { timeout: 60_000 });
-
-    // Find message selector/frame
-    let sel = await waitForAnySelector(page, MESSAGE_SELECTORS, 45000);
-    let found = { frame: null, elements: [] };
-    if (sel) {
-      found = { frame: page, elements: await page.$$(sel) };
-    } else {
-      for (const s of MESSAGE_SELECTORS) {
-        const r = await queryAllFramesForMessages(page, s);
-        if (r.elements.length) { sel = s; found = r; break; }
-      }
-    }
-    if (!sel || !found.elements.length) {
-      console.log("No message elements found with any known selector.");
+    await openConversation(page, url);
+    const found = await findMessages(page);
+    if (!found.elements.length) {
+      console.log("No message elements found with known selectors.");
+      await dumpArtifacts(page, `nomsg_${tag}`);
       await browser.close();
       return { isAnswered: false, lastSender: "Unknown", reason: "no_selector_match" };
     }
-    console.log(`Matched selector: ${sel} (count=${found.elements.length})`);
-
-    // Collect last few messages and decide sides
-    const msgs = await collectMessages(found.frame, found.elements, 10);
+    console.log(`Matched selector: ${found.sel} (count=${found.elements.length})`);
+    const msgs = await collectMessages(found.frame, found.elements, 12);
     const { agentSide, guestSide } = decideSides(msgs);
     const last = msgs[msgs.length - 1];
-
-    // Verbose log to help once, then you can delete
     console.log(`Side mapping → Agent: ${agentSide}, Guest: ${guestSide}`);
     console.log(`Last bubble side: ${last?.side}, scores A:${last?.agentScore} G:${last?.guestScore}`);
-
-    let lastSender = "Unknown";
-    if (last) {
-      if (last.side === agentSide) lastSender = "Agent";
-      else if (last.side === guestSide) lastSender = "Guest";
-    }
-
     await browser.close();
+
+    const lastSender = last?.side === agentSide ? "Agent"
+                     : last?.side === guestSide ? "Guest"
+                     : "Unknown";
+
     return { isAnswered: lastSender === "Agent", lastSender };
 
   } catch (e) {
     console.error("Check error:", e?.message || e);
+    try { await dumpArtifacts(page, `error_${tag}`); } catch {}
     try { await browser.close(); } catch {}
     return { isAnswered: false, lastSender: "Unknown", reason: "error" };
   }
@@ -208,12 +218,12 @@ async function sendEmailToRohit(url, lastSender) {
 }
 
 const main = async () => {
-  const res1 = await checkOnce(process.env.CONVERSATION_URL);
+  const res1 = await checkOnce(process.env.CONVERSATION_URL, "t1");
   console.log("First check result:", { isAnswered: res1.isAnswered, lastSender: res1.lastSender });
 
   if (!res1.isAnswered) {
-    await sleep(90_000); // brief backoff
-    const res2 = await checkOnce(process.env.CONVERSATION_URL);
+    await sleep(90_000); // ~1.5 minutes, complements the 4-min delay in Power Automate
+    const res2 = await checkOnce(process.env.CONVERSATION_URL, "t2");
     console.log("Second check result:", { isAnswered: res2.isAnswered, lastSender: res2.lastSender });
 
     if (!res2.isAnswered) {
