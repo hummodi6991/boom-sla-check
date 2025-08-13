@@ -20,15 +20,14 @@ jobs:
         with:
           node-version: '20'
 
-      # Use npm install (works without a package-lock.json)
+      # Install deps (works whether or not you have a lockfile)
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci || npm install --no-audit --no-fund
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright checker
-        run: node check.js
         env:
           CONVERSATION_URL: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.conversationUrl || inputs.conversationUrl }}
           BOOM_USER: ${{ secrets.BOOM_USER }}
@@ -40,3 +39,20 @@ jobs:
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           FROM_NAME: ${{ secrets.FROM_NAME }}
           REPLY_TO: ${{ secrets.REPLY_TO }}
+          # optional manual override if detection struggles: "left" or "right"
+          AGENT_SIDE: ${{ vars.AGENT_SIDE || secrets.AGENT_SIDE }}
+        run: node check.js
+
+      - name: Upload debug artifacts (screenshots & HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boom-debug-${{ github.run_id }}
+          path: |
+            /tmp/nomsg_*.png
+            /tmp/nomsg_*.html
+            /tmp/before_login*.png
+            /tmp/after_login*.png
+            /tmp/after_regoto*.png
+          if-no-files-found: warn
+          retention-days: 3
