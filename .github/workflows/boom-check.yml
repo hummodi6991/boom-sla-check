@@ -1,0 +1,35 @@
+name: Boom SLA check
+
+on:
+  repository_dispatch:
+    types: [boom_check]
+  workflow_dispatch:
+    inputs:
+      conversationUrl:
+        description: "Boom conversation URL"
+        required: true
+        type: string
+
+jobs:
+  run-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run Playwright checker
+        run: node check.js
+        env:
+          CONVERSATION_URL: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.conversationUrl || inputs.conversationUrl }}
+          BOOM_USER: ${{ secrets.BOOM_USER }}
+          BOOM_PASS: ${{ secrets.BOOM_PASS }}
+          ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          FROM_NAME: ${{ secrets.FROM_NAME }}
+          REPLY_TO: ${{ secrets.REPLY_TO }}
