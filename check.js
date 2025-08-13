@@ -11,13 +11,14 @@ const {
   SMTP_HOST = "smtp.gmail.com",
   SMTP_PORT = "587",
   FROM_NAME,
-  REPLY_TO
+  REPLY_TO,
+  // Optional override: set to "right" or "left" in repo Secrets if you know which side is Agent
+  AGENT_SIDE
 } = process.env;
 
 if (!CONVERSATION_URL) { console.error("Missing CONVERSATION_URL"); process.exit(1); }
 if (!BOOM_USER || !BOOM_PASS) { console.error("Missing BOOM_USER/BOOM_PASS"); process.exit(1); }
 
-// Try a bunch of likely message-row selectors (case-insensitive substring matches)
 const MESSAGE_SELECTORS = [
   "[data-testid*='message']",
   "[class*='message']",
@@ -30,74 +31,88 @@ const MESSAGE_SELECTORS = [
   "[role='listitem']",
 ];
 
-// Possible hints that identify who sent the message
 const GUEST_HINTS = ["guest", "customer", "user"];
-const AGENT_HINTS = ["agent", "staff", "support", "team", "operator", "admin"];
-
-// Some UIs align guest/agent bubbles differently; use as a weak hint
-const RIGHT_HINTS = ["right", "end", "outgoing", "sent"];
+const AGENT_HINTS = ["agent", "staff", "support", "team", "operator", "admin", "oaktree", "boom"];
+const RIGHT_HINTS = ["right", "end", "outgoing", "sent", "self", "me"];
 const LEFT_HINTS  = ["left", "start", "incoming", "received"];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const hasHint = (hints, hay) => hay && hints.some(h => hay.includes(h));
+const hasAny = (hints, s) => s && hints.some(h => s.includes(h));
+const countAny = (hints, s) => s ? hints.reduce((n,h)=>n + (s.split(h).length-1), 0) : 0;
 
 async function waitForAnySelector(frame, selectors, timeoutMs = 45000) {
-  // Wait in parallel for any selector to appear
   const waits = selectors.map(sel =>
     frame.waitForSelector(sel, { timeout: timeoutMs }).then(() => sel).catch(() => null)
   );
   const results = await Promise.all(waits);
-  return results.find(Boolean); // first non-null selector that appeared
+  return results.find(Boolean);
 }
 
 async function queryAllFramesForMessages(page, selector) {
-  const frames = page.frames();
-  for (const f of frames) {
+  for (const f of page.frames()) {
     const els = await f.$$(selector);
     if (els.length) return { frame: f, elements: els };
   }
   return { frame: null, elements: [] };
 }
 
-async function detectLastSender(frame, elements) {
-  const last = elements[elements.length - 1];
-  if (!last) return { isAnswered: false, lastSender: "Unknown" };
+async function collectMessages(frame, elements, take = 10) {
+  const docWidth = await frame.evaluate(() => document.documentElement.clientWidth || 1200);
+  const out = [];
+  for (const el of elements.slice(-take)) {
+    const box = await el.boundingBox();
+    const center = box ? (box.x + box.width / 2) : 0;
+    const cls = ((await el.getAttribute("class")) || "").toLowerCase();
+    const txt = ((await el.innerText()) || "").toLowerCase().slice(0, 400);
 
-  const cls = ((await last.getAttribute("class")) || "").toLowerCase();
-  const txt = ((await last.innerText()) || "").toLowerCase();
+    // climb a bit, lots of frameworks put role classes on ancestors
+    const parent = await el.evaluateHandle(n => n.parentElement);
+    const grand  = await el.evaluateHandle(n => n.parentElement?.parentElement || null);
+    const g2 = grand ? await grand.getProperty("className") : null;
 
-  // Look one level up as well (some frameworks attach role classes to parent)
-  const parent = await last.evaluateHandle(el => el.parentElement);
-  const parentCls = (parent && (await parent.getProperty("className")).toString().toLowerCase()) || "";
+    const parentCls = (await (await parent.getProperty("className")).jsonValue() || "").toString().toLowerCase();
+    const grandCls  = (await (g2?.jsonValue?.() ?? Promise.resolve(""))).toString().toLowerCase();
 
-  let lastSender = "Unknown";
+    // merged strings for heuristics
+    const blob = [cls, parentCls, grandCls, txt].join(" ");
 
-  if (hasHint(GUEST_HINTS, cls) || hasHint(GUEST_HINTS, txt) || hasHint(GUEST_HINTS, parentCls)) {
-    lastSender = "Guest";
-  } else if (hasHint(AGENT_HINTS, cls) || hasHint(AGENT_HINTS, txt) || hasHint(AGENT_HINTS, parentCls)) {
-    lastSender = "Agent";
-  } else {
-    // Alignment heuristic (weak). Inspect classes up the tree.
-    const bubble = await last.evaluateHandle(el => {
-      let n = el;
-      for (let i = 0; i < 3 && n; i++) n = n.parentElement;
-      return n;
+    const isRightByPos = center > (docWidth / 2);
+    const alignHints = (RIGHT_HINTS.some(h => blob.includes(h)) && "right")
+                    || (LEFT_HINTS.some(h => blob.includes(h))  && "left")
+                    || null;
+
+    out.push({
+      element: el, center, docWidth,
+      cls, parentCls, grandCls, txt, blob,
+      side: alignHints || (isRightByPos ? "right" : "left"),
+      guestScore: countAny(GUEST_HINTS, blob),
+      agentScore: countAny(AGENT_HINTS, blob)
     });
+  }
+  return out;
+}
 
-    let bubbleCls = "";
-    try {
-      bubbleCls = (await (await bubble.getProperty("className")).jsonValue() || "").toLowerCase();
-    } catch (_) {}
+function decideSides(msgs) {
+  // group by side
+  const left  = msgs.filter(m => m.side === "left");
+  const right = msgs.filter(m => m.side === "right");
 
-    if (hasHint(RIGHT_HINTS, cls + " " + bubbleCls)) {
-      // Often agent bubbles are on the right
-      lastSender = "Agent";
-    } else if (hasHint(LEFT_HINTS, cls + " " + bubbleCls)) {
-      lastSender = "Guest";
-    }
+  // If user explicitly configured AGENT_SIDE, honor it
+  if (AGENT_SIDE === "left" || AGENT_SIDE === "right") {
+    return { agentSide: AGENT_SIDE, guestSide: AGENT_SIDE === "left" ? "right" : "left" };
   }
 
-  return { isAnswered: lastSender === "Agent", lastSender };
+  // Use scores if any side has stronger "agent" or "guest" hints
+  const leftAgent  = left.reduce((n,m)=>n+m.agentScore,0);
+  const leftGuest  = left.reduce((n,m)=>n+m.guestScore,0);
+  const rightAgent = right.reduce((n,m)=>n+m.agentScore,0);
+  const rightGuest = right.reduce((n,m)=>n+m.guestScore,0);
+
+  if ((rightAgent > leftAgent) || (leftGuest > rightGuest)) return { agentSide: "right", guestSide: "left" };
+  if ((leftAgent > rightAgent) || (rightGuest > leftGuest)) return { agentSide: "left", guestSide: "right" };
+
+  // Fallback: many CRMs render staff on the right
+  return { agentSide: "right", guestSide: "left" };
 }
 
 async function checkOnce(url) {
@@ -107,46 +122,55 @@ async function checkOnce(url) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-    // If login form appears, log in
+    // Login if needed
     const loginUserSel = 'input[type="email"], input[name="email"], input[name="username"]';
     if (await page.$(loginUserSel)) {
       await page.fill(loginUserSel, BOOM_USER);
       await page.fill('input[type="password"]', BOOM_PASS);
       await Promise.race([
-        page.click('button[type="submit"]'),
+        page.click('button[type="submit"]').catch(()=>{}),
         page.click('button:has-text("Sign in")').catch(()=>{}),
         page.click('button:has-text("Log in")').catch(()=>{}),
       ]);
     }
 
-    // Wait until network settles and UI renders
     await page.waitForLoadState("networkidle", { timeout: 60_000 });
 
-    // Try to find a selector that actually exists (search main frame first)
-    let matchedSelector = await waitForAnySelector(page, MESSAGE_SELECTORS, 45000);
+    // Find message selector/frame
+    let sel = await waitForAnySelector(page, MESSAGE_SELECTORS, 45000);
     let found = { frame: null, elements: [] };
-
-    if (matchedSelector) {
-      found = { frame: page, elements: await page.$$(matchedSelector) };
+    if (sel) {
+      found = { frame: page, elements: await page.$$(sel) };
     } else {
-      // Maybe content is inside an iframe; try each selector across frames
-      for (const sel of MESSAGE_SELECTORS) {
-        const result = await queryAllFramesForMessages(page, sel);
-        if (result.elements.length) { matchedSelector = sel; found = result; break; }
+      for (const s of MESSAGE_SELECTORS) {
+        const r = await queryAllFramesForMessages(page, s);
+        if (r.elements.length) { sel = s; found = r; break; }
       }
     }
-
-    if (!matchedSelector || !found.elements.length) {
+    if (!sel || !found.elements.length) {
       console.log("No message elements found with any known selector.");
       await browser.close();
       return { isAnswered: false, lastSender: "Unknown", reason: "no_selector_match" };
     }
+    console.log(`Matched selector: ${sel} (count=${found.elements.length})`);
 
-    console.log(`Matched selector: ${matchedSelector} (count=${found.elements.length})`);
-    const verdict = await detectLastSender(found.frame, found.elements);
+    // Collect last few messages and decide sides
+    const msgs = await collectMessages(found.frame, found.elements, 10);
+    const { agentSide, guestSide } = decideSides(msgs);
+    const last = msgs[msgs.length - 1];
+
+    // Verbose log to help once, then you can delete
+    console.log(`Side mapping → Agent: ${agentSide}, Guest: ${guestSide}`);
+    console.log(`Last bubble side: ${last?.side}, scores A:${last?.agentScore} G:${last?.guestScore}`);
+
+    let lastSender = "Unknown";
+    if (last) {
+      if (last.side === agentSide) lastSender = "Agent";
+      else if (last.side === guestSide) lastSender = "Guest";
+    }
 
     await browser.close();
-    return verdict;
+    return { isAnswered: lastSender === "Agent", lastSender };
 
   } catch (e) {
     console.error("Check error:", e?.message || e);
@@ -188,7 +212,7 @@ const main = async () => {
   console.log("First check result:", { isAnswered: res1.isAnswered, lastSender: res1.lastSender });
 
   if (!res1.isAnswered) {
-    await sleep(90_000); // brief backoff to reduce false positives
+    await sleep(90_000); // brief backoff
     const res2 = await checkOnce(process.env.CONVERSATION_URL);
     console.log("Second check result:", { isAnswered: res2.isAnswered, lastSender: res2.lastSender });
 
