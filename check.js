@@ -13,7 +13,6 @@ const {
   SMTP_PORT = "587",
   FROM_NAME,
   REPLY_TO,
-  // Set in repo Secrets to force side mapping: "right" or "left"
   AGENT_SIDE
 } = process.env;
 
@@ -21,53 +20,39 @@ if (!CONVERSATION_URL) { console.error("Missing CONVERSATION_URL"); process.exit
 if (!BOOM_USER || !BOOM_PASS) { console.error("Missing BOOM_USER/BOOM_PASS"); process.exit(1); }
 
 const MESSAGE_SELECTORS = [
-  // Common Boom/CRM patterns
-  "div.message-item",
-  "[data-testid='message-item']",
+  // likely patterns
   "[data-testid*='message']",
+  "[data-qa*='message']",
   "[class*='message-item']",
-  "[class*='message__item']",
-  "[class*='message']",
-  "[class*='chat-message']",
-  "div[class*='bubble']",
-  "[data-message-id]",
-  "li[class*='message']",
-  "[role='listitem'][class*='message']",
+  "[class*='MessageItem']",
+  "[class*='Message_message']",
+  // generic chat bubbles
+  ".message, .message-row, .chat-message, .bubble, .msg, li.message, div.message"
 ];
 
-const GUEST_HINTS = ["guest", "customer", "user"];
-const AGENT_HINTS = ["agent", "staff", "support", "team", "operator", "admin", "oaktree", "boom"];
-const RIGHT_HINTS = ["right", "end", "outgoing", "sent", "self", "me"];
-const LEFT_HINTS  = ["left", "start", "incoming", "received"];
+const GUEST_HINTS = ["guest","customer","user"];
+const AGENT_HINTS = ["agent","staff","support","team","operator","admin","oaktree","boom"];
+const RIGHT_HINTS = ["right","end","outgoing","sent","self","me"];
+const LEFT_HINTS  = ["left","start","incoming","received"];
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const countAny = (hints, s) => s ? hints.reduce((n,h)=>n + (s.split(h).length-1), 0) : 0;
+const save = (path, buf) => fs.writeFileSync(path, buf);
+const hasAny = (arr, s) => s && arr.some(h => s.includes(h));
+const countAny = (arr, s) => s ? arr.reduce((n,h)=>n + (s.split(h).length-1), 0) : 0;
 
-async function dumpArtifacts(page, tag) {
-  try {
-    const png = `/tmp/${tag}.png`;
-    const html = `/tmp/${tag}.html`;
-    await page.screenshot({ path: png, fullPage: true });
-    fs.writeFileSync(html, await page.content(), "utf8");
-    console.log(`Saved artifacts: ${png}, ${html}`);
-  } catch (e) {
-    console.log("Artifact save failed:", e.message || e);
-  }
-}
-
-async function waitForAnySelector(frame, selectors, timeoutMs = 45000) {
-  for (const sel of selectors) {
+async function waitForAnySelector(frame, sels, timeout = 45000) {
+  for (const sel of sels) {
     try {
-      await frame.waitForSelector(sel, { timeout: Math.max(2000, Math.floor(timeoutMs / selectors.length)) });
+      await frame.waitForSelector(sel, { timeout });
       return sel;
-    } catch (_) {}
+    } catch {}
   }
   return null;
 }
 
-async function queryAllFramesForMessages(page, selector) {
+async function queryAllFramesForMessages(page, sel) {
   for (const f of page.frames()) {
-    const els = await f.$$(selector);
+    const els = await f.$$(sel);
     if (els.length) return { frame: f, elements: els };
   }
   return { frame: null, elements: [] };
@@ -85,8 +70,7 @@ async function collectMessages(frame, elements, take = 12) {
     const parent = await el.evaluateHandle(n => n.parentElement);
     const grand  = await el.evaluateHandle(n => n.parentElement?.parentElement || null);
     const parentCls = (await (await parent.getProperty("className")).jsonValue() || "").toString().toLowerCase();
-    const g2 = grand ? await grand.getProperty("className") : null;
-    const grandCls  = (await (g2?.jsonValue?.() ?? Promise.resolve(""))).toString().toLowerCase();
+    const grandCls  = (await (await grand?.getProperty?.("className")).jsonValue?.() || "").toString().toLowerCase();
 
     const blob = [cls, parentCls, grandCls, txt].join(" ");
 
@@ -96,9 +80,11 @@ async function collectMessages(frame, elements, take = 12) {
                     || null;
 
     out.push({
+      element: el, center, docWidth,
+      cls, parentCls, grandCls, txt, blob,
       side: alignHints || (isRightByPos ? "right" : "left"),
-      agentScore: countAny(AGENT_HINTS, blob),
-      guestScore: countAny(GUEST_HINTS, blob)
+      guestScore: countAny(GUEST_HINTS, blob),
+      agentScore: countAny(AGENT_HINTS, blob)
     });
   }
   return out;
@@ -117,73 +103,90 @@ function decideSides(msgs) {
 
   if ((rightAgent > leftAgent) || (leftGuest > rightGuest)) return { agentSide: "right", guestSide: "left" };
   if ((leftAgent > rightAgent) || (rightGuest > leftGuest)) return { agentSide: "left", guestSide: "right" };
-  return { agentSide: "right", guestSide: "left" }; // sensible default
+  return { agentSide: "right", guestSide: "left" };
 }
 
-async function openConversation(page, url) {
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  // Login if needed
-  const loginUserSel = 'input[type="email"], input[name="email"], input[name="username"]';
-  if (await page.$(loginUserSel)) {
-    await page.fill(loginUserSel, BOOM_USER);
-    await page.fill('input[type="password"]', BOOM_PASS);
-    await Promise.race([
-      page.click('button[type="submit"]').catch(()=>{}),
-      page.click('button:has-text("Sign in")').catch(()=>{}),
-      page.click('button:has-text("Log in")').catch(()=>{}),
-    ]);
+async function ensureMessagesVisible(frame) {
+  // try scroll to bottom to materialize virtualized lists
+  for (let i=0;i<6;i++) {
+    await frame.mouse.wheel(0, 800);
+    await sleep(200);
   }
-  await page.waitForLoadState("networkidle", { timeout: 60_000 });
 }
 
-async function findMessages(page) {
-  // Try on main page first
-  let sel = await waitForAnySelector(page, MESSAGE_SELECTORS, 45000);
-  if (sel) {
-    // Scroll to bottom to load latest bubbles
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await sleep(800);
-    const els = await page.$$(sel);
-    if (els.length) return { frame: page, sel, elements: els };
-  }
-  // Try every frame
-  for (const s of MESSAGE_SELECTORS) {
-    const r = await queryAllFramesForMessages(page, s);
-    if (r.elements.length) return { frame: r.frame, sel: s, elements: r.elements };
-  }
-  return { frame: null, sel: null, elements: [] };
-}
-
-async function checkOnce(url, tag) {
+async function checkOnce(url) {
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   try {
-    await openConversation(page, url);
-    const found = await findMessages(page);
-    if (!found.elements.length) {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    save("/tmp/before_login.png", await page.screenshot());
+
+    // Login if needed
+    const loginUserSel = 'input[type="email"], input[name="email"], input[name="username"]';
+    if (await page.$(loginUserSel)) {
+      await page.fill(loginUserSel, BOOM_USER);
+      await page.fill('input[type="password"]', BOOM_PASS);
+      await Promise.race([
+        page.click('button[type="submit"]').catch(()=>{}),
+        page.click('button:has-text("Sign in")').catch(()=>{}),
+        page.click('button:has-text("Log in")').catch(()=>{}),
+      ]);
+      await page.waitForLoadState("networkidle", { timeout: 60_000 });
+      // Navigate AGAIN to the conversation (some apps drop you on a dashboard after login)
+      await page.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
+      save("/tmp/after_login.png", await page.screenshot());
+    }
+
+    await page.waitForLoadState("networkidle", { timeout: 60_000 });
+    save("/tmp/after_regoto.png", await page.screenshot());
+
+    // Look for messages on the main page first
+    let sel = await waitForAnySelector(page, MESSAGE_SELECTORS, 30000);
+    let found = { frame: null, elements: [] };
+    if (sel) {
+      await ensureMessagesVisible(page);
+      found = { frame: page, elements: await page.$$(sel) };
+    } else {
+      // scan iframes
+      for (const s of MESSAGE_SELECTORS) {
+        const r = await queryAllFramesForMessages(page, s);
+        if (r.elements.length) { sel = s; found = r; break; }
+      }
+    }
+
+    if (!sel || !found.elements.length) {
       console.log("No message elements found with known selectors.");
-      await dumpArtifacts(page, `nomsg_${tag}`);
+      save("/tmp/nomsg_t1.png", await page.screenshot({ fullPage: true }));
+      save("/tmp/nomsg_t1.html", Buffer.from(await page.content()));
       await browser.close();
       return { isAnswered: false, lastSender: "Unknown", reason: "no_selector_match" };
     }
-    console.log(`Matched selector: ${found.sel} (count=${found.elements.length})`);
+
+    console.log(`Matched selector: ${sel} (count=${found.elements.length})`);
+
     const msgs = await collectMessages(found.frame, found.elements, 12);
+    const last = msgs.at(-1);
     const { agentSide, guestSide } = decideSides(msgs);
-    const last = msgs[msgs.length - 1];
+
     console.log(`Side mapping → Agent: ${agentSide}, Guest: ${guestSide}`);
     console.log(`Last bubble side: ${last?.side}, scores A:${last?.agentScore} G:${last?.guestScore}`);
+
+    let lastSender = "Unknown";
+    if (last) {
+      if (last.side === agentSide) lastSender = "Agent";
+      else if (last.side === guestSide) lastSender = "Guest";
+    }
+
     await browser.close();
-
-    const lastSender = last?.side === agentSide ? "Agent"
-                     : last?.side === guestSide ? "Guest"
-                     : "Unknown";
-
     return { isAnswered: lastSender === "Agent", lastSender };
 
   } catch (e) {
     console.error("Check error:", e?.message || e);
-    try { await dumpArtifacts(page, `error_${tag}`); } catch {}
+    try {
+      save("/tmp/nomsg_t2.png", await page.screenshot({ fullPage: true }));
+      save("/tmp/nomsg_t2.html", Buffer.from(await page.content()));
+    } catch {}
     try { await browser.close(); } catch {}
     return { isAnswered: false, lastSender: "Unknown", reason: "error" };
   }
@@ -217,17 +220,18 @@ async function sendEmailToRohit(url, lastSender) {
   });
 }
 
+const sleepMsBetweenChecks = 90_000; // ~1.5 min
+
 const main = async () => {
-  const res1 = await checkOnce(process.env.CONVERSATION_URL, "t1");
+  const res1 = await checkOnce(CONVERSATION_URL);
   console.log("First check result:", { isAnswered: res1.isAnswered, lastSender: res1.lastSender });
 
   if (!res1.isAnswered) {
-    await sleep(90_000); // ~1.5 minutes, complements the 4-min delay in Power Automate
-    const res2 = await checkOnce(process.env.CONVERSATION_URL, "t2");
+    await sleep(sleepMsBetweenChecks);
+    const res2 = await checkOnce(CONVERSATION_URL);
     console.log("Second check result:", { isAnswered: res2.isAnswered, lastSender: res2.lastSender });
-
     if (!res2.isAnswered) {
-      await sendEmailToRohit(process.env.CONVERSATION_URL, res2.lastSender);
+      await sendEmailToRohit(CONVERSATION_URL, res2.lastSender);
     }
   }
 };
