@@ -1,48 +1,53 @@
 name: Boom SLA check
 
 on:
+  repository_dispatch:
+    types: [boom_check]
   workflow_dispatch:
     inputs:
       conversationUrl:
-        description: "Boom conversation URL (email tracking link or the final Boom URL)"
+        description: "Boom conversation URL"
         required: true
         type: string
-  repository_dispatch:
-    types: [boom_check]
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
+      # <- This is the step you asked about
       - name: Install dependencies
-        run: npm install --no-fund --no-audit
+        run: |
+          npm ci --ignore-scripts || npm install --no-audit --ignore-scripts
 
       - name: Install Playwright Chromium (with system deps)
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install --with-deps chromium
 
       - name: Run Playwright checker
         env:
-          BOOM_USER: ${{ secrets.BOOM_USER }}
-          BOOM_PASS: ${{ secrets.BOOM_PASS }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          FROM_NAME: ${{ secrets.FROM_NAME }}
-          TO_EMAILS: ${{ secrets.ROHIT_EMAIL }}
-          DEBUG_ON_UNSURE: "true"
+          # Power Automate (repository_dispatch) payload OR manual (workflow_dispatch) input
+          CONVERSATION_URL: ${{ github.event.inputs.conversationUrl || github.event.client_payload.conversationUrl }}
+
+          # Secrets from repo settings → Actions → Secrets and variables → Repository secrets
+          BOOM_USER:   ${{ secrets.BOOM_USER }}
+          BOOM_PASS:   ${{ secrets.BOOM_PASS }}
+          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+          SMTP_USER:   ${{ secrets.SMTP_USER }}
+          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+          FROM_NAME:   ${{ secrets.FROM_NAME }}
+          ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
         run: |
-          node check.js --conversation "${{ github.event.client_payload.conversationUrl || inputs.conversationUrl }}"
+          node check.js --conversation "${CONVERSATION_URL}"
 
       - name: Upload page artifacts (if any)
         if: always()
