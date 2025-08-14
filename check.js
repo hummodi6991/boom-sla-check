@@ -1,267 +1,264 @@
 // check.js
-// Robust checker: resolves tracking links, logs in, opens Messages, decides if guest is unanswered, emails if needed.
-// Save debug artifacts whenever we're not confident.
+// Robust Boom conversation watcher with artifact saving and resilient selectors.
 
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
-const fs = require('fs/promises');
+const fs = require('fs');
 const path = require('path');
-const { URL } = require('url');
 
 const BOOM_USER = process.env.BOOM_USER;
 const BOOM_PASS = process.env.BOOM_PASS;
 const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = Number(process.env.SMTP_PORT || '587');
+const SMTP_PORT = +(process.env.SMTP_PORT || 465);
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
-const FROM_NAME = process.env.FROM_NAME || 'Oaktree Boom SLA Bot';
-const TO_EMAILS = (process.env.TO_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
-const DEBUG_ON_UNSURE = (process.env.DEBUG_ON_UNSURE || 'true').toLowerCase() === 'true';
+const FROM_NAME = process.env.FROM_NAME || 'Boom SLA Bot';
+const TO_EMAIL  = process.env.ROHIT_EMAIL || process.env.TO_EMAIL || SMTP_USER; // fall back to sender
 
-if (!BOOM_USER || !BOOM_PASS) {
-  console.error('Missing BOOM_USER / BOOM_PASS');
-  process.exit(1);
+const ART_DIR = '/tmp';
+const log = (...a) => console.log(...a);
+
+if (!process.env.CONVERSATION_URL && !process.argv.find(a => a.startsWith('--conversation'))) {
+  console.error('Usage: node check.js --conversation "<url>"');
+  process.exit(2);
+}
+const argUrl =
+  (process.env.CONVERSATION_URL) ||
+  (process.argv.find(a => a.startsWith('--conversation')) || '').split('=')[1];
+
+function artPath(name) { return path.join(ART_DIR, name); }
+
+async function saveArtifacts(page, tag) {
+  const shot = artPath(`shot_${tag}.png`);
+  const html = artPath(`page_${tag}.html`);
+  try { await page.screenshot({ path: shot, fullPage: true }); } catch {}
+  try { await fs.promises.writeFile(html, await page.content()); } catch {}
 }
 
-const argv = process.argv.join(' ');
-const rawArg = /--conversation\s+("([^"]+)"|'([^']+)'|(\S+))/.exec(argv);
-if (!rawArg) {
-  console.error('Missing --conversation argument');
-  process.exit(1);
-}
-const conversationInput = rawArg[2] || rawArg[3] || rawArg[4];
+async function loginIfNeeded(page) {
+  // If we’re on the Boom login page, sign in.
+  const isLogin = await page.locator('text=Dashboard Login').first().isVisible().catch(() => false);
+  if (!isLogin) return;
 
-function nowTag() {
-  const d = new Date();
-  return `${d.getHours()}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`;
-}
+  const email = page.locator('input[type="email"], input[name="email"]');
+  const pass  = page.locator('input[type="password"], input[name="password"]');
+  const btn   = page.locator('button:has-text("Login"), button:has-text("Sign in"), input[type="submit"]');
 
-async function saveDebug(page, tag) {
-  const png = `/tmp/shot_${tag}.png`;
-  const html = `/tmp/page_${tag}.html`;
-  try {
-    await page.screenshot({ path: png, fullPage: true });
-  } catch {}
-  try {
-    await fs.writeFile(html, await page.content(), 'utf8');
-  } catch {}
-}
-
-async function resolveTrackingLink(context, url) {
-  try {
-    const u = new URL(url);
-    if (u.hostname.endsWith('boomnow.com')) return url; // already final
-  } catch {
-    // if it's not a valid URL, just return as-is (Playwright will try)
-    return url;
-  }
-
-  // Open in a lightweight page and let redirects happen until we land on app.boomnow.com
-  const page = await context.newPage();
-  await page.route('**/*', route => route.continue()); // just in case
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-
-  // Some trackers show an interstitial; wait for a navigation or a URL change
-  for (let i = 0; i < 5; i++) {
-    const cur = page.url();
-    try {
-      const u = new URL(cur);
-      if (u.hostname.endsWith('boomnow.com')) {
-        const finalUrl = cur;
-        await saveDebug(page, `login_${nowTag()}`); // snapshot of where we landed
-        await page.close();
-        return finalUrl;
-      }
-    } catch {}
-    // give the tracker a moment to push us
-    await page.waitForTimeout(1500);
-  }
-
-  const finalUrl = page.url();
-  await saveDebug(page, `login_${nowTag()}`);
-  await page.close();
-  return finalUrl;
-}
-
-async function ensureLoggedIn(page) {
-  const url = page.url();
-  if (/boomnow\.com/i.test(url) && !/login/i.test(url)) return;
-
-  // Fill Boom login form
-  try {
-    await page.waitForSelector('input[type="email"], input[name="email"]', { timeout: 15_000 });
-  } catch {
-    // if the resolved URL is already inside the app, bail
-    return;
-  }
-
-  const emailSel = 'input[type="email"], input[name="email"]';
-  const passSel  = 'input[type="password"], input[name="password"]';
-  const buttonSel = 'button:has-text("Login"), button[type="submit"]';
-
-  await page.fill(emailSel, BOOM_USER);
-  await page.fill(passSel, BOOM_PASS);
+  await email.fill(BOOM_USER, { timeout: 20000 });
+  await pass.fill(BOOM_PASS,   { timeout: 20000 });
   await Promise.all([
-    page.click(buttonSel),
-    page.waitForNavigation({ waitUntil: 'networkidle', timeout: 60_000 }).catch(()=>{})
+    page.waitForLoadState('networkidle', { timeout: 30000 }),
+    btn.click({ timeout: 10000 })
   ]);
 }
 
-async function openMessagesIfNeeded(page) {
-  // Heuristic: if message composer is present, we are already in conversation view.
-  const composer = await page.$('textarea[placeholder*="Type"], textarea, [contenteditable="true"]');
-  if (composer) return true;
+async function resolveFinalUrl(context, rawUrl) {
+  // Outlook “xwlu9.mjt.lu/lnk/…” → follow to app.boomnow.com
+  const page = await context.newPage();
+  await page.goto(rawUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  // If it redirects in-page via meta/JS, give it a moment
+  await page.waitForTimeout(1500);
+  const fin = page.url();
+  await saveArtifacts(page, 't1');
+  await page.close();
+  return fin;
+}
 
-  // Try clicking a "Messages" tab or icon if present
-  const tabSelectors = [
-    'div[role="tab"]:has-text("Messages")',
-    'button:has-text("Messages")',
-    'a:has-text("Messages")'
+// Heuristic: scroll and wait for message area to render
+async function waitForConversationReady(page) {
+  // Wait for any of these hints that the conversation UI is present
+  const hints = [
+    'text=/Type your message/i',
+    'text=/via channel/i',
+    'button:has-text("APPROVE")',
+    'button:has-text("REJECT")',
+    'text=/AI LIVE/i'
   ];
-  for (const sel of tabSelectors) {
-    const el = await page.$(sel);
-    if (el) {
-      await Promise.all([
-        el.click(),
-        page.waitForLoadState('networkidle').catch(()=>{})
-      ]);
-      const again = await page.$('textarea, [contenteditable="true"]');
-      if (again) return true;
+  await page.waitForLoadState('domcontentloaded', { timeout: 45000 });
+  for (let i = 0; i < 6; i++) {
+    for (const h of hints) {
+      if (await page.locator(h).first().isVisible().catch(() => false)) return true;
     }
+    // force-load lazy content
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(700);
   }
   return false;
 }
 
-async function sampleLastBubble(page) {
-  // Try to find message bubbles. Narrow selectors first, then fallbacks.
+// Returns { isAnswered (boolean), lastSender ('Guest'|'Agent'|'Auto'|'Unknown'), snippet, reason, selUsed }
+async function getLastMessageInfo(page) {
+  // 1) Selector-based attempt
   const selectors = [
-    // likely message feed containers
-    '[class*="message"]',
-    '[data-test*="message"]',
-    '.v-messages__wrapper .message, .message, div[class*="bubble"]'
+    // generic bubbles
+    '[class*="message"] [class*="bubble"]',
+    '[class*="message"][class*="row"]',
+    '[class*="messages"] [class*="message"]',
+    '.v-messages__row, .v-messages__wrapper .v-message',
+    // common fallbacks
+    'div[class*="mb-"][class*="mt-"] div' // very permissive last resort in conversation pane
   ];
 
+  let selUsed = '(none)';
   for (const sel of selectors) {
-    const nodes = await page.$$(`${sel}`);
-    if (nodes.length) {
-      // pull last non-empty node text
-      for (let i = nodes.length - 1; i >= 0; i--) {
-        const text = (await nodes[i].innerText()).trim();
-        if (text) {
-          // Identify sender by nearby labels
-          const box = await nodes[i].boundingBox().catch(()=>null);
-          let sender = 'Unknown';
-          try {
-            // Look slightly above the bubble for "Guest" / "Agent" words in English/Arabic.
-            const snippet = text.slice(0, 160).replace(/\s+/g, ' ');
-            // lightweight heuristic: if composer exists we are in a 1:1 thread; try to see if bubble has role or class
-            const cls = await nodes[i].getAttribute('class') || '';
-            if (/(guest|from-guest)/i.test(cls)) sender = 'Guest';
-            if (/(agent|from-agent|staff)/i.test(cls)) sender = 'Agent';
-            return { textSample: snippet, sender, foundBy: sel };
-          } catch {}
-        }
+    const loc = page.locator(sel);
+    const count = await loc.count().catch(() => 0);
+    if (count >= 1) {
+      selUsed = sel;
+      // take the last visible node’s text
+      const idx = count - 1;
+      const text = (await loc.nth(idx).innerText().catch(() => '') || '').trim();
+      if (text) {
+        // try to infer sender nearby
+        const sender = await page.evaluate((selector, index) => {
+          const nodes = Array.from(document.querySelectorAll(selector));
+          const node = nodes[index];
+          if (!node) return 'Unknown';
+          // walk up a bit and read nearby labels
+          let cur = node;
+          let seen = '';
+          for (let i = 0; i < 5 && cur; i++) {
+            seen += ' ' + (cur.innerText || '');
+            cur = cur.parentElement;
+          }
+          if (/via email\s*·\s*Auto/i.test(seen)) return 'Auto';
+          if (/\bAgent\b/i.test(seen)) return 'Agent';
+          if (/\bGuest\b/i.test(seen)) return 'Guest';
+          return 'Unknown';
+        }, sel, idx);
+
+        return {
+          isAnswered: sender !== 'Guest', // if last is not Guest, we consider answered
+          lastSender: sender,
+          snippet: text.slice(0, 180),
+          reason: 'selector',
+          selUsed
+        };
       }
     }
   }
 
-  // Geo heuristic: when we fail to grab bubbles, pull any left-column thread body text that’s clearly not the tab strip.
-  const bodyFallback = await page.innerText('body').catch(()=> '');
-  const fallbackSample = (bodyFallback || '').slice(0, 160).replace(/\s+/g,' ');
-  return { textSample: fallbackSample, sender: 'Unknown', foundBy: '(none)' };
+  // 2) Fallback: anchor on 'via channel' and read local neighborhood (very robust on Boom UI)
+  const info = await page.evaluate(() => {
+    const items = Array.from(document.querySelectorAll('body *'))
+      .filter(n => n.textContent && /via channel/i.test(n.textContent));
+    if (!items.length) return null;
+
+    // take the lowest (latest) instance
+    items.sort((a, b) => (a.getBoundingClientRect().top - b.getBoundingClientRect().top));
+    const last = items[items.length - 1];
+    const y = last.getBoundingClientRect().top;
+
+    // collect nearby text above the chip
+    const vicinity = Array.from(document.querySelectorAll('body *'))
+      .filter(n => {
+        const r = n.getBoundingClientRect();
+        return r.bottom <= y && r.bottom >= y - 320; // within 320px above
+      })
+      .map(n => (n.innerText || '').trim())
+      .filter(Boolean);
+
+    const joined = vicinity.join('\n');
+    // sender inference
+    let sender = 'Unknown';
+    if (/via email\s*·\s*Auto/i.test(joined)) sender = 'Auto';
+    else if (/\bAgent\b/i.test(joined)) sender = 'Agent';
+    else if (/\bGuest\b/i.test(joined)) sender = 'Guest';
+
+    // grab the most likely bubble text near the bottom of this window
+    let snippet = '';
+    for (let i = vicinity.length - 1; i >= 0; i--) {
+      const t = vicinity[i];
+      if (!/via channel|Agent|Guest|APPROVE|REJECT|CONFIDENCE|AI|Fun Level Changed|TRAIN|via email|Auto/i.test(t)) {
+        snippet = t;
+        break;
+      }
+    }
+    return {
+      isAnswered: sender !== 'Guest',
+      lastSender: sender,
+      snippet: snippet.slice(0, 180),
+      reason: 'geo-heuristic',
+      selUsed: 'text=/via channel/i'
+    };
+  });
+
+  if (info) return info;
+
+  return { isAnswered: true, lastSender: 'Unknown', snippet: '', reason: 'no_selector', selUsed: '(none)' };
 }
 
-async function main() {
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
-  const page = await context.newPage();
-
-  // 1) Resolve final Boom URL from the email tracking link (if needed)
-  const resolvedUrl = await resolveTrackingLink(context, conversationInput);
-  console.log(`Resolved Boom URL: ${resolvedUrl}`);
-
-  // 2) Go there and login if required
-  await page.goto(resolvedUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(()=>{});
-  await ensureLoggedIn(page);
-
-  // Wait until we are inside Boom app
-  await page.waitForLoadState('networkidle', { timeout: 60_000 }).catch(()=>{});
-
-  // 3) Make sure we’re on the conversation and Messages are visible
-  const inMessages = await openMessagesIfNeeded(page);
-  const tag = nowTag();
-  if (!inMessages) {
-    await saveDebug(page, `t2_${tag}`);
-    console.log(`Second check result: { ok: false, reason: 'no_selector', lastSender: 'Unknown', snippet: '' }`);
-    console.log('No alert sent (not confident or not guest/unanswered).');
-    await browser.close();
-    return;
-  }
-
-  // 4) Sample the last visible bubble
-  const sample = await sampleLastBubble(page);
-  await saveDebug(page, `t2_${tag}`);
-
-  // Decision rule:
-  // - If we cannot determine a sender confidently OR it looks like a guest and there's no agent reply, alert.
-  //   (You can tighten/loosen as needed.)
-  let isGuestUnanswered = false;
-  if (sample.sender === 'Guest') isGuestUnanswered = true;
-  if (sample.sender === 'Unknown' && DEBUG_ON_UNSURE) isGuestUnanswered = true;
-
-  const result = {
-    isAnswered: !isGuestUnanswered,
-    lastSender: sample.sender,
-    reason: sample.foundBy === '(none)' ? 'heuristic' : 'selector',
-    selUsed: sample.foundBy,
-    snippet: sample.textSample
-  };
-
-  console.log('Second check result:', result);
-
-  if (!isGuestUnanswered) {
-    console.log('No alert sent (conversation appears answered or not a guest message).');
-    await browser.close();
-    return;
-  }
-
-  // 5) Send email alert
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || TO_EMAILS.length === 0) {
-    console.log('Email not configured; skipping send.');
-    await browser.close();
-    return;
-  }
-
+async function sendAlert({ conversationUrl, lastSender, snippet }) {
   const transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465,
+    host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_PORT === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS }
   });
 
-  const subject = 'SLA breach (>5 min): Boom guest message unanswered';
   const html = `
     <p>Hi Rohit,</p>
     <p>A Boom guest message appears unanswered after 5 minutes.</p>
-    <p>Conversation: <a href="${resolvedUrl}">Open in Boom</a><br/>
-       Last sender detected: <b>${sample.sender}</b><br/>
-       Last message sample: <i>${sample.textSample || '(none)'} </i>
+    <p><b>Conversation:</b> <a href="${conversationUrl}">Open in Boom</a><br/>
+    <b>Last sender detected:</b> ${lastSender}<br/>
+    <b>Last message sample:</b> ${snippet ? ('<i>' + snippet + '</i>') : '(none)'}
     </p>
     <p>– Automated alert</p>
   `;
 
   const info = await transporter.sendMail({
     from: `"${FROM_NAME}" <${SMTP_USER}>`,
-    to: TO_EMAILS.join(', '),
-    subject,
+    to: TO_EMAIL,
+    subject: 'SLA breach (>5 min): Boom guest message unanswered',
     html
   });
-  console.log(`SMTP message id: ${info.messageId}`);
 
-  await browser.close();
+  log(`SMTP message id: ${info.messageId}`);
 }
 
-main().catch(async err => {
-  console.error(err);
-  process.exit(1);
-});
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  try {
+    // Resolve tracking link to final Boom URL if needed
+    const finalUrl = /boomnow\.com/.test(argUrl)
+      ? argUrl
+      : await resolveFinalUrl(context, argUrl);
+
+    // Go to Boom and login if needed
+    await page.goto(finalUrl, { timeout: 60000, waitUntil: 'domcontentloaded' });
+    await saveArtifacts(page, 'login');
+    await loginIfNeeded(page);
+
+    // Make sure we are on the conversation and messages are rendered
+    const ready = await waitForConversationReady(page);
+    await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(()=>{});
+    await saveArtifacts(page, 't2');
+
+    const res = await getLastMessageInfo(page);
+
+    // Log for Actions
+    log('Second check result:', JSON.stringify({
+      ok: !(!res.isAnswered && res.lastSender === 'Guest'), // "ok" means no SLA breach
+      reason: res.reason,
+      lastSender: res.lastSender,
+      selUsed: res.selUsed || '(none)',
+      snippet: res.snippet || ''
+    }));
+
+    // Decide: send alert only if last is Guest (and thus unanswered)
+    if (!res.isAnswered && res.lastSender === 'Guest') {
+      await sendAlert({ conversationUrl: finalUrl, lastSender: res.lastSender, snippet: res.snippet });
+    } else {
+      log('No alert sent (not confident or not guest/unanswered).');
+    }
+  } catch (e) {
+    // Always leave something behind when we crash
+    await saveArtifacts(page, 'error');
+    console.error(e);
+    process.exitCode = 1;
+  } finally {
+    await browser.close();
+  }
+})();
