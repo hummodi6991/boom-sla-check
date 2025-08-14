@@ -2,8 +2,8 @@ name: Boom SLA check
 
 on:
   repository_dispatch:
-    types: [boom_check]                 # for Power Automate → repository_dispatch
-  workflow_dispatch:                    # for manual testing in GitHub UI
+    types: [boom_check]
+  workflow_dispatch:
     inputs:
       conversationUrl:
         description: "Boom conversation URL"
@@ -14,7 +14,6 @@ jobs:
   run-check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +39,7 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           FROM_NAME: ${{ secrets.FROM_NAME }}
           ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
+          MSG_SELECTOR: ${{ secrets.MSG_SELECTOR }}   # optional, set later
         run: |
           node check.js --conversation "${{ github.event.client_payload.conversationUrl || inputs.conversationUrl }}"
 
@@ -51,5 +51,4 @@ jobs:
           path: |
             /tmp/shot_*.png
             /tmp/page_*.html
-            /tmp/frame_*_*.html
           if-no-files-found: ignore
