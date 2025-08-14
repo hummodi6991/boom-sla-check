@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       conversationUrl:
-        description: "Boom conversation URL (can be the raw tracking link from the email)"
+        description: "Boom conversation URL (email tracking link or the final Boom URL)"
         required: true
         type: string
   repository_dispatch:
@@ -25,7 +25,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-fund --no-audit
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
@@ -40,7 +40,6 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           FROM_NAME: ${{ secrets.FROM_NAME }}
           TO_EMAILS: ${{ secrets.ROHIT_EMAIL }}
-          # always save artifacts if we aren't confident:
           DEBUG_ON_UNSURE: "true"
         run: |
           node check.js --conversation "${{ github.event.client_payload.conversationUrl || inputs.conversationUrl }}"
