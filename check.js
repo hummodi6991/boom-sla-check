@@ -1,15 +1,14 @@
-// check.js
-// node check.js --conversation "<URL>"
-
+// check.js – Boom SLA checker (Playwright + SMTP)
 const { chromium } = require('playwright');
 const nodemailer = require('nodemailer');
 
+/* ---------- CLI ---------- */
 const ARGV_URL = (() => {
   const i = process.argv.indexOf('--conversation');
   return i >= 0 ? (process.argv[i + 1] || '') : '';
 })();
 
-/* ===== ENV ===== */
+/* ---------- ENV ---------- */
 const BOOM_USER   = process.env.BOOM_USER || '';
 const BOOM_PASS   = process.env.BOOM_PASS || '';
 const FROM_NAME   = process.env.FROM_NAME || 'Oaktree Boom SLA Bot';
@@ -18,12 +17,11 @@ const SMTP_HOST   = process.env.SMTP_HOST || 'smtp.gmail.com';
 const SMTP_USER   = process.env.SMTP_USER || '';
 const SMTP_PASS   = process.env.SMTP_PASS || '';
 const SMTP_PORT   = Number(process.env.SMTP_PORT || 465);
-// Optional: hard selector for real chat bubbles if you discover one
-const MSG_SELECTOR = process.env.MSG_SELECTOR || '';
+const MSG_SELECTOR = process.env.MSG_SELECTOR || ''; // optional: overrides detection
 
 const log = (...a) => console.log(...a);
 
-/* ===== artifacts ===== */
+/* ---------- helpers / artifacts ---------- */
 async function saveSnapshot(page, tag) {
   const fs = require('fs');
   try {
@@ -33,17 +31,16 @@ async function saveSnapshot(page, tag) {
   } catch (e) { log('Artifact save failed:', e.message); }
 }
 
-/* ===== email (465 → 587 fallback) ===== */
 async function mkTx(port, secure) {
   return nodemailer.createTransport({
     host: SMTP_HOST, port, secure,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
-    tls: { minVersion: 'TLSv1.2' }
+    tls: { minVersion: 'TLSv1.2' },
   });
 }
 async function sendAlertEmail({ url, lastSender, snippet }) {
   let tx;
-  try { tx = await mkTx(465, true); await tx.verify(); }
+  try { tx = await mkTx(465, true);  await tx.verify(); }
   catch { tx = await mkTx(587, false); await tx.verify(); }
 
   const info = await tx.sendMail({
@@ -56,35 +53,34 @@ async function sendAlertEmail({ url, lastSender, snippet }) {
       <p>
         Conversation: <a href="${url}">Open in Boom</a><br/>
         Last sender detected: <b>${lastSender}</b><br/>
-        Last message sample: <i>${(snippet || '').slice(0,140)}</i>
+        Last message sample: <i>${(snippet || '').slice(0, 200)}</i>
       </p>
       <p>– Automated alert</p>`
   });
   log('SMTP message id:', info.messageId);
 }
 
-/* ===== login ===== */
+/* ---------- login ---------- */
 async function login(page) {
   const emailSel = 'input[type="email"], input[name="email"], input[placeholder*="Email" i]';
   const passSel  = 'input[type="password"], input[name="password"], input[placeholder*="Password" i]';
+
   await page.goto('https://app.boomnow.com/login', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(400);
   await saveSnapshot(page, 'login');
 
-  const hasEmail = await page.$(emailSel);
-  const hasPass  = await page.$(passSel);
-  if (hasEmail && hasPass) {
+  if (await page.$(emailSel) && await page.$(passSel)) {
     log('Login page detected, signing in…');
     await page.fill(emailSel, BOOM_USER);
     await page.fill(passSel,  BOOM_PASS);
     await Promise.all([
       page.click('button:has-text("Login"), button[type="submit"], input[type="submit"]'),
-      page.waitForLoadState('networkidle').catch(()=>{})
+      page.waitForLoadState('networkidle').catch(()=>{}),
     ]);
   }
 }
 
-/* ===== resolve tracking link → Boom URL ===== */
+/* ---------- resolve tracking link → Boom URL ---------- */
 async function resolveToBoom(page, urlFromEmail) {
   if (!urlFromEmail) return null;
   if (/^https?:\/\/app\.boomnow\.com\//i.test(urlFromEmail)) return urlFromEmail;
@@ -101,24 +97,18 @@ async function resolveToBoom(page, urlFromEmail) {
   return null;
 }
 
-/* ===== open the Messages tab robustly ===== */
+/* ---------- open Messages tab robustly ---------- */
 async function openConversationUI(page) {
-  // make sure tabs are on-screen
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(500);
 
-  const tabLocators = [
-    // aria/role first
+  const tabLocs = [
     page.getByRole('tab', { name: /messages|conversation|chat|guest messages|الرسائل|محادثة|الدردشة/i }).first(),
-    // vuetify tabs
     page.locator('.v-tabs .v-tab', { hasText: /messages|conversation|chat|الرسائل|محادثة|الدردشة/i }).first(),
-    // generic text
     page.locator('text=/\\bMessages\\b/i').first(),
-    page.locator('text=/\\bConversation\\b/i').first(),
     page.locator('text=/الرسائل/').first(),
   ];
-
-  for (const loc of tabLocators) {
+  for (const loc of tabLocs) {
     try {
       if (await loc.count() > 0) {
         await loc.scrollIntoViewIfNeeded().catch(()=>{});
@@ -129,7 +119,7 @@ async function openConversationUI(page) {
       }
     } catch {}
   }
-  // try finding a tablist then click any child that looks like messages
+  // generic tablist fallback
   const tabList = page.locator('[role="tablist"], .v-tabs').first();
   if (await tabList.count()) {
     const msgTab = tabList.locator(':scope *:text-matches("messages|الرسائل|محادثة|الدردشة", "i")').first();
@@ -142,31 +132,40 @@ async function openConversationUI(page) {
   return false;
 }
 
-/* ===== message detection ===== */
+/* ---------- message detection ---------- */
 
-// avoid these containers/classes (KPIs, headers, helpers)
-const BLACKLIST = [
-  'v-messages__wrapper','v-messages__message',
-  'snackbar','toast','tooltip','intercom',
-  'v-tabs','v-tab','tabs','toolbar','header','summary','stats','kpi'
+// Ignore obvious KPI/headers in Arabic/English that fooled us before
+const TEXT_BLACKLIST = [
+  /UNANSWERED/i, /AI ESCALATIONS/i, /AI ACTIVE/i, /RESERVED/i,
+  /ACTIVE LEADS/i, /FOLLOW UPS/i, /MY TICKETS/i,
+  /AWAITING PAYMENT/i, /RECENTLY CONFIRMED/i, /^\s*ALL\s*$/i,
+  /مؤكدة/i, /غير مجاب/i, /المدفوعات/i, /الحجوزات/i
 ];
 
-// prefer bubble-ish selectors; no generic mt-/mb- anymore
+// any element inside the active tabpanel that looks like a bubble or list item
 const CANDIDATES = [
-  MSG_SELECTOR || '',
-  '[data-testid="message"], [data-testid*="message"]',
-  '.message-bubble,.chat-message,.message,.Message',
-  '[role="tabpanel"] .v-list-item, [role="tabpanel"] .v-card__text, [role="tabpanel"] .v-sheet',
-  '.v-list .v-list-item__content, .v-card .v-card__text'
+  MSG_SELECTOR || '',                              // your override (repo secret)
+  '[role="tabpanel"] .v-virtual-scroll__item',     // Vuetify virtual list items
+  '[role="tabpanel"] .v-list-item',                // Vuetify list items
+  '[role="tabpanel"] .v-card .v-card__text',       // text inside cards
+  '[role="tabpanel"] [class*="message"]',
+  '[role="tabpanel"] [class*="bubble"]',
+  '[role="tabpanel"] [class*="chat"]',
+  // broad fallbacks (if tabpanel role missing)
+  '.v-virtual-scroll__item', '.v-list-item', '.v-card__text',
+  '[class*="message"]', '[class*="bubble"]', '[class*="chat"]',
 ].filter(Boolean);
 
-function badClass(c){ c = (c||'').toLowerCase(); return BLACKLIST.some(b => c.includes(b)); }
-function mostlyCaps(s){
-  const letters = (s||'').replace(/[^A-Za-z]/g,''); if (letters.length<6) return false;
-  const caps = letters.replace(/[^A-Z]/g,'').length; return caps/letters.length > 0.7;
+function mostlyCaps(s) {
+  const letters = (s||'').replace(/[^A-Za-zأ-ي]/g, '');
+  if (letters.length < 6) return false;
+  const caps = letters.replace(/[^A-Z]/g, '').length;
+  return caps / letters.length > 0.7;
 }
 
-function inferSender(meta){
+function badText(s) { return TEXT_BLACKLIST.some(rx => rx.test(s)); }
+
+function inferSender(meta) {
   const c = (meta.cls||'').toLowerCase();
   if (/(agent|host|staff|team|outgoing|sent|yours|right|end)/.test(c)) return 'Agent';
   if (/(guest|customer|incoming|received|left|theirs|start)/.test(c)) return 'Guest';
@@ -179,12 +178,11 @@ function inferSender(meta){
   return 'Unknown';
 }
 
-async function scrollDeep(page){
+async function scrollDeep(page) {
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(700);
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.waitForTimeout(400);
-  // also scroll inner scroll areas (virtualized lists)
   await page.evaluate(() => {
     const xs = Array.from(document.querySelectorAll('*')).filter(n=>{
       const s = getComputedStyle(n);
@@ -195,66 +193,73 @@ async function scrollDeep(page){
   await page.waitForTimeout(500);
 }
 
-function filterBubbles(raw){
-  return raw.filter(m=>{
-    if (!m.txt || m.txt.trim().length < 2) return false;
-    if (mostlyCaps(m.txt)) return false;                // KPI cards
-    if (badClass(m.cls)) return false;                  // tabs/toolbars/helpers
-    if (m.inTabs) return false;
-    if (m.height < 18) return false;                    // tiny
-    if (m.width  > m.vw*0.95) return false;             // full-width bars
-    if (m.bgTransparent && m.borderRadius < 6) return false; // not bubble-like
+async function evaluateMeta(el) {
+  return el.evaluate(node => {
+    const r = node.getBoundingClientRect(), cs = getComputedStyle(node);
+    let txt = ''; try { txt = (node.innerText || '').trim(); } catch {}
+    return {
+      txt,
+      cls: node.getAttribute('class') || '',
+      centerX: r.left + r.width/2,
+      vw: innerWidth || document.documentElement.clientWidth || 0,
+      width: r.width, height: r.height,
+      style: {
+        textAlign: cs.textAlign || '',
+        alignSelf: cs.alignSelf || '',
+        justifyContent: (node.parentElement ? getComputedStyle(node.parentElement).justifyContent : '') || ''
+      },
+      inHeader: !!node.closest('.v-tabs, .v-tab, [role="tablist"], header, nav')
+    };
+  });
+}
+
+function filterBubbles(nodes) {
+  return nodes.filter(m => {
+    if (!m.txt || m.txt.trim().length < 3) return false;
+    if (badText(m.txt)) return false;       // throw away KPI headings/cards
+    if (mostlyCaps(m.txt)) return false;    // VERY shouty blocks → likely KPIs
+    if (m.inHeader) return false;           // not inside tabs/headers
+    if (m.height < 14) return false;        // too tiny to be a bubble
     return true;
   });
 }
 
-async function findMessages(page){
+async function findMessages(page) {
   const contexts = [page, ...page.frames()];
-  const evalMeta = async (el) => el.evaluate(node=>{
-    const r = node.getBoundingClientRect(), cs = getComputedStyle(node);
-    const bg = cs.backgroundColor || '';
-    const bgTransparent = /rgba?\(\s*0\s*,\s*0\s*,\s*0\s*(?:,\s*0\s*)?\)/i.test(bg) || bg==='transparent';
-    let txt = ''; try { txt = (node.innerText||'').trim(); } catch {}
-    return {
-      txt, cls: node.getAttribute('class')||'',
-      centerX: r.left + r.width/2, vw: innerWidth||document.documentElement.clientWidth||0,
-      width: r.width, height: r.height,
-      borderRadius: parseFloat(cs.borderRadius)||0,
-      bgTransparent,
-      style: { textAlign: cs.textAlign || '', alignSelf: cs.alignSelf || '',
-               justifyContent: (node.parentElement ? getComputedStyle(node.parentElement).justifyContent : '') || '' },
-      inTabs: !!node.closest('.v-tabs, .v-tab, [role="tablist"], header, nav')
-    };
-  });
-
+  // try each candidate selector, inside page and frames
   for (const sel of CANDIDATES) {
-    let all=[]; for (const ctx of contexts){ const els = await ctx.$$(sel); for (const el of els) all.push(await evalMeta(el)); }
+    let all = [];
+    for (const ctx of contexts) {
+      const els = await ctx.$$(sel);
+      for (const el of els) all.push(await evaluateMeta(el));
+    }
     const bubbles = filterBubbles(all);
     if (bubbles.length) return { nodes: bubbles, used: sel };
   }
-
-  // very last resort: any text node, then filter bubble-ish
-  for (const ctx of contexts){
+  // ultra-broad fallback: any element with non-empty text, then filter
+  for (const ctx of contexts) {
     const els = await ctx.$$('xpath=//*[normalize-space(text())]');
-    const all=[]; for (const el of els) all.push(await evalMeta(el));
+    const all = [];
+    for (const el of els) all.push(await evaluateMeta(el));
     const bubbles = filterBubbles(all);
     if (bubbles.length) return { nodes: bubbles, used: 'XPATH' };
   }
   return { nodes: [], used: '(none)' };
 }
 
-async function detectStatus(page){
+async function detectStatus(page) {
   await scrollDeep(page);
   const { nodes, used } = await findMessages(page);
   if (!nodes.length) {
     log('No message elements with text found (selector used: ' + used + ')');
     return { ok:false, reason:'no_selector' };
   }
-  const last = nodes[nodes.length-1];
+  const last = nodes[nodes.length - 1];
   const lastSender = inferSender(last);
   log('last message debug:', {
-    class: last.cls, textSample: (last.txt||'').slice(0,160),
-    centerX: last.centerX, vw: last.vw, dims:{w:last.width,h:last.height}, style:last.style
+    selectorUsed: used,
+    class: last.cls, textSample: (last.txt||'').slice(0, 180),
+    style: last.style, dims: { w: last.width, h: last.height }
   });
   return {
     ok: true,
@@ -265,14 +270,14 @@ async function detectStatus(page){
   };
 }
 
-/* ===== main ===== */
+/* ---------- main ---------- */
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
   await login(page);
 
-  let finalUrl = await resolveToBoom(page, ARGV_URL);
+  const finalUrl = await resolveToBoom(page, ARGV_URL);
   if (finalUrl) {
     log('Resolved Boom URL:', finalUrl);
     await page.goto(finalUrl, { waitUntil: 'domcontentloaded' }).catch(()=>{});
@@ -287,11 +292,18 @@ async function detectStatus(page){
   const res = await detectStatus(page);
   log('Second check result:', res);
 
-  // **Gate alerts**: only when confident we saw a last *Guest* message with text
-  const shouldAlert = res.ok && !res.isAnswered && res.lastSender === 'Guest' && (res.snippet||'').trim().length > 0;
+  const shouldAlert =
+    res.ok &&
+    !res.isAnswered &&
+    res.lastSender === 'Guest' &&
+    (res.snippet || '').trim().length > 0;
 
   if (shouldAlert) {
-    await sendAlertEmail({ url: finalUrl || 'https://app.boomnow.com/', lastSender: res.lastSender, snippet: res.snippet });
+    await sendAlertEmail({
+      url: finalUrl || 'https://app.boomnow.com/',
+      lastSender: res.lastSender,
+      snippet: res.snippet
+    });
   } else {
     log('No alert sent (not confident or not guest/unanswered).');
   }
