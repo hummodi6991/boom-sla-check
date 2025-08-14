@@ -109,25 +109,64 @@ async function resolveToBoom(page, urlFromEmail) {
   return null;
 }
 
+/* ========= OPEN THE CHAT/MESSAGES TAB ========= */
+async function openConversationUI(page) {
+  // Try very tolerant locators (English + Arabic)
+  const candidates = [
+    // role=tab if present
+    { type: 'role', name: /messages|guest messages|conversation|chat|الرسائل|محادثة|الدردشة|مراسلات/i },
+    // text locators
+    { type: 'text', sel: 'text=Messages' },
+    { type: 'text', sel: 'text=Conversation' },
+    { type: 'text', sel: 'text=Guest Messages' },
+    { type: 'text', sel: 'text=Chat' },
+    { type: 'text', sel: 'text=الرسائل' },
+    { type: 'text', sel: 'text=المحادثة' },
+    { type: 'text', sel: 'text=الدردشة' },
+    // buttons/links with text
+    { type: 'css', sel: 'button:has-text("Messages")' },
+    { type: 'css', sel: 'a:has-text("Messages")' },
+    { type: 'css', sel: 'button:has-text("Conversation")' },
+    { type: 'css', sel: 'a:has-text("Conversation")' }
+  ];
+
+  for (const c of candidates) {
+    try {
+      let loc;
+      if (c.type === 'role') {
+        loc = page.getByRole('tab', { name: c.name }).first();
+      } else if (c.type === 'text') {
+        loc = page.locator(c.sel).first();
+      } else {
+        loc = page.locator(c.sel).first();
+      }
+      if (await loc.count() > 0) {
+        await loc.click({ timeout: 1500 }).catch(()=>{});
+        await page.waitForTimeout(1200);
+        await page.waitForLoadState('networkidle').catch(()=>{});
+        return true;
+      }
+    } catch {}
+  }
+  return false;
+}
+
 /* ========= MESSAGE DETECTION ========= */
 const BLACKLIST = ['v-messages__wrapper','v-messages__message','snackbar','toast','tooltip','intercom'];
 const CANDIDATES = [
-  MSG_SELECTOR || '',                           // exact selector (if you add the secret)
+  MSG_SELECTOR || '',
   '[data-testid="message"]',
   '[data-testid*="message"]',
   '.message-bubble','.message-row','.chat-message','.Message',
   '[class*="messages"] [class*="message"]',
   'li[role="listitem"]',
-  'div[class*="mt-"], div[class*="mb-"]'       // generic spacing wrappers (we’ll filter later)
+  // generic “bubble-ish” wrappers (filtered later)
+  'div[class*="mt-"], div[class*="mb-"]',
+  'div[class*="bubble"]'
 ].filter(Boolean);
 
 function badClass(cls){ const c=(cls||'').toLowerCase(); return BLACKLIST.some(b => c.includes(b)); }
 
-/** Infer sender using:
- *  1) class keywords (agent/guest/right/left/sent/received),
- *  2) CSS alignment (textAlign/justifyContent/alignSelf),
- *  3) geometry: bubble center on right vs left side of viewport.
- */
 function inferSenderHeuristic(meta) {
   const c = (meta.cls || '').toLowerCase();
   if (/(agent|host|staff|team|outgoing|sent|yours|right|end)/.test(c)) return 'Agent';
@@ -138,7 +177,6 @@ function inferSenderHeuristic(meta) {
   if (/(right|flex-end|end)/.test(alignHints)) return 'Agent';
   if (/(left|flex-start|start)/.test(alignHints)) return 'Guest';
 
-  // Geometry: if bubble center-x is on the right 55% of viewport => Agent
   if (typeof meta.centerX === 'number' && typeof meta.vw === 'number') {
     return (meta.centerX > meta.vw * 0.55) ? 'Agent' : 'Guest';
   }
@@ -146,9 +184,20 @@ function inferSenderHeuristic(meta) {
 }
 
 async function scrollDeep(page){
+  // scroll page
   await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight); });
   await page.waitForTimeout(900);
   await page.evaluate(() => { window.scrollTo(0, 0); });
+
+  // try scrolling any scrollable panels (virtualized lists)
+  await page.evaluate(() => {
+    const nodes = Array.from(document.querySelectorAll('*')).filter(n => {
+      const s = getComputedStyle(n);
+      return (s.overflowY === 'auto' || s.overflowY === 'scroll') && n.scrollHeight > n.clientHeight;
+    });
+    for (const n of nodes) n.scrollTop = n.scrollHeight;
+  });
+  await page.waitForTimeout(600);
 }
 
 async function findMessages(page){
@@ -160,10 +209,6 @@ async function findMessages(page){
     for (const ctx of contexts) {
       const els = await ctx.$$(sel);
       for (const el of els) {
-        const cls = (await el.getAttribute('class')) || '';
-        if (badClass(cls)) continue;
-
-        // Pull text + basic geometry + a few style hints
         const meta = await el.evaluate((node) => {
           let txt = '';
           try { txt = (node.innerText || '').trim(); } catch {}
@@ -181,16 +226,13 @@ async function findMessages(page){
             }
           };
         });
-
-        if ((meta.txt || '').length > 1) {
-          found.push(meta);
-        }
+        if ((meta.txt || '').length > 1 && !badClass(meta.cls)) found.push(meta);
       }
     }
     if (found.length) return { nodes: found, used: sel };
   }
 
-  // Fallback XPATH (texty descendants within "message"-like containers)
+  // Fallback XPATH
   const XPATH = 'xpath=//*[contains(translate(@class,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz"),"message") and not(contains(@class,"v-messages"))]//*[normalize-space(text())]';
   for (const ctx of contexts) {
     const els = await ctx.$$(XPATH);
@@ -255,7 +297,7 @@ async function detectStatus(page){
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  // 1) Always login so we’re authenticated
+  // 1) Login so we’re authenticated
   await login(page);
 
   // 2) Follow the provided link until we end up on Boom
@@ -265,13 +307,18 @@ async function detectStatus(page){
     await page.goto(finalUrl, { waitUntil: 'domcontentloaded' }).catch(()=>{});
     await page.waitForLoadState('networkidle').catch(()=>{});
   }
+
+  // 3) Try to open the conversation/messages tab
+  const opened = await openConversationUI(page);
+  log('Opened conversation tab?', opened);
+  await page.waitForTimeout(800);
   await saveSnapshot(page, 't2');
 
-  // 3) Detect status
+  // 4) Detect status
   const result = await detectStatus(page);
   log('Second check result:', result);
 
-  // 4) Email if unanswered
+  // 5) Email if unanswered
   if (!result.isAnswered) {
     await sendAlertEmail({
       lastSender: result.lastSender,
