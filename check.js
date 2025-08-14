@@ -111,11 +111,8 @@ async function resolveToBoom(page, urlFromEmail) {
 
 /* ========= OPEN THE CHAT/MESSAGES TAB ========= */
 async function openConversationUI(page) {
-  // Try very tolerant locators (English + Arabic)
   const candidates = [
-    // role=tab if present
-    { type: 'role', name: /messages|guest messages|conversation|chat|الرسائل|محادثة|الدردشة|مراسلات/i },
-    // text locators
+    { type: 'role', name: /messages|guest messages|conversation|chat|الرسائل|محادثة|المحادثة|الدردشة/i },
     { type: 'text', sel: 'text=Messages' },
     { type: 'text', sel: 'text=Conversation' },
     { type: 'text', sel: 'text=Guest Messages' },
@@ -123,23 +120,17 @@ async function openConversationUI(page) {
     { type: 'text', sel: 'text=الرسائل' },
     { type: 'text', sel: 'text=المحادثة' },
     { type: 'text', sel: 'text=الدردشة' },
-    // buttons/links with text
-    { type: 'css', sel: 'button:has-text("Messages")' },
-    { type: 'css', sel: 'a:has-text("Messages")' },
-    { type: 'css', sel: 'button:has-text("Conversation")' },
-    { type: 'css', sel: 'a:has-text("Conversation")' }
+    { type: 'css',  sel: 'button:has-text("Messages")' },
+    { type: 'css',  sel: 'a:has-text("Messages")' },
+    { type: 'css',  sel: 'button:has-text("Conversation")' },
+    { type: 'css',  sel: 'a:has-text("Conversation")' }
   ];
 
   for (const c of candidates) {
     try {
       let loc;
-      if (c.type === 'role') {
-        loc = page.getByRole('tab', { name: c.name }).first();
-      } else if (c.type === 'text') {
-        loc = page.locator(c.sel).first();
-      } else {
-        loc = page.locator(c.sel).first();
-      }
+      if (c.type === 'role')      loc = page.getByRole('tab', { name: c.name }).first();
+      else                        loc = page.locator(c.sel).first();
       if (await loc.count() > 0) {
         await loc.click({ timeout: 1500 }).catch(()=>{});
         await page.waitForTimeout(1200);
@@ -152,20 +143,31 @@ async function openConversationUI(page) {
 }
 
 /* ========= MESSAGE DETECTION ========= */
-const BLACKLIST = ['v-messages__wrapper','v-messages__message','snackbar','toast','tooltip','intercom'];
+const BLACKLIST = [
+  'v-messages__wrapper','v-messages__message', // Vuetify helpers
+  'snackbar','toast','tooltip','intercom',
+  'v-tabs','v-tab','tabs', 'toolbar', 'header', 'kpi', 'summary', 'stats'
+];
+
+// more specific chat-ish selectors first; no more mt-/mb- generics
 const CANDIDATES = [
   MSG_SELECTOR || '',
   '[data-testid="message"]',
   '[data-testid*="message"]',
-  '.message-bubble','.message-row','.chat-message','.Message',
-  '[class*="messages"] [class*="message"]',
-  'li[role="listitem"]',
-  // generic “bubble-ish” wrappers (filtered later)
-  'div[class*="mt-"], div[class*="mb-"]',
-  'div[class*="bubble"]'
+  '.message-bubble','.message','.chat-message','.Message',
+  '[class*="chat"] [class*="message"]',
+  'li[role="listitem"] div, li[role="listitem"] article',
 ].filter(Boolean);
 
-function badClass(cls){ const c=(cls||'').toLowerCase(); return BLACKLIST.some(b => c.includes(b)); }
+function badClass(cls){ const c=(cls||'').toLowerCase(); return BLACKLIST.some(b => c && c.includes(b)); }
+
+// quick heuristic: treat ALL-CAPS KPI blocks as non-messages
+function mostlyCaps(s) {
+  const letters = (s || '').replace(/[^A-Za-z]/g,'');
+  if (letters.length < 6) return false;
+  const caps = letters.replace(/[^A-Z]/g,'').length;
+  return caps / letters.length > 0.7;
+}
 
 function inferSenderHeuristic(meta) {
   const c = (meta.cls || '').toLowerCase();
@@ -184,12 +186,11 @@ function inferSenderHeuristic(meta) {
 }
 
 async function scrollDeep(page){
-  // scroll page
   await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight); });
   await page.waitForTimeout(900);
   await page.evaluate(() => { window.scrollTo(0, 0); });
 
-  // try scrolling any scrollable panels (virtualized lists)
+  // scroll any scrollable panel (virtualized chat lists)
   await page.evaluate(() => {
     const nodes = Array.from(document.querySelectorAll('*')).filter(n => {
       const s = getComputedStyle(n);
@@ -200,64 +201,76 @@ async function scrollDeep(page){
   await page.waitForTimeout(600);
 }
 
+function pickBubbleCandidates(rawNodes) {
+  // keep only visually bubble-ish blocks; drop tabs/headers/KPIs
+  return rawNodes.filter(m => {
+    if (!m.txt || m.txt.length < 2) return false;
+    if (mostlyCaps(m.txt)) return false;                 // KPI-like
+    if (badClass(m.cls)) return false;                   // blacklisted classes
+    if (m.height < 18) return false;                     // too tiny
+    if (m.width  > m.vw * 0.95) return false;            // full-width bars
+    if (m.bgTransparent && m.borderRadius < 6) return false;  // not like a bubble
+    return true;
+  });
+}
+
 async function findMessages(page){
   const contexts = [page, ...page.frames()];
   log(`Searching ${contexts.length} contexts (page + ${contexts.length-1} frames)…`);
 
+  const evaluateMeta = async (el) => {
+    return el.evaluate((node) => {
+      const r = node.getBoundingClientRect();
+      const cs = getComputedStyle(node);
+      const bg = cs.backgroundColor || '';
+      const bgTransparent = /rgba?\(\s*0\s*,\s*0\s*,\s*0\s*(?:,\s*0\s*)?\)/i.test(bg) || bg === 'transparent';
+      let txt = '';
+      try { txt = (node.innerText || '').trim(); } catch {}
+      return {
+        txt,
+        cls: node.getAttribute('class') || '',
+        centerX: r.left + r.width / 2,
+        vw: window.innerWidth || document.documentElement.clientWidth || 0,
+        height: r.height,
+        width: r.width,
+        bgTransparent,
+        borderRadius: parseFloat(cs.borderRadius) || 0,
+        style: {
+          textAlign: cs.textAlign || '',
+          justifyContent: (node.parentElement ? getComputedStyle(node.parentElement).justifyContent : '') || '',
+          alignSelf: cs.alignSelf || ''
+        },
+        inTabs: !!node.closest('.v-tabs, .v-tab, nav, header, [role="tablist"]')
+      };
+    });
+  };
+
   for (const sel of CANDIDATES) {
-    let found = [];
+    let all = [];
     for (const ctx of contexts) {
       const els = await ctx.$$(sel);
       for (const el of els) {
-        const meta = await el.evaluate((node) => {
-          let txt = '';
-          try { txt = (node.innerText || '').trim(); } catch {}
-          const r = node.getBoundingClientRect();
-          const cs = getComputedStyle(node);
-          return {
-            txt,
-            cls: node.getAttribute('class') || '',
-            centerX: r.left + r.width / 2,
-            vw: window.innerWidth || document.documentElement.clientWidth || 0,
-            style: {
-              textAlign: cs.textAlign || '',
-              justifyContent: (node.parentElement ? getComputedStyle(node.parentElement).justifyContent : '') || '',
-              alignSelf: cs.alignSelf || ''
-            }
-          };
-        });
-        if ((meta.txt || '').length > 1 && !badClass(meta.cls)) found.push(meta);
+        const meta = await evaluateMeta(el);
+        if (meta.inTabs) continue;
+        all.push(meta);
       }
     }
-    if (found.length) return { nodes: found, used: sel };
+    const bubbles = pickBubbleCandidates(all);
+    if (bubbles.length) return { nodes: bubbles, used: sel };
   }
 
-  // Fallback XPATH
-  const XPATH = 'xpath=//*[contains(translate(@class,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz"),"message") and not(contains(@class,"v-messages"))]//*[normalize-space(text())]';
+  // Fallback: any text node inside a conversation-like container but not tabs
+  const XPATH = 'xpath=//*[not(self::script) and not(self::style) and normalize-space(text())]';
   for (const ctx of contexts) {
     const els = await ctx.$$(XPATH);
-    const out = [];
+    const all = [];
     for (const el of els) {
-      const meta = await el.evaluate((node) => {
-        let txt = '';
-        try { txt = (node.innerText || '').trim(); } catch {}
-        const r = node.getBoundingClientRect();
-        const cs = getComputedStyle(node);
-        return {
-          txt,
-          cls: node.getAttribute('class') || '',
-          centerX: r.left + r.width / 2,
-          vw: window.innerWidth || document.documentElement.clientWidth || 0,
-          style: {
-            textAlign: cs.textAlign || '',
-            justifyContent: (node.parentElement ? getComputedStyle(node.parentElement).justifyContent : '') || '',
-            alignSelf: cs.alignSelf || ''
-          }
-        };
-      });
-      if ((meta.txt || '').length > 1 && !badClass(meta.cls)) out.push(meta);
+      const meta = await evaluateMeta(el);
+      if (meta.inTabs) continue;
+      all.push(meta);
     }
-    if (out.length) return { nodes: out, used: 'XPATH' };
+    const bubbles = pickBubbleCandidates(all);
+    if (bubbles.length) return { nodes: bubbles, used: 'XPATH' };
   }
 
   return { nodes: [], used: '(none)' };
@@ -277,8 +290,9 @@ async function detectStatus(page){
 
   log('last message debug:', {
     class: last.cls || '(n/a)',
-    textSample: (last.txt || '').slice(0, 120),
+    textSample: (last.txt || '').slice(0, 160),
     centerX: last.centerX, vw: last.vw,
+    dims: { w: last.width, h: last.height },
     style: last.style
   });
 
@@ -297,10 +311,10 @@ async function detectStatus(page){
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  // 1) Login so we’re authenticated
+  // 1) Login
   await login(page);
 
-  // 2) Follow the provided link until we end up on Boom
+  // 2) Follow the link to Boom
   let finalUrl = await resolveToBoom(page, argvUrl);
   if (finalUrl) {
     log('Resolved Boom URL:', finalUrl);
@@ -308,13 +322,13 @@ async function detectStatus(page){
     await page.waitForLoadState('networkidle').catch(()=>{});
   }
 
-  // 3) Try to open the conversation/messages tab
+  // 3) Ensure the conversation UI is open
   const opened = await openConversationUI(page);
   log('Opened conversation tab?', opened);
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(700);
   await saveSnapshot(page, 't2');
 
-  // 4) Detect status
+  // 4) Detect
   const result = await detectStatus(page);
   log('Second check result:', result);
 
