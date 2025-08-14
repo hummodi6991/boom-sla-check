@@ -40,13 +40,14 @@ jobs:
           FROM_NAME: ${{ secrets.FROM_NAME }}
           REPLY_TO: ${{ secrets.REPLY_TO }}
 
-      # Upload any saved artifacts so you can open them
-      - name: Upload page artifacts (if any)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: page-artifacts
-          path: |
-            /tmp/nomsg_*.png
-            /tmp/nomsg_*.html
-          if-no-files-found: ignore
+      # Upload any saved artifacts so you can open 
+    - name: Upload page artifacts (if any)
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: page-artifacts
+      path: |
+        /tmp/shot_*.png
+        /tmp/page_*.html
+        /tmp/frame_*_*.html
+      if-no-files-found: ignore
