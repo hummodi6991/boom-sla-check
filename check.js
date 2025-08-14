@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 import nodemailer from "nodemailer";
 import fs from "fs/promises";
 
-/* ====== Env ====== */
+/* ====== Environment ====== */
 const {
   CONVERSATION_URL,
   BOOM_USER,
@@ -19,23 +19,24 @@ const {
 if (!CONVERSATION_URL) { console.error("❌ Missing CONVERSATION_URL"); process.exit(1); }
 if (!BOOM_USER || !BOOM_PASS) { console.error("❌ Missing BOOM_USER/BOOM_PASS"); process.exit(1); }
 
-/* ====== Selectors ====== */
-/* Put any good, specific chat-row selector you discover at the TOP later */
+/* ====== Message selectors ====== */
+/* When you discover the real chat-row selector from the artifacts,
+   put it as the FIRST entry below (e.g. "[data-testid='message']") */
 const MESSAGE_SELECTOR_CANDIDATES = [
-  // "[data-testid='message']",   // <-- add yours here once you find it
+  // "[data-testid='message']",  // ⬅️ place your specific selector here when known
   ".chat-message",
   ".message-row",
   "div.message-item",
   ".message-item",
   ".msg",
   "[role='listitem']",
-  "[class*='message']",         // generic; often matches non-chat too
+  "[class*='message']",
   "[class*='Message']"
 ];
 
-/* Things we know are NOT chat messages (Vuetify validation wrappers, help text, etc.) */
+/* Known non-chat elements to ignore (e.g., Vuetify validation wrappers) */
 const BLACKLIST_CLASSES = [
-  "v-messages__wrapper",        // <-- the one you saw in logs
+  "v-messages__wrapper",
   "v-messages__message",
   "helper-text",
   "validation",
@@ -44,20 +45,22 @@ const BLACKLIST_CLASSES = [
   "toast"
 ];
 
+/* Login field fallbacks */
 const SELECTORS = {
   loginUser: 'input[type="email"], input[name="email"], input[name="username"]',
   loginPass: 'input[type="password"]',
   loginSubmit: 'button[type="submit"], button:has-text("Sign in"), button:has-text("Log in"), button:has-text("Login")'
 };
 
-/* Heuristics to label sender */
+/* Heuristics for who sent the last message */
 const GUEST_HINTS = ["guest", "customer", "incoming", "received", "theirs", "left"];
 const AGENT_HINTS = ["agent", "staff", "support", "team", "oaktree", "boom", "you", "outgoing", "sent", "yours", "right"];
 
+/* ====== Utils ====== */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const hasHint = (hints, hay) => hints.some(h => hay.includes(h));
 
-/* ====== Artifact helpers ====== */
+/* Save screenshot + HTML for page and all frames */
 async function savePageAndFrames(page, tag) {
   try { await page.screenshot({ path: `/tmp/shot_${tag}.png`, fullPage: true }); } catch {}
   try { await fs.writeFile(`/tmp/page_${tag}.html`, await page.content(), "utf8"); } catch {}
@@ -72,7 +75,7 @@ async function savePageAndFrames(page, tag) {
   console.log(`📎 Saved artifacts for ${tag} (page + ${page.frames().length} frames)`);
 }
 
-/* ====== Find messages anywhere (page or iframes), filter noise ====== */
+/* Search for message rows in the top page and all iframes, then filter noise */
 async function searchMessagesAnyFrame(page) {
   const places = [page, ...page.frames()];
   console.log(`🔎 Searching ${places.length} contexts (page + ${places.length-1} frames)…`);
@@ -85,14 +88,14 @@ async function searchMessagesAnyFrame(page) {
       try { nodes = await ctx.$$(sel); } catch {}
       if (!nodes || nodes.length === 0) continue;
 
-      // filter out false positives:
+      // Filter out validation/help/empty items
       const filtered = [];
       for (const n of nodes) {
         const cls = ((await n.getAttribute("class")) || "").toLowerCase();
         if (BLACKLIST_CLASSES.some(bad => cls.includes(bad))) continue;
 
         const txt = ((await n.innerText()) || "").trim();
-        if (txt.length < 2) continue;              // skip empty/1-char artefacts
+        if (txt.length < 2) continue;
 
         filtered.push(n);
       }
@@ -106,7 +109,7 @@ async function searchMessagesAnyFrame(page) {
   return { ctx: null, selector: null, nodes: [] };
 }
 
-/* ====== One check ====== */
+/* Run one check pass */
 async function checkOnce(url, tag) {
   const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
   const ctx = await browser.newContext();
@@ -115,7 +118,7 @@ async function checkOnce(url, tag) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
 
-    // Login if needed
+    // Login if shown
     if (await page.$(SELECTORS.loginUser)) {
       console.log("🔐 Login form detected — signing in…");
       await page.fill(SELECTORS.loginUser, BOOM_USER);
@@ -164,7 +167,7 @@ async function checkOnce(url, tag) {
   }
 }
 
-/* ====== Email ====== */
+/* Send email */
 async function sendEmailToRohit(url, lastSender) {
   if (!SMTP_USER || !SMTP_PASS || !ROHIT_EMAIL) {
     console.log("🚫 Skipping email (missing SMTP_USER/SMTP_PASS/ROHIT_EMAIL).");
@@ -195,13 +198,13 @@ async function sendEmailToRohit(url, lastSender) {
   console.log("📧 SMTP response id:", info.messageId || "sent");
 }
 
-/* ====== Orchestrate: 2-pass check ====== */
+/* Orchestrate: two-pass check (avoid false positives) */
 const main = async () => {
   const r1 = await checkOnce(CONVERSATION_URL, "t1");
   console.log("First check result:", r1);
 
   if (!r1.isAnswered) {
-    await sleep(90_000); // re-check to avoid false positives
+    await sleep(90_000); // wait ~1.5 minutes then re-check
     const r2 = await checkOnce(CONVERSATION_URL, "t2");
     console.log("Second check result:", r2);
 
