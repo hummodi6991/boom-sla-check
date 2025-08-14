@@ -1,7 +1,9 @@
 name: Boom SLA check
 
 on:
-  workflow_dispatch:
+  repository_dispatch:
+    types: [boom_check]                 # for Power Automate → repository_dispatch
+  workflow_dispatch:                    # for manual testing in GitHub UI
     inputs:
       conversationUrl:
         description: "Boom conversation URL"
@@ -11,15 +13,19 @@ on:
 jobs:
   run-check:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 10
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci || npm install --no-audit --no-fund
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
@@ -35,13 +41,15 @@ jobs:
           FROM_NAME: ${{ secrets.FROM_NAME }}
           ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
         run: |
-          node check.js --conversation "${{ inputs.conversationUrl }}"
+          node check.js --conversation "${{ github.event.client_payload.conversationUrl || inputs.conversationUrl }}"
 
       - name: Upload page artifacts (if any)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pages
           path: |
             /tmp/shot_*.png
             /tmp/page_*.html
+            /tmp/frame_*_*.html
           if-no-files-found: ignore
