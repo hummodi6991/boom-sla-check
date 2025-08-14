@@ -21,7 +21,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci || npm install --no-audit --no-fund
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
@@ -40,14 +40,13 @@ jobs:
           FROM_NAME: ${{ secrets.FROM_NAME }}
           REPLY_TO: ${{ secrets.REPLY_TO }}
 
-      # Upload any saved artifacts so you can open 
-    - name: Upload page artifacts (if any)
-    if: always()
-    uses: actions/upload-artifact@v4
-    with:
-      name: page-artifacts
-      path: |
-        /tmp/shot_*.png
-        /tmp/page_*.html
-        /tmp/frame_*_*.html
-      if-no-files-found: ignore
+      - name: Upload page artifacts (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: page-artifacts
+          path: |
+            /tmp/shot_*.png
+            /tmp/page_*.html
+            /tmp/frame_*_*.html
+          if-no-files-found: ignore
