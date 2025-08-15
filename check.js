@@ -1,217 +1,263 @@
-// check.js — Node 20+, ESM
+// check.js  — ESM
 import { chromium } from 'playwright';
 import nodemailer from 'nodemailer';
 import fs from 'fs/promises';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
-const {
-  CONVERSATION_URL = '',
-  BOOM_USER,
-  BOOM_PASS,
-  SMTP_HOST,
-  SMTP_PORT,
-  SMTP_USER,
-  SMTP_PASS,
-  FROM_NAME = 'Boom SLA Bot',
-  ROHIT_EMAIL,
-} = process.env;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Required env validation
+// ------------------------
+// ENV / CONFIG
+// ------------------------
+const CONVERSATION_URL =
+  process.env.CONVERSATION_URL ||
+  process.argv.slice(2).join(' ') || // allow passing URL as single arg
+  '';
+
 if (!CONVERSATION_URL) {
-  console.error('Missing required env var: CONVERSATION_URL');
+  console.error('Missing conversation URL (env CONVERSATION_URL or CLI arg).');
   process.exit(2);
 }
-for (const k of ['BOOM_USER', 'BOOM_PASS', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS']) {
-  if (!process.env[k]) {
-    console.error(`Missing required env var: ${k}`);
-    process.exit(2);
-  }
+
+const BOOM_USER = process.env.BOOM_USER || '';
+const BOOM_PASS = process.env.BOOM_PASS || '';
+
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = +(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const FROM_NAME  = process.env.FROM_NAME  || 'Oaktree Boom SLA Bot';
+const ROHIT_EMAIL = process.env.ROHIT_EMAIL || '';
+
+const ART_T1_SHOT = '/tmp/shot_t1.png';
+const ART_T2_SHOT = '/tmp/shot_t2.png';
+const ART_T1_HTML = '/tmp/page_t1.html';
+const ART_T2_HTML = '/tmp/page_t2.html';
+
+// ------------------------
+// Helpers
+// ------------------------
+async function saveArtifacts(page, basename) {
+  const shot = basename === 't1' ? ART_T1_SHOT : ART_T2_SHOT;
+  const html = basename === 't1' ? ART_T1_HTML : ART_T2_HTML;
+  await page.screenshot({ path: shot, fullPage: true });
+  const content = await page.content();
+  await fs.writeFile(html, content, 'utf8');
 }
 
-const tmp = '/tmp';
-const f = (name) => path.join(tmp, name);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function firstExistingLocator(page, selectors) {
+  for (const sel of selectors) {
+    const loc = page.locator(sel);
+    if (await loc.first().count()) return loc.first();
+  }
+  return null;
+}
 
 async function loginIfNeeded(page) {
-  // If we see a login form, perform a simple email+password login
-  const looksLikeLogin = await page.locator('input[type="email"], text=/Remember me/i').first().count();
-  if (!looksLikeLogin) return false;
+  // Wait the first navigation to settle a bit
+  await page.waitForLoadState('domcontentloaded');
 
-  const email = page.locator('input[type="email"]');
-  if (await email.count()) await email.fill(BOOM_USER, { timeout: 15000 }).catch(() => {});
-  // sometimes you must click Continue first
-  const tryClick = async (sel) => {
-    const btn = page.locator(sel).first();
-    if (await btn.count()) {
-      await btn.click({ timeout: 15000 }).catch(() => {});
-      return true;
+  // Heuristic: if we can see an email OR password input, assume login
+  const emailSelectors = [
+    'input[type="email"]',
+    'input[name="email"]',
+    'input#email',
+    'input[autocomplete="username"]',
+    '[placeholder*="email" i]'
+  ];
+  const passSelectors = [
+    'input[type="password"]',
+    'input[name="password"]',
+    'input#password',
+    '[placeholder*="password" i]'
+  ];
+  const submitSelectors = [
+    'button[type="submit"]',
+    'button:has-text("Sign in")',
+    'button:has-text("Log in")',
+    'button:has-text("Continue")',
+    'button:has-text("الدخول")'
+  ];
+
+  const emailInput = await firstExistingLocator(page, emailSelectors);
+  const passInput  = await firstExistingLocator(page, passSelectors);
+
+  // If neither input is present, do a soft check for a known login text,
+  // but do NOT mix engines in the same selector.
+  if (!emailInput && !passInput) {
+    // If a typical login phrase is visible, allow a short wait for inputs to appear.
+    const maybeLoginText = page.getByText(/remember me|تذكرني|log in|sign in/i).first();
+    if (await maybeLoginText.count()) {
+      await page.waitForTimeout(800); // tiny settle
     }
-    return false;
-  };
-
-  let pw = page.locator('input[type="password"]');
-  if (!(await pw.count())) {
-    await tryClick('button:has-text("Continue"), button:has-text("Sign in"), button[type="submit"]');
-    await page.waitForTimeout(500);
   }
-  pw = page.locator('input[type="password"]');
-  if (await pw.count()) await pw.fill(BOOM_PASS, { timeout: 15000 }).catch(() => {});
-  await tryClick('button:has-text("Sign in"), button:has-text("Log in"), button[type="submit"]');
 
-  await page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {});
-  return true;
+  // Try again after the soft wait
+  const email = emailInput || await firstExistingLocator(page, emailSelectors);
+  const pass  = passInput  || await firstExistingLocator(page, passSelectors);
+
+  if (email && pass) {
+    if (!BOOM_USER || !BOOM_PASS) {
+      throw new Error('Login required but BOOM_USER/BOOM_PASS not set');
+    }
+    await email.fill(BOOM_USER, { timeout: 15_000 }).catch(() => {});
+    await pass.fill(BOOM_PASS, { timeout: 15_000 }).catch(() => {});
+    const submit = await firstExistingLocator(page, submitSelectors);
+    if (submit) {
+      await Promise.all([
+        page.waitForLoadState('networkidle').catch(() => {}),
+        submit.click(),
+      ]);
+    } else {
+      // fallback: press Enter in password field
+      await Promise.all([
+        page.waitForLoadState('networkidle').catch(() => {}),
+        pass.press('Enter')
+      ]);
+    }
+    // Give post-login redirects time
+    await page.waitForLoadState('domcontentloaded');
+  }
 }
 
-async function ensureConversation(page) {
-  // Composer present?
-  const composer = page.locator('textarea, [contenteditable="true"]').filter({
-    hasText: /Type your message|اكتب رسالتك|Type your message/i
-  }).first();
-  if (await composer.count()) return true;
-
-  // AI suggestion card present?
-  const suggestionCard = page.locator('button:has-text("APPROVE")').first();
-  if (await suggestionCard.count()) return true;
-
-  // Any "via …" meta lines?
-  const meta = page.locator('text=/\\svia\\s/i').last();
-  if (await meta.count()) return true;
-
-  return false;
-}
-
-// ---------- NEW: role by layout (left = guest, right = agent) ----------
-async function detectLastSender(page) {
-  const vw = (await page.viewportSize())?.width || 1280;
-  const midX = vw / 2;
-
-  // Collect all visible “via …” meta candidates
-  const metas = [];
-  const loc = page.locator('text=/\\svia\\s/i');
-  const count = await loc.count();
-  for (let i = 0; i < count; i++) {
-    const el = loc.nth(i);
-    const bb = await el.boundingBox().catch(() => null);
-    if (!bb) continue;
-    metas.push({ el, x: bb.x, y: bb.y, cx: bb.x + bb.width / 2 });
+function buildTransport() {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+    throw new Error('SMTP settings missing (SMTP_HOST/SMTP_USER/SMTP_PASS).');
   }
-
-  // Exclude metas that belong to an agent suggestion card (APPROVE/REJECT nearby)
-  const approves = [];
-  const approveLoc = page.locator('button:has-text("APPROVE")');
-  const nA = await approveLoc.count();
-  for (let i = 0; i < nA; i++) {
-    const bb = await approveLoc.nth(i).boundingBox().catch(() => null);
-    if (bb) approves.push(bb);
-  }
-  const belongsToSuggestion = (y) => approves.some(bb => Math.abs(bb.y - y) <= 450);
-  const filtered = metas.filter(m => !belongsToSuggestion(m.y));
-  if (!filtered.length) {
-    return { lastSender: 'Unknown', hasAgentSuggestion: approves.length > 0, snippet: '' };
-  }
-
-  // Latest = highest y on the page
-  const latest = filtered.sort((a, b) => a.y - b.y).at(-1);
-
-  // Determine role by horizontal position
-  // LEFT of midline -> Guest (incoming), RIGHT -> Agent (outgoing)
-  const lastSender = latest.cx < midX ? 'Guest' : 'Agent';
-
-  // Tiny snippet for logging
-  let snippet = '';
-  try {
-    snippet = (await latest.el.textContent() || '').trim().slice(0, 120);
-  } catch {}
-  return { lastSender, hasAgentSuggestion: approves.length > 0, snippet };
-}
-
-async function sendEmail({ subject, html }) {
-  // Send to both SMTP_USER and ROHIT_EMAIL if present
-  const to = Array.from(new Set([process.env.SMTP_USER, process.env.ROHIT_EMAIL].filter(Boolean))).join(', ');
-  const transporter = nodemailer.createTransport({
+  return nodemailer.createTransport({
     host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: Number(SMTP_PORT) === 465,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
-  const info = await transporter.sendMail({
+}
+
+async function sendAlert({ to, subject, html }) {
+  const transporter = buildTransport();
+  await transporter.sendMail({
     from: `"${FROM_NAME}" <${SMTP_USER}>`,
     to,
     subject,
     html,
   });
-  console.log('SMTP message id:', info.messageId);
 }
 
+// Very small “is unanswered” heuristic that you can expand
+async function detectState(page) {
+  // Save an initial artifact
+  await saveArtifacts(page, 't1');
+
+  // Try to identify last message bubble role
+  // We’ll search for little pills like “via whatsapp” or “via channel”
+  // near the last bubble, otherwise fall back to role labels.
+  const bubbleSelectors = [
+    // guest messages (blue bubbles) usually left aligned:
+    '[class*="message"]:has-text("via whatsapp")',
+    '[class*="message"]:has-text("via channel")',
+    '.v-timeline .v-timeline-item',       // generic
+    '[data-test*="message"]',             // generic
+  ];
+
+  const aiSuggestionSelectors = [
+    'button:has-text("APPROVE")',
+    'button:has-text("REJECT")',
+    'button:has-text("REGENERATE")'
+  ];
+
+  let lastSender = 'Unknown';
+
+  // Look for “via whatsapp / via channel” on the last message row
+  const viaWhats = page.getByText(/via whatsapp/i).last();
+  const viaChan  = page.getByText(/via channel/i).last();
+  if (await viaWhats.count() || await viaChan.count()) {
+    // If we see those tags on the last bubble, that bubble is Guest
+    lastSender = 'Guest';
+  } else {
+    // If we can find a visible “Agent” chip close to the end of the feed, call it Agent
+    const agentChip = page.getByText(/^Agent$/i).last();
+    if (await agentChip.count()) lastSender = 'Agent';
+  }
+
+  // Consider presence of the 3-button AI suggestion card as a sign
+  // that no human reply was approved yet.
+  let hasAgentSuggestion = false;
+  for (const sel of aiSuggestionSelectors) {
+    if (await page.locator(sel).first().count()) { hasAgentSuggestion = true; break; }
+  }
+
+  // If last sender is guest AND an AI suggestion card is present, we treat as unanswered.
+  const isUnanswered = lastSender === 'Guest' && hasAgentSuggestion;
+
+  // Save another artifact after reading UI
+  await saveArtifacts(page, 't2');
+
+  // Extract a small text snippet as context
+  let snippet = '';
+  const lastMsg = page.locator('[class*="message"]').last();
+  if (await lastMsg.count()) {
+    snippet = (await lastMsg.innerText()).slice(0, 140);
+  }
+
+  return { ok: !isUnanswered, lastSender, hasAgentSuggestion, snippet };
+}
+
+// ------------------------
+// Main
+// ------------------------
 (async () => {
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
 
-  console.log('Run node check.js --conversation', JSON.stringify(CONVERSATION_URL));
-  await page.goto(CONVERSATION_URL, { waitUntil: 'load', timeout: 60000 }).catch(() => {});
-  await page.waitForLoadState('domcontentloaded', { timeout: 25000 }).catch(() => {});
-  await sleep(800);
+  try {
+    // Go to the link (can be a tracking link; we’ll follow redirects)
+    await page.goto(CONVERSATION_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
 
-  // First artifacts
-  await page.screenshot({ path: f('shot_t1.png'), fullPage: true }).catch(() => {});
-  await fs.writeFile(f('page_t1.html'), await page.content());
+    // Log in if the page shows login controls; do NOT use mixed selectors
+    await loginIfNeeded(page);
 
-  const didLogin = await loginIfNeeded(page);
-  if (didLogin) console.log('Login page detected, signing in…');
+    // Some tracking links first land on a dashboard/login then redirect —
+    // ensure we end at the conversation URL by navigating again (idempotent)
+    await page.goto(CONVERSATION_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
 
-  if (/\/login\b/i.test(page.url())) {
-    // Navigate back to the conversation after auth
-    await page.goto(CONVERSATION_URL, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
-    await page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {});
+    // Give the conversation view a moment to render
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(800);
+
+    const result = await detectState(page);
+
+    console.log('Second check result:', JSON.stringify(result, null, 2));
+
+    if (!result.ok) {
+      // Compose recipients: always to ROHIT, CC the SMTP user as well (so you see the alert)
+      const to = [ROHIT_EMAIL, SMTP_USER].filter(Boolean).join(', ');
+      if (to) {
+        const subject = 'SLA breach (>5 min): Boom guest message unanswered';
+        const html = `
+          <p>Hi Rohit,</p>
+          <p>A Boom guest message appears unanswered after 5 minutes.</p>
+          <p><b>Conversation:</b> <a href="${CONVERSATION_URL}">Open in Boom</a><br/>
+             <b>Last sender detected:</b> ${result.lastSender}<br/>
+             <b>AI suggestion visible:</b> ${result.hasAgentSuggestion ? 'Yes' : 'No'}<br/>
+             <b>Last message sample:</b> ${result.snippet || '(n/a)'}
+          </p>
+          <p>— Automated alert</p>
+        `;
+        await sendAlert({ to, subject, html });
+      } else {
+        console.warn('Alert NOT sent: no recipients configured.');
+      }
+    } else {
+      console.log('No alert sent (not confident or not guest/unanswered).');
+    }
+  } catch (err) {
+    console.error(err);
+    // Save at least one artifact for debugging if we crashed early
+    try { await saveArtifacts(page, 't1'); } catch {}
+    process.exitCode = 1;
+  } finally {
+    await browser.close();
   }
-  console.log('Resolved Boom URL:', page.url());
-  await sleep(1200);
-
-  const inConversation = await ensureConversation(page);
-
-  // Second artifacts
-  await page.screenshot({ path: f('shot_t2.png'), fullPage: true }).catch(() => {});
-  await fs.writeFile(f('page_t2.html'), await page.content());
-
-  const result = {
-    ok: false,
-    lastSender: 'Unknown',
-    reason: inConversation ? 'heuristic' : 'not_conversation',
-    snippet: '',
-    hasAgentSuggestion: false,
-    ts: new Date().toISOString(),
-  };
-
-  if (inConversation) {
-    const det = await detectLastSender(page);
-    result.lastSender = det.lastSender;
-    result.snippet = det.snippet;
-    result.hasAgentSuggestion = det.hasAgentSuggestion;
-    // ALERT RULE: last visible message is from Guest (unanswered by a human)
-    result.ok = det.lastSender === 'Guest';
-  }
-
-  console.log('Second check result:', JSON.stringify(result, null, 2));
-
-  if (result.ok) {
-    const subj = 'SLA breach (>5 min): Boom guest message unanswered';
-    const link = page.url();
-    const html = `
-      <div style="font:14px/1.45 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-        <p>Hi Rohit,</p>
-        <p>A Boom guest message appears unanswered after 5 minutes.</p>
-        <p><b>Conversation:</b> <a href="${link}">Open in Boom</a><br/>
-           <b>Last sender detected:</b> Guest<br/>
-           <b>Last message sample:</b> ${result.snippet || '(n/a)'}
-        </p>
-        <p style="color:#999">– Automated alert</p>
-      </div>
-    `;
-    await sendEmail({ subject: subj, html }).catch((e) => console.error('Email send failed:', e?.message || e));
-  } else {
-    console.log('No alert sent (not confident or not guest/unanswered).');
-  }
-
-  await browser.close();
 })();
