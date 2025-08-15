@@ -30,11 +30,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      # Use cache only if a lockfile exists
+      - name: Setup Node.js (cached)
+        if: hashFiles('package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock') != ''
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+
+      - name: Setup Node.js (no cache)
+        if: hashFiles('package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock') == ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Install dependencies (ci if lockfile exists)
         run: |
