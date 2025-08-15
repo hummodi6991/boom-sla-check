@@ -1,273 +1,228 @@
-// check.js — Boom SLA checker (ESM)
-// Node 20+; "type":"module" in package.json
-
+// ESM module
 import { chromium } from 'playwright';
 import nodemailer from 'nodemailer';
+import fs from 'fs/promises';
+import path from 'path';
+import process from 'process';
+import { fileURLToPath } from 'url';
 
-const CONVERSATION_ARG = process.argv.find(a => a.startsWith('http'));
-const CONVERSATION_URL = process.env.CONVERSATION_URL || CONVERSATION_ARG || '';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const BOOM_USER = process.env.BOOM_USER;
-const BOOM_PASS = process.env.BOOM_PASS;
+const TMP_DIR = '/tmp';
 
-// SMTP settings & recipients
-const SMTP_HOST = process.env.SMTP_HOST;
-const SMTP_PORT = Number(process.env.SMTP_PORT || '587');
-const SMTP_USER = process.env.SMTP_USER;
-const SMTP_PASS = process.env.SMTP_PASS;
-const FROM_NAME = process.env.FROM_NAME || 'Oaktree Boom SLA Bot';
-const ROHIT_EMAIL = process.env.ROHIT_EMAIL;
+const {
+  BOOM_USER,
+  BOOM_PASS,
+  SMTP_HOST,
+  SMTP_PORT,
+  SMTP_USER,
+  SMTP_PASS,
+  FROM_NAME,
+  ROHIT_EMAIL,
+  CONVERSATION_URL: INPUT_URL,
+} = process.env;
 
-// who receives the alert
-const RECIPIENTS = [ROHIT_EMAIL, SMTP_USER].filter(Boolean);
+function nowTs() { return new Date().toISOString(); }
 
-// ---------- tiny helpers ----------
-const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-const nowIso = () => new Date().toISOString();
-
-// Filters used to ignore system cards / UI chrome
-const BAD_TEXT_RE = /(fun level changed|detected policy|confidence\s*:\s*\d+|approve|reject|regenerate|train|help center)/i;
-
-// Accept even short messages (including emoji)
-const MIN_LAST_TEXT_CHARS = 1;
-
-// ---------- email ----------
-async function sendAlert({ url, snippet, lastSender, why }) {
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || RECIPIENTS.length === 0) {
-    console.log('Email not configured; skipping send.', {
-      hasHost: !!SMTP_HOST, hasUser: !!SMTP_USER, hasPass: !!SMTP_PASS, recipients: RECIPIENTS
-    });
-    return;
+async function saveArtifacts(page, tag) {
+  try {
+    const shot = path.join(TMP_DIR, `shot_${tag}.png`);
+    const html = path.join(TMP_DIR, `page_${tag}.html`);
+    await page.screenshot({ path: shot, fullPage: true });
+    await fs.writeFile(html, await page.content(), 'utf8');
+    console.log(`Saved artifacts for ${tag}`);
+  } catch (e) {
+    console.log(`(skip) could not save artifacts for ${tag}: ${e.message}`);
   }
+}
 
-  const transport = nodemailer.createTransport({
+function buildTransport() {
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
+    throw new Error('SMTP config missing. Need SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS.');
+  }
+  return nodemailer.createTransport({
     host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465,
+    port: Number(SMTP_PORT),
+    secure: Number(SMTP_PORT) === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
-
-  const subject = `SLA breach (>5 min): Boom guest message unanswered`;
-  const html = `
-    <p>Hi Rohit,</p>
-    <p>A Boom guest message appears unanswered after 5 minutes.</p>
-    <p><b>Conversation:</b> <a href="${url}">Open in Boom</a><br/>
-       <b>Last sender detected:</b> ${lastSender || 'Unknown'}<br/>
-       <b>Last message sample:</b> ${snippet || '(none)'}<br/>
-       <b>Reason:</b> ${why}
-    </p>
-    <p style="color:#888">– Automated alert</p>
-  `;
-
-  const info = await transport.sendMail({
-    from: `"${FROM_NAME}" <${SMTP_USER}>`,
-    to: RECIPIENTS.join(','),
-    subject,
-    html,
-  });
-
-  console.log('SMTP message id:', info.messageId);
 }
 
-// ---------- page logic ----------
-async function loginIfNeeded(page) {
-  // if already authenticated, Boom will redirect straight into app
-  await page.goto('https://app.boomnow.com/login', { waitUntil: 'load' });
+async function sendAlert({ to, subject, html }) {
+  const transport = buildTransport();
+  const fromName = FROM_NAME || 'Oaktree Boom SLA Bot';
+  const from = `"${fromName}" <${SMTP_USER}>`; // send from the SMTP user’s mailbox
+  const rcpts = [...new Set(
+    (Array.isArray(to) ? to : String(to || '').split(','))
+      .map(s => s.trim()).filter(Boolean)
+  )];
+  if (!rcpts.length) throw new Error('No recipients for alert');
+
+  const info = await transport.sendMail({ from, to: rcpts.join(','), subject, html });
+  console.log(`SMTP message id: ${info.messageId}`);
+}
+
+function looksLikeConversationUrl(u) {
+  return /\/dashboard\/guest-experience\/sales\/[0-9a-f-]+/i.test(u);
+}
+
+/**
+ * For tracked MJML links we only take the *first* Location hop (which has the
+ * conversation URL) and we STOP before the app redirects to /login.
+ */
+async function resolveFirstHopUrl(rawUrl) {
+  if (!rawUrl) return null;
   try {
-    await page.waitForSelector('input[type="email"]', { timeout: 5_000 });
-  } catch {
-    // looks logged in already
-    return;
-  }
-
-  await page.fill('input[type="email"]', BOOM_USER, { timeout: 30_000 });
-  await page.fill('input[type="password"]', BOOM_PASS, { timeout: 30_000 });
-  // login button commonly says "Login"
-  const loginBtn = page.locator('button:has-text("Login")');
-  if (await loginBtn.count()) {
-    await loginBtn.first().click();
-  } else {
-    await page.keyboard.press('Enter');
-  }
-
-  // land on dashboard
-  await page.waitForURL('**/dashboard/**', { timeout: 30_000 });
-}
-
-function sanitize(text) {
-  return (text || '')
-    .replace(/\s+/g, ' ')
-    .replace(/\u200e|\u200f/g, '') // LRM/RLM
-    .trim();
-}
-
-async function inspectConversation(page) {
-  // Give the page a moment to settle, then collect bottom region candidates.
-  await sleep(1000);
-
-  const result = await page.evaluate(
-    ({ BAD_TEXT_RE_SOURCE, MIN_LAST_TEXT_CHARS }) => {
-      const BAD_RE = new RegExp(BAD_TEXT_RE_SOURCE, 'i');
-
-      const vh = window.innerHeight;
-
-      // Gather textual blocks in the lower half of the viewport
-      const blocks = Array.from(document.querySelectorAll('div'))
-        .map(el => {
-          const rect = el.getBoundingClientRect();
-          const text = (el.innerText || '').trim();
-          const html = el.innerHTML || '';
-          const classes = el.className || '';
-          return { el, text, html, classes, rect };
-        })
-        .filter(x =>
-          x.rect.height > 10 &&
-          x.rect.width > 40 &&
-          (x.rect.top + x.rect.height / 2) > vh * 0.45
-        )
-        .filter(x => x.text && !BAD_RE.test(x.text));
-
-      // Find Agent suggestion card (very strong ‘guest before this’ hint)
-      const hasAgentSuggestion =
-        blocks.some(b => /(^|\s)Agent(\s|$)/i.test(b.text) && /Confidence\s*:\s*\d+/i.test(b.text));
-
-      // Candidate message snippets (short ok; allow emoji)
-      const msgs = blocks
-        .map(b => ({ ...b, clean: (b.text || '').replace(/\s+/g, ' ').trim() }))
-        .filter(b => b.clean.length >= MIN_LAST_TEXT_CHARS)
-        .sort((a, b) => (a.rect.top + a.rect.height / 2) - (b.rect.top + b.rect.height / 2));
-
-      // Bottom-most readable block
-      const last = msgs[msgs.length - 1];
-
-      // Helper: near a block, is there a label that looks like "• via whatsapp/sms/email" ?
-      const looksGuestMetaNear = (anchor) => {
-        if (!anchor) return false;
-        const near = document.elementFromPoint(anchor.rect.left + 10, Math.min(anchor.rect.bottom + 8, window.innerHeight - 2));
-        const text = (near?.closest('div')?.innerText || '') + ' ' + (anchor.el.parentElement?.innerText || '');
-        return /•\s*via\s+(whatsapp|sms|email|phone|web)/i.test(text);
-      };
-
-      // Helper: near a block, is there an "via channel" agent meta?
-      const looksAgentMetaNear = (anchor) => {
-        if (!anchor) return false;
-        const neighbor = (anchor.el.parentElement?.innerText || '') + ' ' + (anchor.el.nextElementSibling?.innerText || '');
-        return /via channel/i.test(neighbor);
-      };
-
-      let lastSender = 'Unknown';
-      let why = 'no_selector';
-      let snippet = last ? anchorText(last.clean) : '';
-
-      function anchorText(t) {
-        return t.length > 160 ? `${t.slice(0, 160)}…` : t;
-      }
-
-      if (last) {
-        if (looksAgentMetaNear(last)) {
-          lastSender = 'Agent';
-          why = 'neighbor_agent_meta';
-        } else if (looksGuestMetaNear(last)) {
-          lastSender = 'Guest';
-          why = 'neighbor_guest_meta';
-        } else if (hasAgentSuggestion) {
-          // typically appears right after a guest message
-          lastSender = 'Guest';
-          why = 'agent_suggestion_present';
-        } else {
-          // Fallback: if the bubble is left-aligned vs right, many UIs use that for guests.
-          const centerX = last.rect.left + last.rect.width / 2;
-          if (centerX < window.innerWidth * 0.5) {
-            lastSender = 'Guest';
-            why = 'geo-heuristic-left-bubble';
-          } else {
-            lastSender = 'Unknown';
-            why = 'heuristic';
-          }
-        }
-      } else {
-        // No text blocks? Still fallback to suggestion card signal.
-        if (hasAgentSuggestion) {
-          lastSender = 'Guest';
-          snippet = '';
-          why = 'agent_suggestion_present_no_text';
-        }
-      }
-
-      // Final OK decision:
-      const ok = lastSender === 'Guest';
-
-      return {
-        ok,
-        lastSender,
-        snippet,
-        reason: why,
-        hasAgentSuggestion,
-        centerX: last ? last.rect.left + last.rect.width / 2 : null,
-        vw: window.innerWidth,
-        ts: new Date().toISOString(),
-      };
-    },
-    {
-      BAD_TEXT_RE_SOURCE: BAD_TEXT_RE.source,
-      MIN_LAST_TEXT_CHARS,
+    const url = new URL(rawUrl);
+    if (url.hostname.includes('app.boomnow.com')) {
+      return rawUrl;
     }
-  );
-
-  return result;
+    // One manual hop
+    const res = await fetch(rawUrl, { redirect: 'manual' });
+    const loc = res.headers.get('location');
+    if (loc) {
+      // Absolute or relative
+      const final = new URL(loc, rawUrl).toString();
+      return final;
+    }
+  } catch (e) {
+    console.log(`resolveFirstHopUrl error: ${e.message}`);
+  }
+  return rawUrl;
 }
 
-async function run() {
-  if (!CONVERSATION_URL) {
-    console.error('Missing conversation URL!');
-    process.exit(2);
+async function loginIfOnLogin(page) {
+  // If page shows login or URL has /login, do login
+  if (!page.url().includes('/login')) {
+    // Extra heuristic: “Dashboard Login” heading text
+    const loginH1 = await page.locator('text=Dashboard Login').first();
+    if (!(await loginH1.count())) return false;
   }
-  if (!BOOM_USER || !BOOM_PASS) {
-    console.error('Missing BOOM_USER/BOOM_PASS!');
-    process.exit(2);
+  if (!BOOM_USER || !BOOM_PASS) throw new Error('BOOM_USER/BOOM_PASS missing');
+
+  await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(()=>{});
+  // Robust selectors
+  const email = page.locator('input[type="email"], input[name="email"]');
+  const pass = page.locator('input[type="password"], input[name="password"]');
+  const loginBtn = page.locator('button:has-text("Login"), button:has-text("Sign in")');
+
+  await email.fill(BOOM_USER, { timeout: 15000 });
+  await pass.fill(BOOM_PASS, { timeout: 15000 });
+  await loginBtn.click({ timeout: 15000 }).catch(()=>{});
+  await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(()=>{});
+  return true;
+}
+
+async function ensureOnConversation(page, intendedUrl) {
+  // If we are not on a conversation but have an intended conversation URL, try to go there.
+  if (looksLikeConversationUrl(page.url())) return true;
+
+  if (looksLikeConversationUrl(intendedUrl)) {
+    await page.goto(intendedUrl, { waitUntil: 'domcontentloaded' });
+    await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(()=>{});
+    return looksLikeConversationUrl(page.url());
   }
+  return false;
+}
+
+async function extractLastMessageInfo(page) {
+  // Bail out if we’re not on a conversation thread
+  const url = page.url();
+  if (!looksLikeConversationUrl(url)) {
+    return { ok: false, lastSender: 'Unknown', reason: 'not_conversation', snippet: '' };
+  }
+
+  // Try to detect the last visible bubble
+  // Heuristic 1: the “via channel • …” dots row precedes guest bubble (blue)
+  const bubbles = page.locator('div[role="listitem"], div:has-text("via channel")').locator('xpath=..');
+  const total = await bubbles.count();
+  if (total === 0) {
+    return { ok: false, lastSender: 'Unknown', reason: 'no_bubbles', snippet: '' };
+  }
+
+  // Fallback: grab the last text block on the timeline area
+  const container = page.locator('main, [data-testid="conversation"], div:has-text("via channel")').first();
+  const allText = (await container.innerText().catch(()=>'')) || '';
+  const snippet = (allText || '').split('\n').slice(-5).join(' ').trim().slice(0, 160);
+
+  // Look for an Agent suggestion card with APPROVE/REJECT immediately after the last bubble
+  const hasAgentSuggestion = await page.locator('button:has-text("APPROVE"), button:has-text("Approve")').first().isVisible().catch(()=>false);
+
+  // A very robust sender guess:
+  //  - If there’s an agent suggestion card immediately visible and *no* newer human bubble, the last sender is the guest.
+  //  - If the newest item contains “Agent” header, treat as Agent.
+  const agentHeader = await page.locator('text=Agent').last().isVisible().catch(()=>false);
+
+  let lastSender = 'Unknown';
+  if (hasAgentSuggestion && !agentHeader) lastSender = 'Guest';
+  else if (agentHeader) lastSender = 'Agent';
+
+  return {
+    ok: lastSender !== 'Unknown',
+    lastSender,
+    reason: 'heuristic',
+    snippet,
+    hasAgentSuggestion,
+  };
+}
+
+(async () => {
+  if (!INPUT_URL) throw new Error('Missing env var: CONVERSATION_URL');
 
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
-  const page = await context.newPage();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 960 } });
+  const page = await ctx.newPage();
 
-  try {
-    console.log('Saved artifacts for t1');
+  let firstHopUrl = await resolveFirstHopUrl(INPUT_URL);
+  console.log(`Navigating to conversation…`);
+  await page.goto(firstHopUrl, { waitUntil: 'domcontentloaded' });
+  await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(()=>{});
 
-    await loginIfNeeded(page);
-
-    // Jump to conversation
-    console.log('Navigating to conversation…');
-    await page.goto(CONVERSATION_URL, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {});
-
-    // Some runs arrive on a tracking/redirect link. Let’s resolve it.
-    if (!/\/dashboard\/guest-experience\//.test(page.url())) {
-      await page.waitForURL('**/dashboard/guest-experience/**', { timeout: 45_000 }).catch(() => {});
+  // If we’re on login, log in then go to intended conversation URL
+  if (page.url().includes('/login')) {
+    await saveArtifacts(page, 't1');
+    const didLogin = await loginIfOnLogin(page);
+    if (didLogin) {
+      // After login, force-load the intended conversation url if we have it
+      await ensureOnConversation(page, firstHopUrl);
     }
-    console.log('Resolved Boom URL:', page.url());
-
-    const second = await inspectConversation(page);
-    console.log('Second check result:', second);
-
-    if (second.ok) {
-      await sendAlert({
-        url: page.url(),
-        snippet: second.snippet,
-        lastSender: second.lastSender,
-        why: second.reason,
-      });
-    } else {
-      console.log('No alert sent (not confident or not guest/unanswered).');
-    }
-
-    console.log('Saved artifacts for t2');
-  } catch (err) {
-    console.error('Fatal error:', err);
-    process.exitCode = 1;
-  } finally {
-    await browser.close();
+  } else {
+    await saveArtifacts(page, 't1');
   }
-}
 
-run();
+  // If still not on a conversation, try one more time to ensure
+  await ensureOnConversation(page, firstHopUrl);
+
+  // Take a second set of artifacts on the final page
+  await saveArtifacts(page, 't2');
+
+  const result = await extractLastMessageInfo(page);
+  console.log('Second check result:', JSON.stringify({ ...result, ts: nowTs() }, null, 2));
+
+  const shouldAlert =
+    result.lastSender === 'Guest' &&
+    (result.hasAgentSuggestion || true); // keep alert simple: guest last is enough
+
+  if (shouldAlert) {
+    const toList = [SMTP_USER, ROHIT_EMAIL].filter(Boolean).join(',');
+    const subject = 'SLA breach (>5 min): Boom guest message unanswered';
+    const link = looksLikeConversationUrl(firstHopUrl) ? firstHopUrl : page.url();
+    const html = `
+      <p>Hi Rohit,</p>
+      <p>A Boom guest message appears unanswered after 5 minutes.</p>
+      <p><b>Conversation:</b> <a href="${link}">Open in Boom</a><br/>
+         <b>Last sender detected:</b> ${result.lastSender}<br/>
+         <b>Last message sample:</b> ${result.snippet || '—'}</p>
+      <p>– Automated alert</p>
+    `;
+    await sendAlert({ to: toList, subject, html });
+  } else {
+    console.log('No alert sent (not confident or not guest/unanswered).');
+  }
+
+  await browser.close();
+})().catch(async (err) => {
+  console.error(err);
+  process.exitCode = 1;
+});
