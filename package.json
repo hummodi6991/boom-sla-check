@@ -2,11 +2,12 @@
   "name": "boom-sla-check",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "check": "node check.js"
+    "start": "node check.js"
   },
   "dependencies": {
-    "nodemailer": "^6.9.8",
+    "nodemailer": "^6.9.13",
     "playwright": "^1.45.0"
   }
 }
