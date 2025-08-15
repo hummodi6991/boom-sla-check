@@ -1,7 +1,7 @@
 // Robust Boom SLA checker with resilient login and safe fallbacks.
 // Uses new secrets: BOOM_USER, BOOM_PASS, SMTP_*, ALERT_FROM_NAME, ALERT_TO, AGENT_SIDE
 
-const { chromium } = require('playwright');
+import { chromium } from 'playwright';
 const nodemailer = require('nodemailer');
 
 // ---------- config ----------
