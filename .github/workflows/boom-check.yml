@@ -15,8 +15,9 @@ jobs:
   run-check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+
     env:
-      # App creds
+      # Boom login
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
 
@@ -28,22 +29,39 @@ jobs:
       FROM_NAME:  ${{ secrets.FROM_NAME }}
       ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
 
-      # Conversation URL: workflow input wins; falls back to secret if present
+      # Conversation URL (input wins; secret as fallback)
       CONVERSATION_URL: ${{ inputs.conversation_url || secrets.CONVERSATION_URL }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      # Use cached setup ONLY if a lockfile exists.
+      - name: Setup Node.js (cached)
+        if: ${{ hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json', '**/yarn.lock') != '' }}
         uses: actions/setup-node@v4
         with:
           node-version: '20.x'
-          cache: 'npm'
+          cache: npm
+          cache-dependency-path: |
+            **/package-lock.json
+            **/npm-shrinkwrap.json
+            **/yarn.lock
 
-      - name: Install dependencies
-        run: |
-          npm i --no-fund --no-audit
+      - name: Setup Node.js (no cache)
+        if: ${{ hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json', '**/yarn.lock') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      # Install deps; prefer npm ci when a lockfile exists.
+      - name: Install dependencies (ci)
+        if: ${{ hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json', '**/yarn.lock') != '' }}
+        run: npm ci --no-fund --no-audit
+
+      - name: Install dependencies (install)
+        if: ${{ hashFiles('**/package-lock.json', '**/npm-shrinkwrap.json', '**/yarn.lock') == '' }}
+        run: npm i --no-fund --no-audit
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
