@@ -3,16 +3,29 @@ name: Boom SLA check
 on:
   workflow_dispatch:
     inputs:
-      conversation:
+      conversation_url:
         description: "Boom conversation URL"
         required: true
         type: string
-  repository_dispatch:
-    types: [boom_check] # Power Automate can send client_payload.conversation
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
+
+    env:
+      # Secrets
+      BOOM_USER: ${{ secrets.BOOM_USER }}
+      BOOM_PASS: ${{ secrets.BOOM_PASS }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      ALERT_TO: ${{ secrets.ALERT_TO }}
+      AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
+      # Input (also read by the script)
+      CONVERSATION_URL: ${{ inputs.conversation_url }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,30 +36,15 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: |
-          npm i --no-audit --no-fund
-          npx playwright install --with-deps chromium
+        run: npm i
+
+      - name: Install Playwright Chromium (with system deps)
+        run: npx playwright install --with-deps chromium
 
       - name: Run Playwright checker
-        env:
-          # Secrets (exact names as you already saved)
-          BOOM_USER: ${{ secrets.BOOM_USER }}
-          BOOM_PASS: ${{ secrets.BOOM_PASS }}
-          AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          FROM_NAME: ${{ secrets.FROM_NAME }}
-          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-          ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
-          RECIPIENTS: ${{ secrets.RECIPIENTS }}
-          # Conversation URL from either trigger
-          CONVERSATION_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.conversation || github.event.client_payload.conversation }}
-        run: node check.js
+        run: node check.js --conversation "${{ inputs.conversation_url }}"
 
       - name: Upload page artifacts (if any)
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pages
