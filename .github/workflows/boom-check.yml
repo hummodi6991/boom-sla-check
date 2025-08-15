@@ -1,99 +1,69 @@
-# .github/workflows/boom-check.yml
 name: Boom SLA check
 
 on:
-  # Manual (button) + API (Power Automate) trigger only
+  # Manual trigger or from external tools (like Power Automate calling the API)
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Optional: Boom conversation URL to open"
+        description: "Conversation URL (optional — overrides secret)"
         required: false
-        type: string
-
-permissions:
-  contents: read
-
-concurrency:
-  group: boom-sla-check
-  cancel-in-progress: false
-
-defaults:
-  run:
-    shell: bash
+  repository_dispatch:
+    types: [boom_sla_check]
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    env:
-      # Core creds
-      BOOM_USER: ${{ secrets.BOOM_USER }}
-      BOOM_PASS: ${{ secrets.BOOM_PASS }}
-
-      # Optional selector/feature flags you already store
-      AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
-
-      # SMTP (sender is SMTP_USER; display name is FROM_NAME)
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      FROM_NAME: ${{ secrets.FROM_NAME }}
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Resolve conversation URL (input or secret fallback)
+        id: conv
         run: |
           if [ -n "${{ github.event.inputs.conversation }}" ]; then
-            echo "CONVERSATION_URL=${{ github.event.inputs.conversation }}" >> $GITHUB_ENV
+            echo "url=${{ github.event.inputs.conversation }}" >> $GITHUB_OUTPUT
           elif [ -n "${{ secrets.CONVERSATION_URL }}" ]; then
-            echo "CONVERSATION_URL=${{ secrets.CONVERSATION_URL }}" >> $GITHUB_ENV
+            echo "url=${{ secrets.CONVERSATION_URL }}" >> $GITHUB_OUTPUT
           else
-            echo "No CONVERSATION_URL provided (ok if check.js handles discovery)."
+            echo "url=" >> $GITHUB_OUTPUT
           fi
 
-      - name: Resolve recipients (ALERT_TO / ALERT_CC with fallbacks)
+      - name: Resolve recipients (ALERT_TO / ALERT_CC with sensible fallbacks)
+        id: recips
         run: |
-          to="${{ secrets.ALERT_TO }}"
-          cc="${{ secrets.ALERT_CC }}"
-          # Back-compat fallbacks to your existing secrets
-          if [ -z "$to" ] && [ -n "${{ secrets.ROHIT_EMAIL }}" ]; then
-            to="${{ secrets.ROHIT_EMAIL }}"
-          fi
-          # As a safety net, if still empty, send to the SMTP_USER itself
-          if [ -z "$to" ] && [ -n "${{ secrets.SMTP_USER }}" ]; then
-            to="${{ secrets.SMTP_USER }}"
-          fi
-          echo "ALERT_TO=$to" >> $GITHUB_ENV
-          echo "ALERT_CC=$cc" >> $GITHUB_ENV
+          TO="${{ secrets.ALERT_TO }}"
+          if [ -z "$TO" ]; then TO="${{ secrets.ROHIT_EMAIL }}"; fi
+          if [ -z "$TO" ]; then TO="${{ secrets.SMTP_USER }}"; fi
+          echo "to=$TO" >> $GITHUB_OUTPUT
+          echo "cc=${{ secrets.ALERT_CC }}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
       - name: Install dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+        run: npm i
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright checker
-        # check.js should read creds from env; we also pass the conversation explicitly if present
-        run: |
-          if [ -n "${CONVERSATION_URL:-}" ]; then
-            node check.js --conversation "${CONVERSATION_URL}"
-          else
-            node check.js
-          fi
+        env:
+          BOOM_USER: ${{ secrets.BOOM_USER }}
+          BOOM_PASS: ${{ secrets.BOOM_PASS }}
+          CONVERSATION_URL: ${{ steps.conv.outputs.url }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          FROM_NAME: ${{ secrets.FROM_NAME }}
+          ALERT_TO: ${{ steps.recips.outputs.to }}
+          ALERT_CC: ${{ steps.recips.outputs.cc }}
+          SLA_MINUTES: ${{ secrets.SLA_MINUTES }}
+        run: node check.js
 
       - name: Upload page artifacts (if any)
         if: always()
@@ -101,6 +71,4 @@ jobs:
         with:
           name: boom-sla-artifacts
           path: |
-            /tmp/shot_*.png
-            /tmp/page_*.html
-          if-no-files-found: ignore
+            /tmp/boom-*.png
