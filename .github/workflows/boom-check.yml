@@ -4,19 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Boom conversation URL (or tracking URL)"
+        description: 'Conversation URL (Boom "Open in Boom" link or direct /guest-experience/sales/..)'
         required: true
-        type: string
-  repository_dispatch:
-    types: [boom_check]
+  schedule:
+    - cron: '*/10 * * * *' # example: every 10 minutes
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
     env:
-      CONVERSATION_URL: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || '' }}
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -25,31 +21,24 @@ jobs:
       SMTP_PASS: ${{ secrets.SMTP_PASS }}
       FROM_NAME: ${{ secrets.FROM_NAME }}
       ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
+      BREACH_MINUTES: 5
+      CONVERSATION_URL: ${{ github.event.inputs.conversation || secrets.DEFAULT_CONVERSATION_URL }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Use cache only if a lockfile exists
       - name: Setup Node.js (cached)
-        if: hashFiles('package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock') != ''
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Setup Node.js (no cache)
-        if: hashFiles('package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock') == ''
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          node-version: 20
 
       - name: Install dependencies (ci if lockfile exists)
         run: |
-          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
-            npm ci --no-audit --no-fund
+          if [ -f package-lock.json ]; then
+            npm ci
           else
-            npm install --no-audit --no-fund
+            npm i
           fi
 
       - name: Install Playwright Chromium (with system deps)
@@ -63,8 +52,7 @@ jobs:
         with:
           name: pages
           path: |
-            /tmp/shot_t1.png
-            /tmp/shot_t2.png
-            /tmp/page_t1.html
-            /tmp/page_t2.html
-          if-no-files-found: warn
+            /tmp/shot_before.png
+            /tmp/shot_after.png
+            /tmp/page_dump.html
+          if-no-files-found: ignore
