@@ -1,19 +1,18 @@
 name: Boom SLA check
 
 on:
-  repository_dispatch:
-    types: [boom_check]
   workflow_dispatch:
     inputs:
-      conversationUrl:
+      conversation:
         description: "Boom conversation URL"
         required: true
         type: string
+  repository_dispatch:
+    types: [boom_check] # Power Automate can send client_payload.conversation
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,33 +20,30 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
 
-      # <- This is the step you asked about
       - name: Install dependencies
         run: |
-          npm ci --ignore-scripts || npm install --no-audit --ignore-scripts
-
-      - name: Install Playwright Chromium (with system deps)
-        run: |
+          npm i --no-audit --no-fund
           npx playwright install --with-deps chromium
 
       - name: Run Playwright checker
         env:
-          # Power Automate (repository_dispatch) payload OR manual (workflow_dispatch) input
-          CONVERSATION_URL: ${{ github.event.inputs.conversationUrl || github.event.client_payload.conversationUrl }}
-
-          # Secrets from repo settings → Actions → Secrets and variables → Repository secrets
-          BOOM_USER:   ${{ secrets.BOOM_USER }}
-          BOOM_PASS:   ${{ secrets.BOOM_PASS }}
-          SMTP_HOST:   ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:   ${{ secrets.SMTP_PORT }}
-          SMTP_USER:   ${{ secrets.SMTP_USER }}
-          SMTP_PASS:   ${{ secrets.SMTP_PASS }}
-          FROM_NAME:   ${{ secrets.FROM_NAME }}
+          # Secrets (exact names as you already saved)
+          BOOM_USER: ${{ secrets.BOOM_USER }}
+          BOOM_PASS: ${{ secrets.BOOM_PASS }}
+          AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          FROM_NAME: ${{ secrets.FROM_NAME }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
           ROHIT_EMAIL: ${{ secrets.ROHIT_EMAIL }}
-        run: |
-          node check.js --conversation "${CONVERSATION_URL}"
+          RECIPIENTS: ${{ secrets.RECIPIENTS }}
+          # Conversation URL from either trigger
+          CONVERSATION_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.conversation || github.event.client_payload.conversation }}
+        run: node check.js
 
       - name: Upload page artifacts (if any)
         if: always()
@@ -57,3 +53,4 @@ jobs:
           path: |
             /tmp/shot_*.png
             /tmp/page_*.html
+          if-no-files-found: ignore
