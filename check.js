@@ -1,294 +1,318 @@
-// check.js
-// Node ESM. Your package.json should have: { "type": "module" }
+// check.js  — ESM (package.json has { "type": "module" })
 import { chromium } from 'playwright';
+import fs from 'node:fs/promises';
 import nodemailer from 'nodemailer';
 
+// ----------- config (keeps your existing secrets) -----------
 const {
-  CONVERSATION_URL,            // optional; Power Automate or manual
   BOOM_USER,
   BOOM_PASS,
-
+  FROM_NAME,
   SMTP_HOST,
   SMTP_PORT,
   SMTP_USER,
   SMTP_PASS,
-  FROM_NAME,                   // e.g., "Oaktree Boom SLA Bot"
-  ROHIT_EMAIL,                 // primary recipient
+  ROHIT_EMAIL,        // primary recipient (kept)
+  ALERT_TO,           // optional override (comma-separated)
+  ALERT_CC,           // optional CC (comma-separated)
+  CONVERSATION_URL,   // optional direct URL (Power Automate may pass this)
+  SLA_MINUTES,        // optional override, default 5
 } = process.env;
 
-const TIMEOUT = 30_000;        // per wait
-const NAV_TIMEOUT = 60_000;    // initial nav
-const ART_BASE = '/tmp/boom';  // artifact prefix
+const SLA = Number(SLA_MINUTES || 5);
 
-// --- helpers ---------------------------------------------------------------
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-async function saveShot(page, tag) {
-  const f = `${ART_BASE}-${tag}.png`;
-  try { await page.screenshot({ path: f, fullPage: true }); } catch {}
+// Fallback recipients: prefer ALERT_TO, else ROHIT_EMAIL.
+function getRecipients() {
+  const to = (ALERT_TO && ALERT_TO.trim()) || (ROHIT_EMAIL && ROHIT_EMAIL.trim());
+  const cc = (ALERT_CC && ALERT_CC.trim()) || '';
+  return { to, cc };
 }
 
+// ---------- helpers ----------
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function saveArtifact(page, name) {
+  try { await page.screenshot({ path: `/tmp/${name}.png`, fullPage: true }); } catch {}
+}
+
+async function saveText(name, text) {
+  try { await fs.writeFile(`/tmp/${name}`, text, 'utf8'); } catch {}
+}
+
+function parseMinutesAgoMaybe(tsText) {
+  // We only use this if Boom shows relative text like “5 minutes ago”.
+  if (!tsText) return null;
+  const t = tsText.trim().toLowerCase();
+  const m = t.match(/(\d+)\s*(min|minute)s?\s*ago/);
+  if (m) return Number(m[1] || 0);
+  return null;
+}
+
+// ---------- login flow ----------
 async function loginIfNeeded(page) {
-  // If redirected to login, fill BOOM credentials
-  const isLogin = await page.locator('input[type="email"], input[name="email"]').first().isVisible().catch(() => false);
-  if (!isLogin) return;
+  const url = page.url();
 
-  if (!BOOM_USER || !BOOM_PASS) throw new Error('Missing BOOM_USER/BOOM_PASS');
+  // If we’re on login page, sign in.
+  if (url.includes('/login')) {
+    // Try simple email/password form (selectors are tolerant).
+    const emailSel = 'input[type="email"], input[name="email"], input[autocomplete="username"]';
+    const passSel  = 'input[type="password"], input[name="password"], input[autocomplete="current-password"]';
+    const btnSel   = 'button:has-text("Log in"), button:has-text("Sign in"), button[type="submit"]';
 
-  await page.fill('input[type="email"], input[name="email"]', BOOM_USER, { timeout: TIMEOUT });
-  // Not all forms use type="password"
-  const pwSel = 'input[type="password"], input[name="password"]';
-  await page.fill(pwSel, BOOM_PASS, { timeout: TIMEOUT });
-
-  // Try common submit buttons
-  const btn = page.locator('button:has-text("Log in"), button:has-text("Sign in"), button[type="submit"]');
-  if (await btn.first().isVisible().catch(() => false)) {
-    await btn.first().click({ timeout: TIMEOUT });
-  } else {
-    // Fallback: press Enter in password field
-    await page.locator(pwSel).press('Enter');
+    await page.waitForSelector(emailSel, { timeout: 15000 });
+    await page.fill(emailSel, BOOM_USER);
+    await page.fill(passSel, BOOM_PASS);
+    await page.click(btnSel);
+    await page.waitForLoadState('networkidle', { timeout: 45000 });
   }
-
-  await page.waitForLoadState('load', { timeout: NAV_TIMEOUT });
-  await sleep(1000);
 }
 
-async function ensureConversationLoaded(page) {
-  // Scroll to bottom a couple of times to force lazy content
-  for (let i = 0; i < 3; i++) {
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await sleep(400);
+// ---------- detection ----------
+async function getLastMessageInfo(page) {
+  // Scroll to bottom slowly so virtualized lists render latest items
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press('End');
+    await sleep(200);
   }
 
-  // Quick sanity: presence of the composer input strongly indicates we’re in a conversation
-  const composerVisible = await page.locator('textarea, [placeholder*="Type your message"]').first().isVisible().catch(() => false);
-  if (!composerVisible) {
-    return { ok: false, reason: 'not_conversation' };
+  // Pick a broad transcript container
+  const threadLocator = page.locator(
+    '[data-testid*="conversation"], [data-test*="conversation"], [class*="conversation"], main'
+  );
+
+  // Give Playwright a little time to see something
+  let hasThread = true;
+  try {
+    await threadLocator.first().waitFor({ state: 'visible', timeout: 4000 });
+  } catch {
+    hasThread = false;
   }
-  return { ok: true };
-}
 
-async function detectAgentSuggestion(page) {
-  // Agent suggestions consistently show action buttons in English
-  // APPROVE / REJECT (and often REGENERATE). We only need APPROVE to be robust.
-  const approve = page.locator('role=button[name=/^approve$/i], button:has-text("APPROVE")');
-  return await approve.first().isVisible().catch(() => false);
-}
+  const info = await page.evaluate(() => {
+    const out = {
+      lastSender: 'Unknown',
+      hasAgentSuggestion: false,
+      snippet: '',
+      reason: '',
+      tsText: '',
+      ts: null,
+    };
 
-async function detectLastSender(page) {
-  // Strategy:
-  // 1) Find all visible elements in the message column that contain "via ".
-  // 2) Take the last one and classify:
-  //    - text starts with "via " => likely Agent
-  //    - text includes " • via " after a name => likely Guest
-  // 3) Try to grab a short snippet from the bubble body near that header.
-  //
-  // We limit the scan to the central column by anchoring near the composer.
-  const data = await page.evaluate(() => {
-    function isVisible(el) {
-      const rect = el.getBoundingClientRect();
-      const style = window.getComputedStyle(el);
-      return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+    // Find a transcript-ish root
+    const root =
+      document.querySelector('[data-testid*="conversation"]') ||
+      document.querySelector('[data-test*="conversation"]') ||
+      document.querySelector('[class*="conversation"]') ||
+      document.querySelector('main') ||
+      document.body;
+
+    if (!root) {
+      out.reason = 'no_selector';
+      return out;
     }
 
-    const results = [];
-    // Anchor: the composer area is usually near the bottom; walk up to find the column
-    const composer = document.querySelector('textarea, [placeholder*="Type your message"]');
-    let column = composer?.closest('main, [role="main"], [class*="conversation"], [class*="thread"]') || document.body;
-
-    const all = column.querySelectorAll('*');
-    for (const el of all) {
-      if (!isVisible(el)) continue;
-      const t = (el.textContent || '').trim();
-      if (!t) continue;
-      // English UI shows "via whatsapp" / "via channel" in Latin letters
-      if (/via\s+(whatsapp|channel)/i.test(t)) {
-        // Exclude obvious Agent suggestion wrapper by presence of action buttons nearby
-        const hasApprove = el.closest('article, section, div')?.querySelector('button, a')?.textContent?.toLowerCase().includes('approve');
-        results.push({
-          text: t.replace(/\s+/g, ' '),
-          html: el.innerHTML.slice(0, 400),
-          hasApprove: !!hasApprove,
-          snippet: (() => {
-            // Try to find nearby bubble text (previous sibling or parent)
-            let s = '';
-            const cand = el.parentElement;
-            if (cand) {
-              // search a few preceding siblings for text blocks
-              let prev = cand.previousElementSibling;
-              let hop = 0;
-              while (prev && hop < 5 && s.length < 160) {
-                const tt = prev.textContent?.trim() || '';
-                if (tt && !/via\s+(whatsapp|channel)/i.test(tt)) {
-                  s = tt;
-                  break;
-                }
-                prev = prev.previousElementSibling; hop++;
-              }
-            }
-            return s.replace(/\s+/g, ' ').slice(0, 120);
-          })(),
-        });
-      }
+    // Helper: is an AI suggestion card?
+    function isSuggestion(el) {
+      // Cards typically contain "Agent" + "Confidence" + REJECT/APPROVE
+      const t = (el.innerText || '').replace(/\s+/g, ' ').trim();
+      if (!t) return false;
+      const hasAgent = /\bAgent\b/i.test(t);
+      const hasConf  = /\bConfidence\b/i.test(t);
+      const hasAct   = /(REJECT|APPROVE|REGENERATE)/i.test(t);
+      // Also, suggestion cards are often bordered blocks with buttons within
+      const hasButtons = el.querySelector('button');
+      return (hasAgent && hasConf && hasAct) || (hasAgent && hasButtons);
     }
-    return results;
+
+    // Collect the last ~400 leaf-ish nodes to inspect bottom area
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    const elems = [];
+    let node;
+    while ((node = walker.nextNode())) elems.push(node);
+    const last = elems.slice(-400);
+
+    // Skip suggestion cards and grab candidate “header lines” that mention "via"
+    const headers = last.filter(el => {
+      if (isSuggestion(el)) return false;
+      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!txt) return false;
+      // Boom keeps “via whatsapp / via channel” in English even when the chat is Arabic.
+      return txt.includes(' via ') || /^via\s/i.test(txt) || /\s•\s*via\s/i.test(txt);
+    });
+
+    // If there is any suggestion card near the bottom, mark it so we don’t consider it an agent reply
+    out.hasAgentSuggestion = last.some(isSuggestion);
+
+    // Take the last suitable header
+    const headerEl = headers.reverse().find(Boolean);
+    if (!headerEl) {
+      out.reason = 'no_header';
+      return out;
+    }
+
+    const headerText = (headerEl.textContent || '').replace(/\s+/g, ' ').trim();
+    out.snippet = headerText.slice(0, 140);
+
+    // Heuristic:
+    // Guest header looks like:  "Nasser AlHarthi • via channel"
+    // Agent header looks like:   "via whatsapp • Amal Alawad"
+    const bulletIdx = headerText.indexOf('•');
+    const viaIdx = headerText.toLowerCase().indexOf('via ');
+    if (viaIdx !== -1 && bulletIdx !== -1) {
+      out.lastSender = viaIdx < bulletIdx ? 'Agent' : 'Guest';
+    } else if (/^via\s/i.test(headerText)) {
+      out.lastSender = 'Agent';
+    } else if (/•\s*via\s/i.test(headerText)) {
+      out.lastSender = 'Guest';
+    } else {
+      out.lastSender = 'Unknown';
+      out.reason = 'ambiguous_header';
+    }
+
+    // Try to pull a time-ish element near the header
+    const timeEl =
+      headerEl.closest('*')?.querySelector('time, [class*="time"], [class*="timestamp"]') ||
+      headerEl.parentElement?.querySelector('time, [class*="time"], [class*="timestamp"]');
+
+    out.tsText = timeEl ? (timeEl.textContent || '').trim() : '';
+
+    return out;
   });
 
-  if (!data || data.length === 0) {
-    return { lastSender: 'Unknown', snippet: '', reason: 'no_selector' };
+  // Save the transcript region HTML for debugging
+  try {
+    const thread = await threadLocator.first();
+    const html = await thread.evaluate(el => el.outerHTML);
+    await saveText('thread.html', html);
+  } catch {
+    // fallback: whole page
+    await saveText('thread.html', await page.content());
   }
 
-  const last = data[data.length - 1];
-
-  // Heuristic classification:
-  // - Agent message headers often *start* with "via ..."
-  // - Guest message headers generally look like "Name • via ...", i.e., "via ..." is toward the end.
-  // - If the element is inside the suggestion card (has approve), it’s NOT a sent agent message; treat separately.
-  let lastSender = 'Unknown';
-  const txt = last.text;
-  if (/^via\s+/i.test(txt)) {
-    // Likely a human Agent sent a message
-    lastSender = 'Agent';
-  } else if (/•\s*via\s+/i.test(txt)) {
-    // Likely Guest (Name • via whatsapp/channel)
-    lastSender = 'Guest';
-  }
-
-  // If this header lives inside an Agent suggestion wrapper (approve visible nearby),
-  // do NOT call it an Agent message; keep lastSender as Guest if it fits that pattern.
-  // (In practice, suggestion cards have their own header area; this guard prevents misclassification.)
-  if (last.hasApprove) {
-    // Header belongs to the suggestion card itself—don’t treat as a real reply.
-    // Re-classify to Guest if it matches the guest pattern; otherwise Unknown.
-    if (/•\s*via\s+/i.test(txt)) {
-      lastSender = 'Guest';
-    } else {
-      lastSender = 'Unknown';
-    }
-  }
-
-  return {
-    lastSender,
-    snippet: last.snippet || '',
-    reason: lastSender === 'Unknown' ? 'heuristic' : 'ok',
-  };
+  return info;
 }
 
-function buildTransport() {
-  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS) {
-    return null;
+// ---------- mail ----------
+async function sendAlertEmail(subject, html) {
+  const { to, cc } = getRecipients();
+  if (!to) {
+    console.log('Alert needed, but no recipients are configured.');
+    return;
   }
-  return nodemailer.createTransport({
+
+  const transport = nodemailer.createTransport({
     host: SMTP_HOST,
-    port: Number(SMTP_PORT),
+    port: Number(SMTP_PORT || 587),
     secure: Number(SMTP_PORT) === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
-}
-
-async function sendAlertEmail({ url, lastSender, snippet }) {
-  const to = ROHIT_EMAIL;        // keep your current recipient
-  const cc = SMTP_USER || '';    // copy the mailbox you own (as you requested)
-  const fromName = FROM_NAME || 'Oaktree Boom SLA Bot';
-
-  if (!to) {
-    console.log('Alert needed, but no ROHIT_EMAIL is configured.');
-    return;
-  }
-  const transport = buildTransport();
-  if (!transport) {
-    console.log('Alert needed, but SMTP settings are not fully set.');
-    return;
-  }
-
-  const subj = 'SLA breach (>0 min): Boom guest message unanswered';
-  const html = `
-    <p>Hi team,</p>
-    <p>A Boom guest message appears unanswered.</p>
-    <p><b>Conversation:</b> <a href="${url}">Open in Boom</a></p>
-    <p><b>Last sender detected:</b> ${lastSender}</p>
-    <p><b>Last message sample:</b> ${snippet ? snippet : '(empty)'} </p>
-    <p>— Automated alert</p>
-  `;
 
   await transport.sendMail({
-    from: `"${fromName}" <${SMTP_USER}>`,
+    from: `"${FROM_NAME || 'Boom SLA Bot'}" <${SMTP_USER}>`,
     to,
-    cc,
-    subject: subj,
+    cc: cc || undefined,
+    subject,
     html,
   });
 }
 
-// --- main ------------------------------------------------------------------
-
+// ---------- main ----------
 (async () => {
-  const url = (process.argv[2] && !process.argv[2].startsWith('--'))
-    ? process.argv[2]
-    : (CONVERSATION_URL || '').trim();
+  const browser = await chromium.launch({ args: ['--no-sandbox'] });
+  const context = await browser.newContext();
+  const page = await context.newPage();
 
+  const url = (CONVERSATION_URL && CONVERSATION_URL.trim()) || process.argv.slice(2).join(' ').trim();
   if (!url) {
-    console.log('Second check result:', {
-      ok: false,
-      reason: 'no_url',
-      lastSender: 'Unknown',
-      hasAgentSuggestion: false,
-      snippet: '',
-    });
+    console.log('No CONVERSATION_URL provided — nothing to check.');
+    await browser.close();
     process.exit(0);
   }
 
-  const browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  console.log('Navigating to conversation…');
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForLoadState('networkidle', { timeout: 60000 });
 
-  try {
-    await page.goto(url, { timeout: NAV_TIMEOUT, waitUntil: 'load' });
-    await loginIfNeeded(page);
-    await ensureConversationLoaded(page);
-
-    // Always scroll to bottom and take a shot for debugging
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await sleep(400);
-    await saveShot(page, 't1');
-
-    // Detect presence of an Agent suggestion card (unapproved)
-    const hasSuggestion = await detectAgentSuggestion(page);
-
-    // Detect last human sender (guest vs agent)
-    const { lastSender, snippet, reason } = await detectLastSender(page);
-
-    // Decide on alert:
-    // Fire when last human sender is Guest AND there is an unapproved Agent suggestion visible.
-    const needsAlert = (lastSender === 'Guest' && hasSuggestion === true);
-
-    const result = {
-      ok: !needsAlert,
-      reason: needsAlert ? 'guest_unanswered' : reason || 'no_breach',
-      lastSender,
-      hasAgentSuggestion: hasSuggestion,
-      snippet: snippet || '',
-    };
-
-    console.log('Second check result:', result);
-
-    if (needsAlert) {
-      await sendAlertEmail({ url, lastSender, snippet });
-    }
-
-    await saveShot(page, 't2');
-  } catch (err) {
-    console.log('Second check result:', {
-      ok: false,
-      reason: 'exception',
-      lastSender: 'Unknown',
-      hasAgentSuggestion: false,
-      snippet: (err && err.message) ? String(err.message).slice(0, 160) : '',
-    });
-    await saveShot(page, 'err');
-    process.exitCode = 1;
-  } finally {
-    await browser.close();
+  // If we hit login, sign in then go again.
+  await loginIfNeeded(page);
+  if (!page.url().includes('/dashboard/guest-experience/')) {
+    // Sometimes redirect to /login after initial load
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForLoadState('networkidle', { timeout: 60000 });
   }
-})();
+
+  // settle & screenshot
+  await sleep(600);
+  await saveArtifact(page, 'boom-1');
+
+  const info = await getLastMessageInfo(page);
+
+  // try one more tiny settle and shot
+  await sleep(400);
+  await saveArtifact(page, 'boom-2');
+
+  // minutes ago (best effort from text; many Boom threads don’t expose a relative time)
+  const minsAgo = parseMinutesAgoMaybe(info.tsText);
+
+  // Decide whether to alert:
+  //  - must be guest last
+  //  - and (minsAgo >= SLA) OR (no time available but we still want to flag older threads manually)
+  let shouldAlert = false;
+  let decision = 'no_breach';
+
+  if (info.lastSender === 'Guest') {
+    if (minsAgo == null) {
+      // we don’t know the age -> conservative: treat as breach candidate
+      shouldAlert = true;
+      decision = 'guest_last_no_age';
+    } else if (minsAgo >= SLA) {
+      shouldAlert = true;
+      decision = 'guest_last_sla';
+    } else {
+      decision = 'guest_last_but_within_sla';
+    }
+  } else if (info.lastSender === 'Unknown') {
+    decision = info.reason || 'unknown';
+  } else {
+    decision = 'agent_last';
+  }
+
+  const result = {
+    ok: !shouldAlert,
+    reason: decision,
+    lastSender: info.lastSender,
+    hasAgentSuggestion: info.hasAgentSuggestion,
+    snippet: info.snippet,
+    tsText: info.tsText,
+    minsAgo,
+  };
+
+  console.log('Second check result:', JSON.stringify(result, null, 2));
+
+  // Save summary JSON artifact for deeper debugging
+  await saveText('summary.json', JSON.stringify(result, null, 2));
+
+  if (shouldAlert) {
+    const subject = `SLA breach (>${SLA} min?): Boom guest message unanswered`;
+    const html = `
+      <div style="font-family:system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;">
+        <p>Hi,</p>
+        <p>A Boom guest message appears unanswered beyond the SLA.</p>
+        <p><b>Conversation:</b> <a href="${url}">Open in Boom</a></p>
+        <p><b>Last sender detected:</b> ${info.lastSender}</p>
+        <p><b>Last message sample:</b> ${info.snippet || '(none)'} </p>
+        <p><b>Timestamp text:</b> ${info.tsText || '(n/a)'} — <b>minsAgo:</b> ${minsAgo ?? '(unknown)'} </p>
+        <p style="margin-top:16px;color:#777">– Automated alert</p>
+      </div>
+    `;
+    await sendAlertEmail(subject, html);
+  } else {
+    console.log('No alert sent (not guest/unanwered beyond SLA).');
+  }
+
+  await browser.close();
+  process.exit(0);
+})().catch(async (err) => {
+  console.error(err);
+  process.exit(1);
+});
