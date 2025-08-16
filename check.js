@@ -1,230 +1,230 @@
-// check.js — Boom SLA checker (Guest/Agent last-message + AI suggestion)
-// ESM compatible. Requires Playwright + nodemailer installed.
-// Secrets used (must already exist in repo settings):
-// BOOM_USER, BOOM_PASS, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_TO, ALERT_FROM_NAME, AGENT_SIDE
-//
-// Behavior (alert condition):
-// - If the last *real* message is by Guest, we alert.
-// - An "Agent" AI suggestion card (with REJECT/APPROVE) does NOT count as a reply.
-// - If SMTP/ALERT_* not configured, we log "alert needed" with details instead of sending.
-//
-// Artifacts always saved to /tmp for Actions to upload.
+// check.js — ESM
+// Node >=18, "type": "module" in package.json
 
 import { chromium } from 'playwright';
-import fs from 'fs';
+import fs from 'fs/promises';
 import nodemailer from 'nodemailer';
 
+// ---------- Env (kept exactly as you have them) ----------
 const {
   BOOM_USER,
   BOOM_PASS,
-  ALERT_TO,
-  ALERT_FROM_NAME,
+  ALERT_TO,           // comma-separated list of recipients
+  ALERT_FROM_NAME,    // display name for from:
   SMTP_HOST,
   SMTP_PORT,
   SMTP_USER,
   SMTP_PASS,
-  AGENT_SIDE, // optional "true"/"false" (if you want to only alert when lastSender === 'Guest')
+  AGENT_SIDE          // "left" or "right" if you ever need it; unused here
 } = process.env;
 
-const CONVERSATION_URL = process.env.CONVERSATION_URL?.trim();
-if (!CONVERSATION_URL) {
-  console.error('Missing CONVERSATION_URL. Exiting.');
-  process.exit(2);
+// Conversation URL from CLI or env
+function getConversationUrl() {
+  const i = process.argv.indexOf('--conversation');
+  if (i !== -1 && process.argv[i + 1]) return process.argv[i + 1];
+  if (process.env.CONVERSATION_URL) return process.env.CONVERSATION_URL;
+  return null;
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-async function saveArtifacts(page, note = '') {
-  try {
-    const shot = `/tmp/boom-shot${note ? '-' + note : ''}.png`;
-    const html = `/tmp/boom-page${note ? '-' + note : ''}.html`;
-    await page.screenshot({ path: shot, fullPage: true });
-    const content = await page.content();
-    fs.writeFileSync(html, content, 'utf8');
-  } catch (e) {
-    console.warn('Artifact save error:', e.message);
-  }
-}
-
-// Robust login that works whether we land on login or are already authed
-async function loginIfNeeded(page) {
-  // If we see a login email field, sign in; otherwise we’re probably already logged in.
-  const emailInput = page.locator('input[type="email"], input[name="email"]');
-  const passwordInput = page.locator('input[type="password"], input[name="password"]');
-  const loginButton = page.locator('button:has-text("Log in"), button:has-text("Sign in"), button[type="submit"]');
-
-  if (await emailInput.first().isVisible().catch(() => false)) {
-    await emailInput.first().fill(BOOM_USER || '');
-    await passwordInput.first().fill(BOOM_PASS || '');
-    await Promise.any([
-      loginButton.first().click().catch(() => {}),
-      page.keyboard.press('Enter').catch(() => {}),
-    ]);
-    // Wait for either conversation UI or general dashboard shell to load
-    await page.waitForLoadState('networkidle', { timeout: 30000 });
-    // A small settle time in case SPA transitions are mid-flight
-    await sleep(1500);
-  }
-}
-
-// Core DOM analysis run in the page to avoid brittle selectors.
-// Strategy:
-//  1) Find all elements that look like a real message row by searching for “via whatsapp” or “via channel”.
-//  2) Exclude AI suggestion cards (they don’t contain “via ...” anyway).
-//  3) Classify each candidate as Agent if the same row (or its immediate container) contains the text “TRAIN”.
-//     (In your UI screenshots, agent-authored messages show a “TRAIN” badge; guests don’t.)
-//  4) The last candidate (bottom-most in DOM order) is taken as the last real message.
-//  5) Detect presence of an AI suggestion card by “Agent” header + REJECT/APPROVE buttons.
-async function analyzeConversation(page) {
-  const data = await page.evaluate(() => {
-    function nodeInfo(n) {
-      const txt = (n.innerText || '').replace(/\s+/g, ' ').trim();
-      const rect = n.getBoundingClientRect();
-      return { text: txt, y: rect?.y ?? 0, h: rect?.height ?? 0 };
-    }
-
-    const all = Array.from(document.querySelectorAll('div, article, section, li'));
-    const looksLikeMessage = (n) =>
-      /via\s+(whatsapp|channel)/i.test(n.innerText || '');
-
-    // Collect all “real message” rows
-    let candidates = [];
-    for (const n of all) {
-      if (!looksLikeMessage(n)) continue;
-      const i = nodeInfo(n);
-
-      // Classify agent vs guest using the TRAIN tag heuristic.
-      // We look in the element and a couple of ancestors to avoid strictly relying on local structure.
-      let scopeText = i.text;
-      let p = n.parentElement;
-      for (let k = 0; k < 2 && p; k++, p = p.parentElement) {
-        scopeText += ' ' + (p.innerText || '');
-      }
-      const isAgent = /\bTRAIN\b/i.test(scopeText);
-
-      // Pull a short snippet of the bubble text (try to avoid metadata)
-      // Heuristic: take first line that is not “via whatsapp|channel” and not containing “TRAIN”.
-      const lines = (n.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
-      let snippet = '';
-      for (const line of lines) {
-        if (/via\s+(whatsapp|channel)/i.test(line)) continue;
-        if (/TRAIN/i.test(line)) continue;
-        snippet = line;
-        break;
-      }
-
-      candidates.push({
-        y: i.y, h: i.h, snippet,
-        raw: i.text.slice(0, 400),
-        sender: isAgent ? 'Agent' : 'Guest'
-      });
-    }
-
-    candidates.sort((a, b) => (a.y + a.h) - (b.y + b.h)); // top->bottom
-    const last = candidates[candidates.length - 1] || null;
-
-    // Detect an AI suggestion card (unapproved) – look for “Agent” header and buttons
-    // We accept any of these button labels to be flexible with localization.
-    const hasAgentSuggestion = !!document.querySelector(
-      [
-        'div:has(> *:is(h1,h2,h3,div):has-text("Agent")):has(button:has-text("APPROVE"))',
-        'div:has(button:has-text("REJECT")):has(button:has-text("APPROVE"))',
-        'div:has-text("Agent"):has(button:has-text("REJECT"))'
-      ].join(', ')
-    );
-
-    return {
-      candidates,
-      lastSender: last ? last.sender : 'Unknown',
-      snippet: last ? last.snippet : '',
-      hasAgentSuggestion
-    };
-  });
-
-  // Also dump the raw nodes for debugging
-  try {
-    fs.writeFileSync('/tmp/boom-nodes.json', JSON.stringify(data, null, 2));
-  } catch {}
-
-  return data;
-}
-
-function recipientsReady() {
-  return Boolean(ALERT_TO && SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && ALERT_FROM_NAME);
-}
-
-async function sendEmail(subject, html) {
-  if (!recipientsReady()) {
+// ---------- Email ----------
+async function sendAlertEmail({ subject, html }) {
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !ALERT_TO) {
     console.log('Alert needed, but SMTP/recipient envs are not fully set.');
     return;
+    // Intentionally not throwing; the run should still succeed.
   }
-  const port = Number(SMTP_PORT) || 587;
+
   const transporter = nodemailer.createTransport({
     host: SMTP_HOST,
-    port,
-    secure: port === 465, // use TLS if 465
+    port: Number(SMTP_PORT),
+    secure: Number(SMTP_PORT) === 465, // common default
     auth: { user: SMTP_USER, pass: SMTP_PASS }
   });
 
+  const fromName = ALERT_FROM_NAME || 'Boom SLA Bot';
+  const toList = ALERT_TO.split(',').map(s => s.trim()).filter(Boolean);
+
   await transporter.sendMail({
-    from: `"${ALERT_FROM_NAME}" <${SMTP_USER}>`,
-    to: ALERT_TO,
+    from: `"${fromName}" <${SMTP_USER}>`,
+    to: toList.join(', '),
     subject,
     html
   });
 }
 
+// ---------- Auth ----------
+async function loginIfNeeded(page) {
+  // If we land on login, fill and submit.
+  // We look for a visible email input to decide.
+  const maybeEmail = page.locator('input[type="email"], input[name*="email" i]');
+  if (await maybeEmail.first().isVisible().catch(() => false)) {
+    if (!BOOM_USER || !BOOM_PASS) {
+      throw new Error('Missing BOOM_USER/BOOM_PASS for login.');
+    }
+    await maybeEmail.first().fill(BOOM_USER);
+    const pwd = page.locator('input[type="password"], input[name*="pass" i]');
+    await pwd.first().fill(BOOM_PASS);
+    const submit = page.getByRole('button', { name: /sign in|log in|login/i }).first();
+    if (await submit.isVisible().catch(() => false)) {
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: 'networkidle' }).catch(() => {}),
+        submit.click()
+      ]);
+    } else {
+      await page.keyboard.press('Enter');
+      await page.waitForLoadState('networkidle').catch(() => {});
+    }
+  }
+}
+
+// ---------- Analysis ----------
+/**
+ * Detect last real message (with "via whatsapp" or "via channel"),
+ * and whether there is an unapproved AI suggestion card (APPROVE/REJECT)
+ * beneath it. We avoid page.evaluate/querySelector completely.
+ */
+async function analyzeConversation(page) {
+  await page.waitForLoadState('domcontentloaded');
+  // Give the UI a moment to finish lazy rendering
+  await page.waitForTimeout(800);
+
+  // 1) Find all message-like bubbles (guest or human agent) by the "via ..." tag.
+  const msgLocator = page.locator('div', { hasText: /via\s+(whatsapp|channel)/i });
+
+  const count = await msgLocator.count();
+  const candidates = [];
+  for (let i = 0; i < count; i++) {
+    const el = msgLocator.nth(i);
+    const text = (await el.innerText().catch(() => '')) || '';
+    const bb = await el.boundingBox().catch(() => null);
+    const sender = /train\b/i.test(text) ? 'Agent' : 'Guest'; // heuristic: Boom shows "TRAIN" on agent items
+    candidates.push({
+      idx: i,
+      sender,
+      snippet: text.trim().slice(0, 260),
+      y: bb?.y ?? null,
+      h: bb?.height ?? null
+    });
+  }
+
+  // Last visible "real" message:
+  let last = null;
+  if (candidates.length) {
+    // Sort by y, take the lowest on the page
+    candidates.sort((a, b) => (a.y ?? 0) - (b.y ?? 0));
+    last = candidates[candidates.length - 1];
+  }
+
+  // 2) Detect any visible AI suggestion card(s): blocks that contain both REJECT and APPROVE buttons.
+  const approveBtn = page.getByRole('button', { name: /^APPROVE$/i });
+  const rejectBtn  = page.getByRole('button', { name: /^REJECT$/i });
+
+  // We want the container that *has both* buttons.
+  const suggestionCard = page.locator('div')
+    .filter({ has: approveBtn })
+    .filter({ has: rejectBtn });
+
+  const hasSuggestion = (await suggestionCard.count().catch(() => 0)) > 0;
+
+  // If there are multiple, use the lowest on the page (most recent card).
+  let sugY = null;
+  if (hasSuggestion) {
+    const bb = await suggestionCard.last().boundingBox().catch(() => null);
+    sugY = bb?.y ?? null;
+  }
+
+  // 3) Build result
+  let lastSender = 'Unknown';
+  let snippet = '';
+  let reason = 'unknown';
+
+  if (!last) {
+    reason = 'no_selector';
+  } else {
+    lastSender = last.sender;
+    snippet = last.snippet;
+
+    // Consider a guest unanswered when:
+    // - the last real bubble is from Guest
+    // - and there's no suggestion card below it (i.e., no pending AI reply)
+    const suggestionBelow =
+      hasSuggestion && last.y != null && sugY != null && sugY > last.y + (last.h ?? 0) - 2;
+
+    if (last.sender === 'Guest' && !suggestionBelow) {
+      reason = 'guest_unanswered';
+    } else if (last.sender === 'Guest' && suggestionBelow) {
+      reason = 'ai_suggested';
+    } else {
+      reason = 'agent_last';
+    }
+  }
+
+  // "ok: true" means no alert needed; "ok: false" means alert.
+  const ok = !(lastSender === 'Guest' && reason === 'guest_unanswered');
+
+  // Write a rich debug dump for artifacts
+  const debug = {
+    candidates,
+    last,
+    hasSuggestion,
+    sugY
+  };
+  await fs.writeFile('/tmp/boom-nodes.json', JSON.stringify(debug, null, 2)).catch(() => {});
+
+  return { ok, reason, lastSender, hasAgentSuggestion: hasSuggestion, snippet };
+}
+
+// ---------- Main ----------
 (async () => {
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
+  const url = getConversationUrl();
+  if (!url) {
+    console.error('Missing conversation URL. Pass --conversation "<url>" or set CONVERSATION_URL.');
+    process.exit(2);
+  }
+
+  const browser = await chromium.launch();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 1000 } });
   const page = await context.newPage();
 
-  // Navigate to conversation (login will happen if necessary)
-  await page.goto(CONVERSATION_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+  // Navigate — the link might redirect through login first
+  await page.goto(url, { waitUntil: 'domcontentloaded' }).catch(() => {});
   await loginIfNeeded(page);
+  // If the login bounced us to a general page, try to go to the URL again
+  if (!page.url().includes('/dashboard/')) {
+    await page.goto(url, { waitUntil: 'networkidle' }).catch(() => {});
+  }
+  await page.waitForTimeout(600); // small settle
 
-  // Make sure we’re looking at the conversation thread
-  await saveArtifacts(page, 't1');
-
-  const res = await analyzeConversation(page);
-
-  // Decide alert
-  // If AGENT_SIDE is truthy, only fire when lastSender === 'Guest'.
-  // Otherwise (default), same behavior (we alert only for guest-last).
-  const onlyGuest = String(AGENT_SIDE || '').toLowerCase() !== 'false';
-  const needsAlert = (res.lastSender === 'Guest');
-
-  const result = {
-    ok: !needsAlert,
-    reason: needsAlert ? 'guest_last' : (res.lastSender === 'Agent' ? 'agent_last' : 'unknown'),
-    lastSender: res.lastSender,
-    hasAgentSuggestion: res.hasAgentSuggestion,
-    snippet: res.snippet,
-  };
-
+  // Analyze
+  const result = await analyzeConversation(page);
   console.log('Second check result:', JSON.stringify(result, null, 2));
 
-  // If guest last, alert (AI suggestion presence strengthens the case but is not required)
-  if (needsAlert) {
-    const subject = `SLA breach (>5 min): Boom guest message unanswered`;
+  // Screens & HTML for artifacts
+  try {
+    await page.screenshot({ path: '/tmp/boom-shot.png', fullPage: true });
+    await fs.writeFile('/tmp/boom-page.html', await page.content());
+  } catch {}
+
+  // Decide + email
+  if (!result.ok) {
+    // Compose a compact email
+    const subject = `SLA breach? Guest message unanswered`;
     const html = `
-      <div style="font-family:system-ui,Arial,sans-serif;font-size:14px;line-height:1.5">
-        <p>Hi team,</p>
-        <p>A Boom guest message appears to be the latest message in this conversation.</p>
-        <p><b>Conversation:</b> <a href="${CONVERSATION_URL}" target="_blank" rel="noopener">Open in Boom</a><br/>
-           <b>Last sender detected:</b> ${res.lastSender}<br/>
-           <b>AI suggestion visible:</b> ${res.hasAgentSuggestion ? 'Yes' : 'No'}<br/>
-           <b>Last snippet:</b> ${res.snippet || '(empty)'}
-        </p>
-        <p style="color:#666">– Automated alert</p>
-      </div>
+      <p>A Boom guest message may be unanswered beyond SLA.</p>
+      <p><strong>Last sender:</strong> ${result.lastSender}</p>
+      <p><strong>Reason:</strong> ${result.reason}</p>
+      <p><strong>Snippet:</strong> ${result.snippet || '(none)'} </p>
+      <p><a href="${url}">Open in Boom</a></p>
+      <hr/>
+      <p>– Automated alert</p>
     `;
-    await sendEmail(subject, html);
+    await sendAlertEmail({ subject, html });
   } else {
     console.log('No alert sent (not guest/unanswered).');
   }
 
-  await saveArtifacts(page, 't2');
   await browser.close();
-})();
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
