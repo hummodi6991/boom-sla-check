@@ -1,7 +1,6 @@
 name: Boom SLA check
 
 on:
-  # Manual only (no schedule). You can still pass a conversation URL at run time.
   workflow_dispatch:
     inputs:
       conversation:
@@ -19,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Secrets (do NOT change these names; they match your repo secrets)
+  # <-- Your existing secret names (unchanged)
   BOOM_USER: ${{ secrets.BOOM_USER }}
   BOOM_PASS: ${{ secrets.BOOM_PASS }}
   SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -27,25 +26,19 @@ env:
   SMTP_USER: ${{ secrets.SMTP_USER }}
   SMTP_PASS: ${{ secrets.SMTP_PASS }}
   ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
-  # Default recipients from secret; can be overridden by workflow input
   ALERT_TO: ${{ secrets.ALERT_TO }}
-  # Optional: in case you have this secret; safe if not present
   AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
-      - name: Set up job
-        run: echo "Starting Boom SLA check…"
-
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # ---------- Resolve inputs / environment ----------
-      - name: Resolve conversation URL (input or keep empty)
+      - name: Resolve conversation URL
         shell: bash
         run: |
           if [ -n "${{ github.event.inputs.conversation }}" ]; then
@@ -53,9 +46,9 @@ jobs:
           else
             echo "CONVERSATION_URL=" >> "$GITHUB_ENV"
           fi
-          echo "Resolved CONVERSATION_URL=$CONVERSATION_URL"
+          echo "CONVERSATION_URL=$CONVERSATION_URL"
 
-      - name: Resolve recipients (ALERT_TO with sensible fallbacks)
+      - name: Resolve recipients
         shell: bash
         run: |
           if [ -n "${{ github.event.inputs.alert_to }}" ]; then
@@ -63,42 +56,39 @@ jobs:
           elif [ -n "${{ env.ALERT_TO }}" ]; then
             echo "ALERT_TO=${{ env.ALERT_TO }}" >> "$GITHUB_ENV"
           else
-            # If you want a hard fail when recipients are missing, uncomment next line:
-            # echo "No ALERT_TO set" && exit 1
             echo "ALERT_TO=" >> "$GITHUB_ENV"
           fi
-          echo "Using ALERT_TO=$ALERT_TO"
+          echo "ALERT_TO=$ALERT_TO"
 
-      # ---------- Node setup (fixes the lockfile cache error) ----------
-      # Use .nvmrc if present. If you don't have one, node-version: '20' works too.
-      - name: Setup Node.js (no cache)
-        if: ${{ hashFiles('**/package-lock.json') == '' }}
+      # --- Node + deps ---
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version-file: .nvmrc
+          node-version: '20'
 
-      - name: Setup Node.js (cached)
-        if: ${{ hashFiles('**/package-lock.json') != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-          cache-dependency-path: '**/package-lock.json'
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
 
-      # ---------- Install dependencies ----------
-      - name: Install dependencies (npm ci)
-        if: ${{ hashFiles('**/package-lock.json') != '' }}
-        run: npm ci
-
-      - name: Install dependencies (npm install)
-        if: ${{ hashFiles('**/package-lock.json') == '' }}
-        run: npm install --no-audit --no-fund
-
-      # Playwright Chromium + system deps
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
 
-      # ---------- Run the checker ----------
+      # --- Debug: show repo layout so we can see where your script actually is
+      - name: Show repo layout (top 3 levels)
+        shell: bash
+        run: |
+          echo "== PWD ==" && pwd
+          echo "== TREE (maxdepth 3) =="
+          find . -maxdepth 3 -type d -print | sed 's/^\.\///'
+          echo "== JS candidates (check.js / check.mjs) =="
+          find . -maxdepth 5 -type f \( -name "check.js" -o -name "check.mjs" \) -print
+
+      # --- Run the checker (auto-detect check.js/check.mjs anywhere) ---
       - name: Run Playwright checker
         shell: bash
         env:
@@ -113,12 +103,21 @@ jobs:
           SMTP_PASS: ${{ env.SMTP_PASS }}
           AGENT_SIDE: ${{ env.AGENT_SIDE }}
         run: |
-          set -e
-          node --version
-          # Your script should write artifacts to /tmp/boom-*.png and /tmp/boom-*.html
-          node check.js
+          set -euo pipefail
+          echo "Node version: $(node -v)"
+          # Find checker script
+          SCRIPT="$(find . -maxdepth 5 -type f \( -name 'check.js' -o -name 'check.mjs' \) | head -n1 || true)"
+          if [ -z "$SCRIPT" ]; then
+            echo "::error::Could not find check.js or check.mjs in the repository."
+            echo "Tip: place your script at repo root as check.js, or adjust the workflow to its folder."
+            echo "Repository tree (again for convenience):"
+            find . -maxdepth 4 -type f -printf '%p\n' | sed 's/^\.\///' | head -n 200
+            exit 1
+          fi
+          echo "Found script: $SCRIPT"
+          node "$SCRIPT"
 
-      # ---------- Collect artifacts (screenshots + HTML) ----------
+      # --- Upload artifacts (screenshots + HTML) ---
       - name: Upload page artifacts (if any)
         uses: actions/upload-artifact@v4
         with:
