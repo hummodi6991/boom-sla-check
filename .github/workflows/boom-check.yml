@@ -1,14 +1,12 @@
 name: Boom SLA check
 
 on:
-  # Manual trigger or from external tools (like Power Automate calling the API)
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Conversation URL (optional — overrides secret)"
+        description: "Conversation URL (optional, will fallback to secret or Power Automate)"
         required: false
-  repository_dispatch:
-    types: [boom_sla_check]
+        default: ""
 
 jobs:
   run-check:
@@ -16,59 +14,68 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      - name: Set up job
+        run: echo "Starting"
+
       - name: Checkout repo
         uses: actions/checkout@v4
 
       - name: Resolve conversation URL (input or secret fallback)
-        id: conv
+        id: convo
         run: |
-          if [ -n "${{ github.event.inputs.conversation }}" ]; then
-            echo "url=${{ github.event.inputs.conversation }}" >> $GITHUB_OUTPUT
-          elif [ -n "${{ secrets.CONVERSATION_URL }}" ]; then
-            echo "url=${{ secrets.CONVERSATION_URL }}" >> $GITHUB_OUTPUT
-          else
-            echo "url=" >> $GITHUB_OUTPUT
+          URL="${{ github.event.inputs.conversation }}"
+          if [ -z "$URL" ]; then
+            URL="${{ secrets.CONVERSATION_URL }}"
           fi
+          echo "conversation=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve recipients (ALERT_TO / ALERT_CC with sensible fallbacks)
-        id: recips
+      - name: Resolve recipients (ALERT_TO / ALERT_CC with fallbacks)
+        id: rcpts
         run: |
-          TO="${{ secrets.ALERT_TO }}"
-          if [ -z "$TO" ]; then TO="${{ secrets.ROHIT_EMAIL }}"; fi
-          if [ -z "$TO" ]; then TO="${{ secrets.SMTP_USER }}"; fi
-          echo "to=$TO" >> $GITHUB_OUTPUT
-          echo "cc=${{ secrets.ALERT_CC }}" >> $GITHUB_OUTPUT
+          ALERT_TO="${{ secrets.ALERT_TO }}"
+          if [ -z "$ALERT_TO" ]; then
+            ALERT_TO="${{ secrets.ROHIT_EMAIL }}"
+          fi
+          echo "to=$ALERT_TO" >> "$GITHUB_OUTPUT"
+          echo "cc=${{ secrets.ALERT_CC }}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Install dependencies
-        run: npm i
+        run: npm ci || npm i
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright checker
         env:
-          BOOM_USER: ${{ secrets.BOOM_USER }}
-          BOOM_PASS: ${{ secrets.BOOM_PASS }}
-          CONVERSATION_URL: ${{ steps.conv.outputs.url }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          FROM_NAME: ${{ secrets.FROM_NAME }}
-          ALERT_TO: ${{ steps.recips.outputs.to }}
-          ALERT_CC: ${{ steps.recips.outputs.cc }}
-          SLA_MINUTES: ${{ secrets.SLA_MINUTES }}
-        run: node check.js
+          CONVERSATION_URL: ${{ steps.convo.outputs.conversation }}
+          BOOM_USER:        ${{ secrets.BOOM_USER }}
+          BOOM_PASS:        ${{ secrets.BOOM_PASS }}
+          SMTP_HOST:        ${{ secrets.SMTP_HOST }}
+          SMTP_PORT:        ${{ secrets.SMTP_PORT }}
+          SMTP_USER:        ${{ secrets.SMTP_USER }}
+          SMTP_PASS:        ${{ secrets.SMTP_PASS }}
+          FROM_NAME:        ${{ secrets.FROM_NAME }}
+          ROHIT_EMAIL:      ${{ secrets.ROHIT_EMAIL }}
+          ALERT_TO:         ${{ steps.rcpts.outputs.to }}
+          ALERT_CC:         ${{ steps.rcpts.outputs.cc }}
+          AGENT_SIDE:       ${{ secrets.AGENT_SIDE }}
+        run: |
+          if [ -n "${{ steps.convo.outputs.conversation }}" ]; then
+            node check.js "${{ steps.convo.outputs.conversation }}"
+          else
+            node check.js
+          fi
 
       - name: Upload page artifacts (if any)
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: boom-sla-artifacts
           path: |
             /tmp/boom-*.png
+            /tmp/thread.html
+          if-no-files-found: ignore
