@@ -1,62 +1,124 @@
 name: Boom SLA check
 
 on:
+  # Manual only (no schedule). You can still pass a conversation URL at run time.
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Full Boom conversation URL"
-        required: true
-        type: string
-      sla_minutes:
-        description: "SLA minutes (override)"
+        description: 'Boom conversation or dashboard URL (optional)'
         required: false
-        type: string
+      alert_to:
+        description: 'Override recipients, comma-separated (optional)'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: boom-sla-check
+  cancel-in-progress: false
+
+env:
+  # Secrets (do NOT change these names; they match your repo secrets)
+  BOOM_USER: ${{ secrets.BOOM_USER }}
+  BOOM_PASS: ${{ secrets.BOOM_PASS }}
+  SMTP_HOST: ${{ secrets.SMTP_HOST }}
+  SMTP_PORT: ${{ secrets.SMTP_PORT }}
+  SMTP_USER: ${{ secrets.SMTP_USER }}
+  SMTP_PASS: ${{ secrets.SMTP_PASS }}
+  ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+  # Default recipients from secret; can be overridden by workflow input
+  ALERT_TO: ${{ secrets.ALERT_TO }}
+  # Optional: in case you have this secret; safe if not present
+  AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
-    env:
-      CONVERSATION_URL: ${{ inputs.conversation }}
-      SLA_MINUTES: ${{ inputs.sla_minutes }}
-      # Secrets you already have:
-      BOOM_USER: ${{ secrets.BOOM_USER }}
-      BOOM_PASS: ${{ secrets.BOOM_PASS }}
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      ALERT_TO:   ${{ secrets.ALERT_TO }}
-      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
-      AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
-      TZ: Asia/Riyadh
+    timeout-minutes: 10
 
     steps:
       - name: Set up job
-        run: echo "Starting Boom SLA check"
+        run: echo "Starting Boom SLA check…"
 
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      # ---------- Resolve inputs / environment ----------
+      - name: Resolve conversation URL (input or keep empty)
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.conversation }}" ]; then
+            echo "CONVERSATION_URL=${{ github.event.inputs.conversation }}" >> "$GITHUB_ENV"
+          else
+            echo "CONVERSATION_URL=" >> "$GITHUB_ENV"
+          fi
+          echo "Resolved CONVERSATION_URL=$CONVERSATION_URL"
+
+      - name: Resolve recipients (ALERT_TO with sensible fallbacks)
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.alert_to }}" ]; then
+            echo "ALERT_TO=${{ github.event.inputs.alert_to }}" >> "$GITHUB_ENV"
+          elif [ -n "${{ env.ALERT_TO }}" ]; then
+            echo "ALERT_TO=${{ env.ALERT_TO }}" >> "$GITHUB_ENV"
+          else
+            # If you want a hard fail when recipients are missing, uncomment next line:
+            # echo "No ALERT_TO set" && exit 1
+            echo "ALERT_TO=" >> "$GITHUB_ENV"
+          fi
+          echo "Using ALERT_TO=$ALERT_TO"
+
+      # ---------- Node setup (fixes the lockfile cache error) ----------
+      # Use .nvmrc if present. If you don't have one, node-version: '20' works too.
+      - name: Setup Node.js (no cache)
+        if: ${{ hashFiles('**/package-lock.json') == '' }}
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version-file: .nvmrc
 
-      - name: Install dependencies
+      - name: Setup Node.js (cached)
+        if: ${{ hashFiles('**/package-lock.json') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: '**/package-lock.json'
+
+      # ---------- Install dependencies ----------
+      - name: Install dependencies (npm ci)
+        if: ${{ hashFiles('**/package-lock.json') != '' }}
         run: npm ci
 
+      - name: Install dependencies (npm install)
+        if: ${{ hashFiles('**/package-lock.json') == '' }}
+        run: npm install --no-audit --no-fund
+
+      # Playwright Chromium + system deps
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playw*** checker
+      # ---------- Run the checker ----------
+      - name: Run Playwright checker
+        shell: bash
+        env:
+          CONVERSATION_URL: ${{ env.CONVERSATION_URL }}
+          ALERT_TO: ${{ env.ALERT_TO }}
+          ALERT_FROM_NAME: ${{ env.ALERT_FROM_NAME }}
+          BOOM_USER: ${{ env.BOOM_USER }}
+          BOOM_PASS: ${{ env.BOOM_PASS }}
+          SMTP_HOST: ${{ env.SMTP_HOST }}
+          SMTP_PORT: ${{ env.SMTP_PORT }}
+          SMTP_USER: ${{ env.SMTP_USER }}
+          SMTP_PASS: ${{ env.SMTP_PASS }}
+          AGENT_SIDE: ${{ env.AGENT_SIDE }}
         run: |
-          if [ -n "${CONVERSATION_URL:-}" ]; then
-            node check.mjs
-          else
-            echo "No CONVERSATION_URL provided. Skipping."
-          fi
+          set -e
+          node --version
+          # Your script should write artifacts to /tmp/boom-*.png and /tmp/boom-*.html
+          node check.js
 
+      # ---------- Collect artifacts (screenshots + HTML) ----------
       - name: Upload page artifacts (if any)
         uses: actions/upload-artifact@v4
         with:
@@ -64,5 +126,4 @@ jobs:
           path: |
             /tmp/boom-*.png
             /tmp/boom-*.html
-            /tmp/boom-*.json
-          if-no-files-found: warn
+          if-no-files-found: ignore
