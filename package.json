@@ -2,9 +2,8 @@
   "name": "boom-sla-check",
   "version": "1.0.0",
   "type": "module",
-  "private": true,
   "dependencies": {
-    "nodemailer": "^6.9.13",
-    "playwright": "^1.45.0"
+    "playwright": "^1.47.0",
+    "nodemailer": "^6.9.13"
   }
 }
