@@ -4,71 +4,57 @@ on:
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Conversation URL (optional, will fallback to secret or Power Automate)"
+        description: "Full Boom conversation URL"
+        required: true
+        type: string
+      sla_minutes:
+        description: "SLA minutes (override)"
         required: false
-        default: ""
+        type: string
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    env:
+      CONVERSATION_URL: ${{ inputs.conversation }}
+      SLA_MINUTES: ${{ inputs.sla_minutes }}
+      # Secrets you already have:
+      BOOM_USER: ${{ secrets.BOOM_USER }}
+      BOOM_PASS: ${{ secrets.BOOM_PASS }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      ALERT_TO:   ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
+      TZ: Asia/Riyadh
 
     steps:
       - name: Set up job
-        run: echo "Starting"
+        run: echo "Starting Boom SLA check"
 
       - name: Checkout repo
         uses: actions/checkout@v4
-
-      - name: Resolve conversation URL (input or secret fallback)
-        id: convo
-        run: |
-          URL="${{ github.event.inputs.conversation }}"
-          if [ -z "$URL" ]; then
-            URL="${{ secrets.CONVERSATION_URL }}"
-          fi
-          echo "conversation=$URL" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve recipients (ALERT_TO / ALERT_CC with fallbacks)
-        id: rcpts
-        run: |
-          ALERT_TO="${{ secrets.ALERT_TO }}"
-          if [ -z "$ALERT_TO" ]; then
-            ALERT_TO="${{ secrets.ROHIT_EMAIL }}"
-          fi
-          echo "to=$ALERT_TO" >> "$GITHUB_OUTPUT"
-          echo "cc=${{ secrets.ALERT_CC }}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci || npm i
+        run: npm ci
 
       - name: Install Playwright Chromium (with system deps)
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright checker
-        env:
-          CONVERSATION_URL: ${{ steps.convo.outputs.conversation }}
-          BOOM_USER:        ${{ secrets.BOOM_USER }}
-          BOOM_PASS:        ${{ secrets.BOOM_PASS }}
-          SMTP_HOST:        ${{ secrets.SMTP_HOST }}
-          SMTP_PORT:        ${{ secrets.SMTP_PORT }}
-          SMTP_USER:        ${{ secrets.SMTP_USER }}
-          SMTP_PASS:        ${{ secrets.SMTP_PASS }}
-          FROM_NAME:        ${{ secrets.FROM_NAME }}
-          ROHIT_EMAIL:      ${{ secrets.ROHIT_EMAIL }}
-          ALERT_TO:         ${{ steps.rcpts.outputs.to }}
-          ALERT_CC:         ${{ steps.rcpts.outputs.cc }}
-          AGENT_SIDE:       ${{ secrets.AGENT_SIDE }}
+      - name: Run Playw*** checker
         run: |
-          if [ -n "${{ steps.convo.outputs.conversation }}" ]; then
-            node check.js "${{ steps.convo.outputs.conversation }}"
+          if [ -n "${CONVERSATION_URL:-}" ]; then
+            node check.mjs
           else
-            node check.js
+            echo "No CONVERSATION_URL provided. Skipping."
           fi
 
       - name: Upload page artifacts (if any)
@@ -77,5 +63,6 @@ jobs:
           name: boom-sla-artifacts
           path: |
             /tmp/boom-*.png
-            /tmp/thread.html
-          if-no-files-found: ignore
+            /tmp/boom-*.html
+            /tmp/boom-*.json
+          if-no-files-found: warn
