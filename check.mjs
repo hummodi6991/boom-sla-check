@@ -1,325 +1,416 @@
-// --- Secrets (from GitHub) ---
-const BOOM_USER = env("BOOM_USER");
-const BOOM_PASS = env("BOOM_PASS");
-const SMTP_HOST = env("SMTP_HOST");
-const SMTP_PORT = parseInt(env("SMTP_PORT","587"),10);
-const SMTP_USER = env("SMTP_USER");
-const SMTP_PASS = env("SMTP_PASS");
-const ALERT_TO = env("ALERT_TO");
-const FROM_NAME = env("ALERT_FROM_NAME","Boom SLA Bot");
-// check.mjs — Boom SLA alerts via REST API (accepts UI URL /
-API URL / UUID)
-// Decides: alert when last message is guest and no human agent
-reply in >= SLA_MINUTES.
-// Ignores internal notes and AI suggestions (unless actually
-approved/sent).
+// check.mjs — Boom SLA alerts via REST API (accepts UI URL / API URL / UUID)
+// Alert when the last message is from a GUEST and no AGENT reply in >= SLA_MINUTES.
+// Ignores notes and AI suggestions unless configured to count approved/sent AI as agent.
+
 import nodemailer from "nodemailer";
-const env = (k, d="") => (process.env[k] ??
-d).toString().trim();
-// --- App mechanics ---
-const LOGIN_URL = env("LOGIN_URL");
-const LOGIN_METHOD = env("LOGIN_METHOD","POST");
-const LOGIN_CT = env("LOGIN_CT","application/
-json");
-const LOGIN_EMAIL_FIELD = env("LOGIN_EMAIL_FIELD","email");
-const LOGIN_PASSWORD_FIELD =
-env("LOGIN_PASSWORD_FIELD","password");
-const LOGIN_TENANT_FIELD = env("LOGIN_TENANT_FIELD",""); //
-optional
-const CSRF_HEADER_NAME = env("CSRF_HEADER_NAME","");
-const CSRF_COOKIE_NAME = env("CSRF_COOKIE_NAME","");
-const API_KIND = env("API_KIND","rest");
-const MESSAGES_URL_TMPL = env("MESSAGES_URL");
-const MESSAGES_METHOD = env("MESSAGES_METHOD","GET");
-const SLA_MINUTES =
-parseInt(env("SLA_MINUTES","5"),10);
-const COUNT_AI_AS_AGENT =
-env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="tr
-ue";
-// Inputs / defaults
-const CONVERSATION_INPUT =
-env("CONVERSATION_INPUT",""); // UI URL / API URL / UUID
-const DEFAULT_CONVO_ID =
-env("DEFAULT_CONVERSATION_ID",""); // repo variable fallback
-// --- tiny cookie jar ---
-class Jar {
-constructor(){ this.map = new Map(); }
-ingest(setCookie) {
-if(!setCookie) return;
-const lines = Array.isArray(setCookie) ? setCookie :
-[setCookie];
-for (const ln of lines) {
-const m = String(ln).match(/^([^=]+)=([^;]+)/);
-if (m) this.map.set(m[1].trim(), m[2]);
-}
-}
-get(name){ return this.map.get(name) || ""; }
-header(){ return [...this.map.entries()].map(([k,v])=>`${k}=$
-{v}`).join("; "); }
-}
-const jar = new Jar();
-async function jf(url, init = {}) {
-const headers = new Headers(init.headers || {});
-headers.set("accept", "application/json, text/plain, */*");
-const ck = jar.header();
-if (ck) headers.set("cookie", ck);
-if (CSRF_HEADER_NAME && CSRF_COOKIE_NAME && !
-headers.has(CSRF_HEADER_NAME)) {
-const val = jar.get(CSRF_COOKIE_NAME);
-if (val) headers.set(CSRF_HEADER_NAME,
-decodeURIComponent(val));
-}
-const res = await fetch(url, { ...init, headers, redirect:
-"manual" });
-const setc = res.headers.get("set-cookie");
-if (setc) jar.ingest(setc);
-// Follow simple redirects
-let r = res, hops=0;
-while ([301,302,303,307,308].includes(r.status) && hops<3) {
-const loc = r.headers.get("location");
-if (!loc) break;
-r = await fetch(new URL(loc, url), { headers, redirect:
-"manual" });
-const setc2 = r.headers.get("set-cookie");
-if (setc2) jar.ingest(setc2);
-hops++;
-}
-return r;
-}
-function formEncode(obj) {
-return Object.entries(obj).map(([k,v]) =>
-`${encodeURIComponent(k)}=${encodeURIComponent(v ?? "")}
-`).join("&");
-}
-async function login() {
-if (!LOGIN_URL || !BOOM_USER || !BOOM_PASS) {
-throw new Error("LOGIN_URL or BOOM_USER/BOOM_PASS
-missing");
-}
-const bodyObj = {
-[LOGIN_EMAIL_FIELD]: BOOM_USER,
-[LOGIN_PASSWORD_FIELD]: BOOM_PASS,
+
+// ---------- ENV ----------
+const env = (k, d = "") => (process.env[k] ?? d).toString().trim();
+
+const BOOM_USER  = env("BOOM_USER");
+const BOOM_PASS  = env("BOOM_PASS");
+
+const LOGIN_URL             = env("LOGIN_URL");
+const LOGIN_METHOD          = env("LOGIN_METHOD", "POST");
+const LOGIN_CT              = env("LOGIN_CT", "application/json"); // or application/x-www-form-urlencoded
+const LOGIN_EMAIL_FIELD     = env("LOGIN_EMAIL_FIELD", "email");
+const LOGIN_PASSWORD_FIELD  = env("LOGIN_PASSWORD_FIELD", "password");
+const LOGIN_TENANT_FIELD    = env("LOGIN_TENANT_FIELD", "");       // optional
+
+const CSRF_HEADER_NAME      = env("CSRF_HEADER_NAME", "");
+const CSRF_COOKIE_NAME      = env("CSRF_COOKIE_NAME", "");
+
+const MESSAGES_URL          = env("MESSAGES_URL");                 // must include {{conversationId}}
+const MESSAGES_METHOD       = env("MESSAGES_METHOD", "GET");
+
+const SLA_MINUTES           = parseFloat(env("SLA_MINUTES", "5"));
+const COUNT_AI_AS_AGENT     = /^true$/i.test(env("COUNT_AI_SUGGESTION_AS_AGENT", "false"));
+
+const SMTP_HOST  = env("SMTP_HOST");
+const SMTP_PORT  = parseInt(env("SMTP_PORT", "587"), 10);
+const SMTP_USER  = env("SMTP_USER");
+const SMTP_PASS  = env("SMTP_PASS");
+const ALERT_TO   = env("ALERT_TO");
+const ALERT_FROM_NAME = env("ALERT_FROM_NAME", "Boom SLA Bot");
+
+const UI_URL_TEMPLATE       = env("UI_URL_TEMPLATE", "");          // e.g., https://app.boomnow.com/dashboard/guest/{{conversationId}}
+
+const DEFAULT_CONVERSATION_ID = env("DEFAULT_CONVERSATION_ID", "");
+const CONVERSATION_INPUT      = env("CONVERSATION_INPUT", "");
+const DEBUG = env("DEBUG", "");
+
+// ---------- UTILS ----------
+const log = (...a) => { if (DEBUG) console.log("[DEBUG]", ...a); };
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+const isUuid = (s) =>
+  typeof s === "string" &&
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i.test(s);
+
+const findUuid = (s) => {
+  if (!s) return "";
+  const m = s.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+  return m ? m[0] : "";
 };
-if (LOGIN_TENANT_FIELD) bodyObj[LOGIN_TENANT_FIELD] = null;
-const headers = {};
-let body;
-if (LOGIN_CT.includes("json")) {
-headers["content-type"] = "application/json";
-body = JSON.stringify(bodyObj);
-} else {
-headers["content-type"] = "application/x-www-form-
-urlencoded";
-body = formEncode(bodyObj);
-}
-const res = await jf(LOGIN_URL, { method: LOGIN_METHOD,
-headers, body });
-if (res.status >= 400) throw new Error(`Login failed: $
-{res.status}`);
-let token = null;
-try {
-const j = await res.clone().json();
-token = j?.token || j?.accessToken || j?.data?.accessToken
-|| null;
-} catch {}
-return token;
-}
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-
-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function extractConversationId(input) {
-const s = (input || "").trim();
-if (!s) return "";
-if (UUID_RE.test(s)) return s;
-// API URL form
-if (s.includes("/api/conversations/")) {
-const m = s.match(/\/api\/conversations\/([0-9a-f-]{36})/
-i);
-if (m) return m[1];
+  if (!input) return "";
+  try {
+    const u = new URL(input);
+    // Try UUID anywhere in path/query:
+    const pathUuid = findUuid(u.pathname);
+    if (pathUuid) return pathUuid;
+    const qUuid = findUuid(u.search);
+    if (qUuid) return qUuid;
+    // Fallback to last path segment if it looks like an id:
+    const seg = u.pathname.split("/").filter(Boolean).pop() || "";
+    if (isUuid(seg)) return seg;
+    if (seg) return seg; // last resort (some APIs use non-UUID ids)
+  } catch {
+    // not a URL
+    if (isUuid(input)) return input;
+    // fallback: raw string
+    if (input) return input;
+  }
+  return "";
 }
-// UI URL form (dashboard page)
-try {
-const parts = new URL(s).pathname.split("/");
-const id = parts.find(x => UUID_RE.test(x));
-if (id) return id;
-} catch {}
-return "";
+
+function buildConversationLink({ input, id, uiTemplate, messagesTemplate }) {
+  // If input is a URL, prefer it
+  try {
+    const u = new URL(input || "");
+    if (u.protocol === "http:" || u.protocol === "https:") return u.href;
+  } catch { /* ignore */ }
+
+  if (uiTemplate && uiTemplate.includes("{{conversationId}}")) {
+    return uiTemplate.replace("{{conversationId}}", id);
+  }
+  if (messagesTemplate && messagesTemplate.includes("{{conversationId}}")) {
+    return messagesTemplate.replace("{{conversationId}}", id);
+  }
+  return id; // last resort
 }
-function buildMessagesUrl() {
-const idFromInput =
-extractConversationId(CONVERSATION_INPUT);
-const id = idFromInput || DEFAULT_CONVO_ID;
-if (!id) {
-throw new Error("No conversationId available. Provide an
-input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID
-repo variable.");
+
+// Parse multiple Set-Cookie headers merged by undici using commas
+function splitSetCookie(headerValue) {
+  if (!headerValue) return [];
+  // Split on commas that are followed by a cookie-name token
+  return headerValue.match(/(?:[^,]|,(?=\s*[^;\s=]+=[^,;]+))/g) || [];
 }
-if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not
-set");
-return MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
+
+class CookieJar {
+  constructor() { this.map = new Map(); }
+  eatFrom(response) {
+    const raw = response.headers.get("set-cookie");
+    const parts = splitSetCookie(raw);
+    for (const p of parts) {
+      const [pair] = p.split(";");
+      const idx = pair.indexOf("=");
+      if (idx > 0) {
+        const name = pair.slice(0, idx).trim();
+        const value = pair.slice(idx + 1).trim();
+        if (name) this.map.set(name, value);
+      }
+    }
+  }
+  header() {
+    if (!this.map.size) return "";
+    return Array.from(this.map.entries()).map(([k, v]) => `${k}=${v}`).join("; ");
+  }
+  get(name) { return this.map.get(name) || ""; }
 }
-function normalizeMessages(data) {
-if (Array.isArray(data)) return data;
-if (Array.isArray(data?.messages)) return data.messages;
-if (Array.isArray(data?.thread)) return data.thread;
-if (Array.isArray(data?.items)) return data.items;
-if (Array.isArray(data?.conversation?.messages)) return
-data.conversation.messages;
-if (Array.isArray(data?.data?.conversation?.messages)) return
-data.data.conversation.messages;
-// Fallback search
-const candidates = [];
-(function crawl(v){
-if (!v || typeof v!=="object") return;
-if (Array.isArray(v) && v.some(x => x && typeof
-x==="object" && ("by" in x || "sent_at" in x || "text" in x ||
-"body" in x))) {
-candidates.push(v); return;
+const jar = new CookieJar();
+
+async function fetchWithCookies(url, opts = {}) {
+  const headers = new Headers(opts.headers || {});
+  const cookie = jar.header();
+  if (cookie) headers.set("cookie", cookie);
+  const res = await fetch(url, { ...opts, headers });
+  jar.eatFrom(res);
+  return res;
 }
-})(data);
-for (const k of Object.keys(v)) crawl(v[k]);
-if (candidates.length) return candidates[0];
-return [];
+
+// ---------- AUTH ----------
+async function loginIfNeeded() {
+  if (!LOGIN_URL) {
+    log("No LOGIN_URL provided; skipping login.");
+    return { token: null };
+  }
+
+  const payload = {};
+  if (LOGIN_EMAIL_FIELD)   payload[LOGIN_EMAIL_FIELD] = BOOM_USER;
+  if (LOGIN_PASSWORD_FIELD) payload[LOGIN_PASSWORD_FIELD] = BOOM_PASS;
+  if (LOGIN_TENANT_FIELD)  payload[LOGIN_TENANT_FIELD] = env("BOOM_TENANT", "");
+
+  let body, headers = {};
+  if (/json/i.test(LOGIN_CT)) {
+    headers["content-type"] = "application/json";
+    body = JSON.stringify(payload);
+  } else {
+    headers["content-type"] = "application/x-www-form-urlencoded";
+    body = new URLSearchParams(payload).toString();
+  }
+
+  log("Logging in to", LOGIN_URL, "method:", LOGIN_METHOD, "ct:", LOGIN_CT);
+  const res = await fetchWithCookies(LOGIN_URL, { method: LOGIN_METHOD, body, headers });
+  const text = await res.text();
+  let token = null;
+
+  try {
+    const j = JSON.parse(text);
+    token = j?.token || j?.accessToken || j?.data?.accessToken || null;
+  } catch {
+    // Not JSON or token not present; cookies may be enough
+  }
+
+  if (!res.ok) {
+    throw new Error(`Login failed: ${res.status} ${res.statusText} :: ${text.slice(0, 500)}`);
+  }
+
+  log("Login ok. Token?", !!token, "Cookies:", jar.map.size);
+  return { token };
 }
-function whoSent(m) {
-const moduleVal = (m.module || "").toString().toLowerCase();
-const msgType = (m.msg_type ||
-"").toString().toLowerCase();
-if (moduleVal === "note" || msgType === "note") return
-"internal";
-const by = (m.by || m.senderType || m.author?.role ||
-"").toString().toLowerCase();
-const isAI = !!m.generated_by_ai;
-if (by === "guest") return "guest";
-if (by === "host") {
-if (!isAI) return "agent";
-const status = (m.ai_status ||
-"").toString().toLowerCase();
-if (["approved","sent","delivered"].includes(status))
-return "agent";
-return "ai";
+
+// ---------- MESSAGES ----------
+function normalizeToArray(data) {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+
+  // Common containers
+  const candidates = [
+    data.messages,
+    data.thread,
+    data.items,
+    data.results,
+    data.data?.messages,
+    data.data?.items,
+    data.conversation?.messages,
+    data.conversations?.[0]?.messages
+  ].filter(Boolean);
+
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  // Could be an object keyed by id
+  if (typeof data === "object") {
+    const vals = Object.values(data);
+    if (vals.length && vals.every(v => typeof v === "object")) return vals;
+  }
+  return [];
 }
-const dir = (m.direction || "").toString().toLowerCase();
-if (dir === "inbound") return "guest";
-if (dir === "outbound") return "agent";
-return "guest"; // conservative default
+
+function tsOf(msg) {
+  const fields = ["sent_at","sentAt","created_at","createdAt","timestamp","ts","time","date","updatedAt"];
+  for (const f of fields) {
+    const v = msg?.[f];
+    if (v == null) continue;
+    if (typeof v === "number") {
+      // seconds vs ms heuristic
+      if (v < 2_000_000_000) return v * 1000;
+      return v;
+    }
+    const d = new Date(v);
+    if (!isNaN(d)) return d.getTime();
+  }
+  return NaN;
 }
-function tsOf(m) {
-const t = m.sent_at || m.createdAt || m.timestamp || m.ts ||
-m.time || null;
-const d = t ? new Date(t) : null;
-return d && !isNaN(+d) ? d : null;
+
+function isNote(msg) {
+  const t = (msg?.type || msg?.msg_type || msg?.module || "").toString().toLowerCase();
+  if (t.includes("note")) return true;
+  if (msg?.internal === true) return true;
+  return false;
 }
-function evaluate(messages, now = new Date(), slaMin =
-SLA_MINUTES) {
-const list = (messages || []).filter(Boolean).filter(m => {
-const moduleVal = (m.module ||
-"").toString().toLowerCase();
-const msgType = (m.msg_type ||
-"").toString().toLowerCase();
-return moduleVal !== "note" && msgType !== "note";
-}).map(x => ({...x, _ts: tsOf(x)}));
-if (!list.length) return { ok: true, reason: "empty" };
-list.sort((a,b) => (a._ts?.getTime()||0) -
-(b._ts?.getTime()||0));
-const last = list[list.length-1];
-const lastSender = whoSent(last);
-let lastAgent = null;
-for (let i=list.length-1; i>=0; i--) {
-const role = whoSent(list[i]);
-if (role === "agent") { lastAgent = list[i]; break; }
-if (role === "ai" && COUNT_AI_AS_AGENT) { lastAgent =
-list[i]; break; }
+
+function senderKind(msg) {
+  // AI?
+  if (msg?.generated_by_ai === true || ["ai","llm","assistant"].includes(String(msg?.source || "").toLowerCase())) {
+    return "ai";
+  }
+
+  // direction inbound/outbound
+  const dir = (msg?.direction || "").toString().toLowerCase();
+  if (dir === "inbound") return "guest";
+  if (dir === "outbound") return "agent";
+
+  // explicit roles
+  const by = (msg?.by || msg?.senderType || msg?.sender_type || "").toString().toLowerCase();
+  if (["guest","customer","user","client"].includes(by)) return "guest";
+  if (["agent","staff","admin","operator","owner"].includes(by)) return "agent";
+
+  const role = (msg?.author?.role || msg?.sender?.role || "").toString().toLowerCase();
+  if (["agent","staff","admin","operator","owner"].includes(role)) return "agent";
+  if (["guest","customer","user","client"].includes(role)) return "guest";
+
+  // name hint
+  const name = (msg?.author?.name || msg?.sender?.name || msg?.name || "").toString().toLowerCase();
+  if (name.includes("bot")) return "ai";
+
+  // fallback
+  return "unknown";
 }
-const minsSinceAgent = lastAgent? Math.round((now -
-lastAgent._ts)/60000) : null;
-if (lastSender === "guest" && (lastAgent === null ||
-minsSinceAgent === null || minsSinceAgent >= slaMin)) {
-return { ok: false, reason: "guest_unanswered",
-minsSinceAgent };
+
+function aiCountsAsAgent(msg) {
+  if (!COUNT_AI_AS_AGENT) return false;
+  if (senderKind(msg) !== "ai") return false;
+  const status = (msg?.ai_status || msg?.status || "").toString().toLowerCase();
+  // Treat only approved/sent/delivered AI as an agent response
+  return ["approved","sent","delivered"].includes(status);
 }
-return { ok: true, reason: "no_breach" };
+
+async function fetchMessages({ conversationId, token }) {
+  if (!MESSAGES_URL || !MESSAGES_URL.includes("{{conversationId}}")) {
+    throw new Error("MESSAGES_URL repo var must contain {{conversationId}}");
+  }
+  const url = MESSAGES_URL.replace("{{conversationId}}", conversationId);
+  const headers = { "accept": "application/json" };
+  if (token) headers["authorization"] = `Bearer ${token}`;
+  if (CSRF_HEADER_NAME && CSRF_COOKIE_NAME) {
+    const csrfVal = jar.get(CSRF_COOKIE_NAME);
+    if (csrfVal) headers[CSRF_HEADER_NAME] = csrfVal;
+  }
+
+  const res = await fetchWithCookies(url, { method: MESSAGES_METHOD, headers });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Messages fetch failed: ${res.status} ${res.statusText} :: ${text.slice(0,500)}`);
+  let data;
+  try { data = JSON.parse(text); }
+  catch { throw new Error(`Messages not JSON: ${text.slice(0,200)}`); }
+  const arr = normalizeToArray(data);
+  log(`Fetched messages: ${arr.length}`);
+  return arr;
 }
-async function sendEmail(subject, html) {
-if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !ALERT_TO) {
-console.log("Alert needed, but SMTP/env not fully set.");
-return;
+
+// ---------- SLA DECISION ----------
+function evaluateSLA(messages) {
+  // Remove notes, map usable messages with timestamp + sender
+  const usable = messages
+    .filter(m => !isNote(m))
+    .map(m => ({ raw: m, ts: tsOf(m), kind: senderKind(m) }))
+    .filter(m => Number.isFinite(m.ts))
+    .sort((a,b) => a.ts - b.ts);
+
+  if (!usable.length) {
+    return { ok: true, reason: "no_messages" };
+  }
+
+  const last = usable[usable.length - 1];
+  const now = Date.now();
+
+  // Collect all agent-equivalent messages
+  const isAgentLike = (m) => m.kind === "agent" || aiCountsAsAgent(m.raw);
+
+  const agents = usable.filter(isAgentLike);
+  const lastAgent = agents[agents.length - 1] || null;
+
+  // If last is not guest -> no alert
+  if (last.kind !== "guest") {
+    return { ok: true, reason: "last_not_guest", lastTs: last.ts, lastKind: last.kind };
+  }
+
+  // If no agent ever, consider it an immediate breach (∞ minutes since agent)
+  const minutesSinceAgent = lastAgent ? (now - lastAgent.ts) / 60000 : Infinity;
+
+  if (minutesSinceAgent >= SLA_MINUTES) {
+    return {
+      ok: false,
+      reason: "guest_unanswered",
+      lastGuestTs: last.ts,
+      lastAgentTs: lastAgent ? lastAgent.ts : null,
+      minutesSinceAgent
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "within_sla",
+    lastGuestTs: last.ts,
+    lastAgentTs: lastAgent ? lastAgent.ts : null,
+    minutesSinceAgent
+  };
 }
-const tr = nodemailer.createTransport({
-host: SMTP_HOST,
-port: SMTP_PORT,
-secure: SMTP_PORT === 465,
-auth: { user: SMTP_USER, pass: SMTP_PASS }
-});
-await tr.sendMail({ from: `"${FROM_NAME}" <${SMTP_USER}>`,
-to: ALERT_TO, subject, html });
+
+// ---------- EMAIL ----------
+async function sendEmail({ subject, text, html }) {
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS }
+  });
+
+  await transporter.sendMail({
+    from: { name: ALERT_FROM_NAME, address: SMTP_USER },
+    to: ALERT_TO,
+    subject,
+    text,
+    html
+  });
 }
+
+// ---------- MAIN ----------
 (async () => {
-// 1) Login
-const token = await login();
-// 2) Build messages URL from UI URL / API URL / UUID /
-default
-const messagesUrl = buildMessagesUrl();
-const headers = token ? { authorization: `Bearer ${token}
-` } : {};
-const res = await jf(messagesUrl, { method: MESSAGES_METHOD,
-headers });
-if (res.status >= 400) throw new Error(`Messages fetch
-failed: ${res.status}`);
-// 3) Parse and evaluate
-const data = await res.json();
-const msgs = normalizeMessages(data);
-const result = evaluate(msgs);
-console.log("Second check result:", JSON.stringify(result,
-null, 2));
-// 4) Alert if needed
-if (!result.ok && result.reason === "guest_unanswered") {
-// Compose a more helpful alert email that includes a link
-back to the conversation
-const subj = `⚠ Boom SLA: guest unanswered ≥ $
-{SLA_MINUTES}m`;
-the caller provided
-// Derive a conversation link to include in the alert. If
-// a full UI or API URL via CONVERSATION_INPUT, prefer that
-value so the
-// email links back to the actual conversation page the
-user expects. If
-// nothing was provided we fall back to the messages API
-URL we just used
-// to check the conversation. Either way we include it in
-the email so
-// recipients can click directly through to investigate.
-let conversationLink = CONVERSATION_INPUT;
-if (!conversationLink) {
-try {
-// buildMessagesUrl() may throw if no conversationId is
-available. We
-// ignore that here because the caller already passed
-validation above.
-conversationLink = messagesUrl;
-} catch {
-conversationLink = "";
-}
-}
-// Build HTML content for the alert. Wrap the link in an
-anchor tag if it
-// exists, otherwise omit the link entirely to avoid broken
-markup.
-let alertHtml = `<p>Guest appears unanswered ≥ $
-{SLA_MINUTES} minutes.</p>`;
-if (conversationLink) {
-const escaped = String(conversationLink)
-.replace(/&/g, "&amp;")
-.replace(/</g, "&lt;")
-.replace(/>/g, "&gt;")
-.replace(/"/g, "&quot;");
-alertHtml += `<p>Conversation: <a href="${escaped}">$
-{escaped}</a></p>`;
-}
-await sendEmail(subj, alertHtml);
-console.log("✅ Alert email sent.");
-} else {
-console.log("No alert sent.");
-}
-})().catch(e => {
-console.error(e);
-process.exit(1);
+  // Resolve conversation input/id
+  const input = CONVERSATION_INPUT || DEFAULT_CONVERSATION_ID;
+  if (!input) {
+    throw new Error("No CONVERSATION_INPUT (workflow input) and no DEFAULT_CONVERSATION_ID repo var provided.");
+  }
+  const conversationId = extractConversationId(input);
+  if (!conversationId) throw new Error(`Could not extract conversation id from: ${input}`);
+
+  const conversationLink = buildConversationLink({
+    input,
+    id: conversationId,
+    uiTemplate: UI_URL_TEMPLATE,
+    messagesTemplate: MESSAGES_URL
+  });
+
+  log("Conversation ID:", conversationId);
+  log("Conversation link:", conversationLink);
+
+  // 1) Login (if configured)
+  const { token } = await loginIfNeeded();
+
+  // 2) Fetch messages
+  const messages = await fetchMessages({ conversationId, token });
+
+  // 3) Evaluate SLA
+  const result = evaluateSLA(messages);
+  log("Result:", result);
+
+  // 4) Maybe alert
+  if (!result.ok && result.reason === "guest_unanswered") {
+    const lastGuestTs = result.lastGuestTs ? new Date(result.lastGuestTs).toISOString() : "n/a";
+    const lastAgentTs = result.lastAgentTs ? new Date(result.lastAgentTs).toISOString() : "none";
+    const minutesStr = Number.isFinite(result.minutesSinceAgent)
+      ? result.minutesSinceAgent.toFixed(1)
+      : "∞";
+
+    const subject = `SLA breach: guest waiting ≥ ${SLA_MINUTES}m (${conversationId})`;
+
+    const textBody = [
+      `SLA breach detected.`,
+      `Conversation: ${conversationLink}`,
+      `Last guest message at: ${lastGuestTs}`,
+      `Last agent message at: ${lastAgentTs}`,
+      `Minutes since agent: ${minutesStr}`
+    ].join("\n");
+
+    const htmlBody = `
+      <p><strong>SLA breach detected.</strong></p>
+      <p><strong>Conversation:</strong> <a href="${conversationLink}">${conversationLink}</a></p>
+      <p>Last guest message at: ${lastGuestTs}</p>
+      <p>Last agent message at: ${lastAgentTs}</p>
+      <p>Minutes since agent: ${minutesStr}</p>
+    `;
+
+    await sendEmail({ subject, text: textBody, html: htmlBody });
+    console.log("✅ Alert email sent.");
+  } else {
+    console.log(`No alert sent. Reason: ${result.reason}`);
+  }
+})().catch(err => {
+  console.error("❌ Error:", err?.stack || err?.message || err);
+  process.exit(1);
 });
