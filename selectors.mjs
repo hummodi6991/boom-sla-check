@@ -1,12 +1,8 @@
-// All selectors are derived from your snapshots.
-// Real chat message card (guest or agent), not AI suggestion:
-export const CARD = "div.v-card.v-sheet.theme--light.elevation-0";
+// Leftover UI-scraping selectors (not used by REST checker).
+// Keeping this file in case you later switch back to a headful scraper.
 
-// Inside a real card, the bubble text area:
-export const MSG_BOX = ".msg-box";
-
-// Timestamp line inside a real card:
-export const TIME_ROW = ".d-flex.justify-end.align-center.text-caption.grey--text.mt-1, .d-flex.align-center.text-caption.grey--text.mt-1";
+export const MESSAGE_CONTAINER = ".message, .chat-message, .msg";
+export const MESSAGE_TEXT = ".message-text, .text, .content";
 
 // AI suggestion container we MUST ignore:
 export const AI_COMPONENT = ".ai-component";
