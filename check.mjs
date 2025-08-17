@@ -1,274 +1,362 @@
-// check.mjs — Boom SLA alerts via REST API (accepts UI URL / API URL / UUID)
-// Decides: alert when last message is guest and no human agent reply in >= SLA_MINUTES.
-// Ignores internal notes and AI suggestions (unless actually approved/sent).
+// check.mjs  — Boom SLA checker (REST)
+// Node 20+ required (global fetch). One dependency: nodemailer.
+// Env / Inputs expected (with sensible fallbacks):
+//   INPUT_CONVERSATION_URLS or CONVERSATION_URLS  -> comma/newline/space separated list of URLs
+//   INPUT_SLA_MINUTES or SLA_MINUTES              -> integer, default 5
+//   BOOM_USER or LOGIN_EMAIL                      -> Boom login email
+//   BOOM_PASS or LOGIN_PASSWORD                   -> Boom login password
+//   ALERT_TO                                      -> comma-separated recipients
+//   ALERT_CC (optional)                           -> comma-separated cc
+//   ALERT_FROM_NAME (optional)                    -> display name in From
+//   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS    -> SMTP settings for sending mail
+//
+// Exit codes:
+//   0 -> finished (alert may or may not be sent)
+//   1 -> configuration or hard failure
 
 import nodemailer from "nodemailer";
 
-const env = (k, d="") => (process.env[k] ?? d).toString().trim();
+// ---------- small utils ----------
+const nowUtcMs = () => Date.now();
 
-// --- Secrets (from GitHub) ---
-const BOOM_USER  = env("BOOM_USER");
-const BOOM_PASS  = env("BOOM_PASS");
-const SMTP_HOST  = env("SMTP_HOST");
-const SMTP_PORT  = parseInt(env("SMTP_PORT","587"),10);
-const SMTP_USER  = env("SMTP_USER");
-const SMTP_PASS  = env("SMTP_PASS");
-const ALERT_TO   = env("ALERT_TO");
-const FROM_NAME  = env("ALERT_FROM_NAME","Boom SLA Bot");
+function readEnv(...names) {
+  for (const n of names) {
+    const v = process.env[n];
+    if (v !== undefined && v !== "") return v;
+  }
+  return undefined;
+}
 
-// --- App mechanics ---
-const LOGIN_URL            = env("LOGIN_URL");
-const LOGIN_METHOD         = env("LOGIN_METHOD","POST");
-const LOGIN_CT             = env("LOGIN_CT","application/json");
-const LOGIN_EMAIL_FIELD    = env("LOGIN_EMAIL_FIELD","email");
-const LOGIN_PASSWORD_FIELD = env("LOGIN_PASSWORD_FIELD","password");
-const LOGIN_TENANT_FIELD   = env("LOGIN_TENANT_FIELD","");  // optional
-const CSRF_HEADER_NAME     = env("CSRF_HEADER_NAME","");
-const CSRF_COOKIE_NAME     = env("CSRF_COOKIE_NAME","");
+function parseUrlList(raw) {
+  if (!raw) return [];
+  return raw
+    .split(/[\n,\s]+/g)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
 
-const API_KIND             = env("API_KIND","rest");
-const MESSAGES_URL_TMPL    = env("MESSAGES_URL");
-const MESSAGES_METHOD      = env("MESSAGES_METHOD","GET");
+// Extract a UUID if present, then derive both the API and the human page links.
+function deriveLinks(inputUrl) {
+  try {
+    const u = new URL(inputUrl);
+    const idMatch = u.pathname.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    const id = idMatch ? idMatch[0] : null;
 
-const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
-const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
+    const api =
+      /\/api\/conversations\//i.test(u.pathname)
+        ? inputUrl
+        : (id ? `${u.origin}/api/conversations/${id}` : inputUrl);
 
-// Inputs / defaults
-const CONVERSATION_INPUT   = env("CONVERSATION_INPUT","");        // UI URL / API URL / UUID
-const DEFAULT_CONVO_ID     = env("DEFAULT_CONVERSATION_ID","");   // repo variable fallback
+    const page =
+      /\/dashboard\//i.test(u.pathname)
+        ? inputUrl
+        : (id ? `${u.origin}/dashboard/guest-experience/sales/${id}` : inputUrl);
 
-// --- tiny cookie jar ---
-class Jar {
-  constructor(){ this.map = new Map(); }
-  ingest(setCookie) {
-    if(!setCookie) return;
-    const lines = Array.isArray(setCookie) ? setCookie : [setCookie];
-    for (const ln of lines) {
-      const m = String(ln).match(/^([^=]+)=([^;]+)/);
-      if (m) this.map.set(m[1].trim(), m[2]);
+    return { api, page, id };
+  } catch {
+    return { api: inputUrl, page: inputUrl, id: null };
+  }
+}
+
+function minutesBetween(msA, msB) {
+  return Math.floor(Math.abs(msA - msB) / 60000);
+}
+
+function toInt(v, def) {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : def;
+}
+
+// Very small cookie jar for fetch
+class CookieJar {
+  constructor() { this.map = new Map(); }
+  // store all cookies keyed by name
+  storeFrom(setCookieHeaders = []) {
+    for (const line of setCookieHeaders) {
+      const [kv] = line.split(";"); // name=value; Path=/; HttpOnly...
+      const [name, ...rest] = kv.split("=");
+      this.map.set(name.trim(), rest.join("=").trim());
     }
   }
-  get(name){ return this.map.get(name) || ""; }
-  header(){ return [...this.map.entries()].map(([k,v])=>`${k}=${v}`).join("; "); }
-}
-const jar = new Jar();
-
-async function jf(url, init = {}) {
-  const headers = new Headers(init.headers || {});
-  headers.set("accept", "application/json, text/plain, */*");
-  const ck = jar.header();
-  if (ck) headers.set("cookie", ck);
-
-  if (CSRF_HEADER_NAME && CSRF_COOKIE_NAME && !headers.has(CSRF_HEADER_NAME)) {
-    const val = jar.get(CSRF_COOKIE_NAME);
-    if (val) headers.set(CSRF_HEADER_NAME, decodeURIComponent(val));
+  header() {
+    if (this.map.size === 0) return undefined;
+    const parts = [];
+    for (const [k, v] of this.map) parts.push(`${k}=${v}`);
+    return parts.join("; ");
   }
-
-  const res = await fetch(url, { ...init, headers, redirect: "manual" });
-  const setc = res.headers.get("set-cookie");
-  if (setc) jar.ingest(setc);
-
-  // Follow simple redirects
-  let r = res, hops=0;
-  while ([301,302,303,307,308].includes(r.status) && hops<3) {
-    const loc = r.headers.get("location");
-    if (!loc) break;
-    r = await fetch(new URL(loc, url), { headers, redirect: "manual" });
-    const setc2 = r.headers.get("set-cookie");
-    if (setc2) jar.ingest(setc2);
-    hops++;
-  }
-  return r;
 }
 
-function formEncode(obj) {
-  return Object.entries(obj).map(([k,v]) =>
-    `${encodeURIComponent(k)}=${encodeURIComponent(v ?? "")}`).join("&");
+// fetch wrapper that keeps cookies and can add headers easily
+async function fetchJson(url, opts = {}, jar) {
+  const headers = Object.assign(
+    { "accept": "application/json, text/plain, */*" },
+    opts.headers || {}
+  );
+  const cookie = jar?.header();
+  if (cookie) headers["cookie"] = cookie;
+
+  const res = await fetch(url, { ...opts, headers });
+  // capture set-cookie
+  const setCookie = res.headers.getSetCookie?.() || res.headers.raw?.()["set-cookie"] || [];
+  if (jar && setCookie.length) jar.storeFrom(setCookie);
+
+  const ct = res.headers.get("content-type") || "";
+  if (!ct.includes("application/json")) {
+    // Some endpoints return 204 or text; try to JSON parse anyway
+    const text = await res.text();
+    try { return { res, json: JSON.parse(text) }; }
+    catch {
+      throw new Error(`Non-JSON response from ${url}`);
+    }
+  }
+  const json = await res.json();
+  return { res, json };
 }
 
-async function login() {
-  if (!LOGIN_URL || !BOOM_USER || !BOOM_PASS) {
-    throw new Error("LOGIN_URL or BOOM_USER/BOOM_PASS missing");
-  }
-  const bodyObj = {
-    [LOGIN_EMAIL_FIELD]: BOOM_USER,
-    [LOGIN_PASSWORD_FIELD]: BOOM_PASS,
-  };
-  if (LOGIN_TENANT_FIELD) bodyObj[LOGIN_TENANT_FIELD] = null;
+// ---------- Boom-specific API helpers ----------
+async function loginBoom({ base, email, password }) {
+  const jar = new CookieJar();
 
+  // Some installations use a CSRF preflight (Laravel Sanctum style).
+  // Not all environments set a cookie here; we tolerate that.
+  const csrfCandidates = [
+    `${base}/sanctum/csrf-cookie`,
+    `${base}/api/csrf`,
+  ];
+  for (const u of csrfCandidates) {
+    try {
+      const res = await fetch(u, { method: "GET" });
+      const setCookie = res.headers.getSetCookie?.() || res.headers.raw?.()["set-cookie"] || [];
+      if (setCookie.length) jar.storeFrom(setCookie);
+      else console.log("CSRF preflight returned no Set-Cookie. Will attempt login anyway.");
+      break; // try only the first reachable endpoint
+    } catch {
+      // ignore and continue to login
+    }
+  }
+
+  const body = { email, password, tenant_id: null };
+  const { res, json } = await fetchJson(`${base}/api/login`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: {
+      "content-type": "application/json",
+      // Pass whatever cookie we have; Boom may also return a token here
+    }
+  }, jar);
+
+  if (!res.ok) {
+    throw new Error(`Login failed: HTTP ${res.status}`);
+  }
+
+  let bearer;
+  // Prefer explicit token if present
+  if (json && (json.token || json.access_token)) {
+    bearer = `Bearer ${json.token || json.access_token}`;
+  }
+
+  return { jar, bearer };
+}
+
+async function getConversation({ base, apiUrl, auth }) {
+  // Ensure we hit the API form
+  const { api } = deriveLinks(apiUrl);
   const headers = {};
-  let body;
-  if (LOGIN_CT.includes("json")) {
-    headers["content-type"] = "application/json";
-    body = JSON.stringify(bodyObj);
-  } else {
-    headers["content-type"] = "application/x-www-form-urlencoded";
-    body = formEncode(bodyObj);
+  const cookie = auth.jar.header();
+  if (cookie) headers["cookie"] = cookie;
+  if (auth.bearer) headers["authorization"] = auth.bearer;
+
+  const { res, json } = await fetchJson(api, { method: "GET", headers }, auth.jar);
+  if (!res.ok) {
+    throw new Error(`Fetch conversation failed: HTTP ${res.status}`);
+  }
+  return json;
+}
+
+// Normalize Boom message shapes into {role: 'guest'|'agent'|'system', tsMs: number}
+function normalizeMessages(payload) {
+  // Try common locations
+  const candidates = [
+    payload?.messages,
+    payload?.data?.messages,
+    payload?.data,
+  ].filter(Array.isArray);
+
+  const list = candidates[0] || [];
+  const out = [];
+
+  const toTs = (obj) => {
+    const v =
+      obj?.created_at ?? obj?.createdAt ??
+      obj?.inserted_at ?? obj?.ts ?? obj?.timestamp ?? obj?.sent_at;
+    if (!v) return undefined;
+    // support ISO strings or numbers
+    const ms = typeof v === "number" ? v * (v < 2e12 ? 1000 : 1) : Date.parse(v);
+    return Number.isFinite(ms) ? ms : undefined;
+  };
+
+  const toRole = (obj) => {
+    const s =
+      (obj?.sender_type || obj?.senderType || obj?.author_type || obj?.authorType ||
+        obj?.from_type || obj?.fromType || obj?.role || "").toString().toLowerCase();
+
+    if (/(guest|customer|visitor|whatsapp|sms)/.test(s)) return "guest";
+    if (/(agent|user|staff|employee|operator)/.test(s)) return "agent";
+
+    // Sometimes the API uses booleans:
+    if (obj?.is_guest === true) return "guest";
+    if (obj?.is_agent === true) return "agent";
+
+    // Fallback: treat unknown as 'guest' only if flagged, else 'system'
+    return "system";
+  };
+
+  for (const m of list) {
+    const tsMs = toTs(m);
+    const role = toRole(m);
+    if (tsMs) out.push({ role, tsMs });
+  }
+  // sort asc
+  out.sort((a, b) => a.tsMs - b.tsMs);
+  return out;
+}
+
+function evaluateSLA(messages, slaMinutes) {
+  if (!messages.length) {
+    return { ok: true, reason: "no_messages" };
+  }
+  const last = messages[messages.length - 1];
+  // Find last agent and last guest timestamps
+  let lastAgent, lastGuest;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const r = messages[i].role;
+    if (!lastAgent && r === "agent") lastAgent = messages[i].tsMs;
+    if (!lastGuest && r === "guest") lastGuest = messages[i].tsMs;
+    if (lastAgent && lastGuest) break;
+  }
+  if (!lastAgent || !lastGuest) {
+    return { ok: true, reason: "no_timestamps" };
   }
 
-  const res = await jf(LOGIN_URL, { method: LOGIN_METHOD, headers, body });
-  if (res.status >= 400) throw new Error(`Login failed: ${res.status}`);
-
-  let token = null;
-  try {
-    const j = await res.clone().json();
-    token = j?.token || j?.accessToken || j?.data?.accessToken || null;
-  } catch {}
-  return token;
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function extractConversationId(input) {
-  const s = (input || "").trim();
-  if (!s) return "";
-
-  if (UUID_RE.test(s)) return s;
-
-  // API URL form
-  if (s.includes("/api/conversations/")) {
-    const m = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
-    if (m) return m[1];
+  // Alert only if the last message is from the GUEST and agent hasn't replied within SLA
+  if (last.role !== "guest") {
+    return { ok: true, reason: "agent_last" };
   }
 
-  // UI URL form (dashboard page)
-  try {
-    const parts = new URL(s).pathname.split("/");
-    const id = parts.find(x => UUID_RE.test(x));
-    if (id) return id;
-  } catch {}
-
-  return "";
-}
-
-function buildMessagesUrl() {
-  const idFromInput = extractConversationId(CONVERSATION_INPUT);
-  const id = idFromInput || DEFAULT_CONVO_ID;
-
-  if (!id) {
-    throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
-  }
-  if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
-  return MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
-}
-
-function normalizeMessages(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.messages)) return data.messages;
-  if (Array.isArray(data?.thread))   return data.thread;
-  if (Array.isArray(data?.items))    return data.items;
-  if (Array.isArray(data?.conversation?.messages)) return data.conversation.messages;
-  if (Array.isArray(data?.data?.conversation?.messages)) return data.data.conversation.messages;
-
-  // Fallback search
-  const candidates = [];
-  (function crawl(v){
-    if (!v || typeof v!=="object") return;
-    if (Array.isArray(v) && v.some(x => x && typeof x==="object" && ("by" in x || "sent_at" in x || "text" in x || "body" in x))) {
-      candidates.push(v); return;
-    }
-    for (const k of Object.keys(v)) crawl(v[k]);
-  })(data);
-  if (candidates.length) return candidates[0];
-
-  return [];
-}
-
-function whoSent(m) {
-  const moduleVal = (m.module || "").toString().toLowerCase();
-  const msgType   = (m.msg_type || "").toString().toLowerCase();
-  if (moduleVal === "note" || msgType === "note") return "internal";
-
-  const by = (m.by || m.senderType || m.author?.role || "").toString().toLowerCase();
-  const isAI = !!m.generated_by_ai;
-
-  if (by === "guest") return "guest";
-  if (by === "host") {
-    if (!isAI) return "agent";
-    const status = (m.ai_status || "").toString().toLowerCase();
-    if (["approved","sent","delivered"].includes(status)) return "agent";
-    return "ai";
-  }
-
-  const dir = (m.direction || "").toString().toLowerCase();
-  if (dir === "inbound") return "guest";
-  if (dir === "outbound") return "agent";
-
-  return "guest"; // conservative default
-}
-
-function tsOf(m) {
-  const t = m.sent_at || m.createdAt || m.timestamp || m.ts || m.time || null;
-  const d = t ? new Date(t) : null;
-  return d && !isNaN(+d) ? d : null;
-}
-
-function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
-  const list = (messages || []).filter(Boolean).filter(m => {
-    const moduleVal = (m.module || "").toString().toLowerCase();
-    const msgType   = (m.msg_type || "").toString().toLowerCase();
-    return moduleVal !== "note" && msgType !== "note";
-  }).map(x => ({...x, _ts: tsOf(x)}));
-
-  if (!list.length) return { ok: true, reason: "empty" };
-  list.sort((a,b) => (a._ts?.getTime()||0) - (b._ts?.getTime()||0));
-  const last = list[list.length-1];
-  const lastSender = whoSent(last);
-
-  let lastAgent = null;
-  for (let i=list.length-1; i>=0; i--) {
-    const role = whoSent(list[i]);
-    if (role === "agent") { lastAgent = list[i]; break; }
-    if (role === "ai" && COUNT_AI_AS_AGENT) { lastAgent = list[i]; break; }
-  }
-
-  const minsSinceAgent = lastAgent? Math.round((now - lastAgent._ts)/60000) : null;
-
-  if (lastSender === "guest" && (lastAgent === null || minsSinceAgent === null || minsSinceAgent >= slaMin)) {
+  const minsSinceAgent = minutesBetween(nowUtcMs(), lastAgent);
+  if (minsSinceAgent >= slaMinutes) {
     return { ok: false, reason: "guest_unanswered", minsSinceAgent };
   }
-  return { ok: true, reason: "no_breach" };
+  return { ok: true, reason: "within_sla", minsSinceAgent };
 }
 
-async function sendEmail(subject, html) {
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !ALERT_TO) {
-    console.log("Alert needed, but SMTP/env not fully set.");
-    return;
-  }
-  const tr = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASS }
+// ---------- email ----------
+function buildTransport() {
+  const host = readEnv("SMTP_HOST");
+  const port = toInt(readEnv("SMTP_PORT"), 587);
+  const user = readEnv("SMTP_USER");
+  const pass = readEnv("SMTP_PASS");
+  if (!host || !user || !pass) return null;
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass }
   });
-  await tr.sendMail({ from: `"${FROM_NAME}" <${SMTP_USER}>`, to: ALERT_TO, subject, html });
 }
 
-(async () => {
-  // 1) Login
-  const token = await login();
-
-  // 2) Build messages URL from UI URL / API URL / UUID / default
-  const messagesUrl = buildMessagesUrl();
-  const headers = token ? { authorization: `Bearer ${token}` } : {};
-  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
-  if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
-
-  // 3) Parse and evaluate
-  const data = await res.json();
-  const msgs = normalizeMessages(data);
-  const result = evaluate(msgs);
-  console.log("Second check result:", JSON.stringify(result, null, 2));
-
-  // 4) Alert if needed
-  if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
-    await sendEmail(subj, `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>`);
-    console.log("✅ Alert email sent.");
-  } else {
-    console.log("No alert sent.");
+async function sendMail({ to, cc, subject, html, text }) {
+  const transporter = buildTransport();
+  if (!transporter) {
+    console.log("SMTP not fully configured. Skipping email send.");
+    return { skipped: true };
   }
-})().catch(e => {
-  console.error(e);
-  process.exit(1);
-});
+  const fromName = readEnv("ALERT_FROM_NAME") || "Oaktree Boom SLA Bot";
+  const fromAddr = readEnv("SMTP_USER");
+  const from = `${fromName} <${fromAddr}>`;
+
+  await transporter.sendMail({
+    from,
+    to,
+    cc,
+    subject,
+    html,
+    text
+  });
+  console.log("✓ Alert email sent.");
+}
+
+// ---------- main ----------
+(async () => {
+  try {
+    const rawUrls = readEnv("INPUT_CONVERSATION_URLS", "CONVERSATION_URLS");
+    const conversationUrls = parseUrlList(rawUrls);
+
+    if (!conversationUrls.length) {
+      throw new Error("No conversation_urls provided (workflow input).");
+    }
+
+    const SLA_MINUTES = toInt(readEnv("INPUT_SLA_MINUTES", "SLA_MINUTES"), 5);
+
+    const email = readEnv("BOOM_USER", "LOGIN_EMAIL");
+    const password = readEnv("BOOM_PASS", "LOGIN_PASSWORD");
+    if (!email || !password) {
+      throw new Error("Missing BOOM_USER/BOOM_PASS (or LOGIN_EMAIL/LOGIN_PASSWORD).");
+    }
+
+    const base = "https://app.boomnow.com";
+
+    // Login once, reuse for all conversations
+    const auth = await loginBoom({ base, email, password });
+
+    console.log(`Checking ${conversationUrls.length} conversation(s) @ SLA ${SLA_MINUTES}m ...`);
+
+    for (const originalUrl of conversationUrls) {
+      const { api: apiUrl, page: humanUrl, id } = deriveLinks(originalUrl);
+      if (!id) {
+        throw new Error(`Could not extract conversation id from URL: ${originalUrl}`);
+      }
+
+      // Fetch conversation JSON
+      const conv = await getConversation({ base, apiUrl, auth });
+
+      // Normalize and evaluate
+      const msgs = normalizeMessages(conv);
+      const status = evaluateSLA(msgs, SLA_MINUTES);
+
+      // Log a compact summary for the workflow logs
+      console.log("Second check result:", JSON.stringify(status, null, 2));
+
+      if (!status.ok && status.reason === "guest_unanswered") {
+        // Prepare email
+        const subject = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
+        const html = `
+          <div>Guest appears unanswered for <b>${status.minsSinceAgent} minutes</b>.</div>
+          <div style="margin-top:10px">
+            <a href="${humanUrl}" target="_blank" rel="noopener noreferrer">Open conversation</a>
+          </div>
+          <hr/>
+          <div style="font:12px/1.4 monospace; color:#666">API: ${apiUrl}</div>
+        `;
+        const text =
+          `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\n` +
+          `Open conversation: ${humanUrl}\n` +
+          `API: ${apiUrl}\n`;
+
+        const to = readEnv("ALERT_TO");
+        const cc = readEnv("ALERT_CC");
+        if (!to) {
+          console.log("Alert needed, but ALERT_TO is not set. Skipping email.");
+        } else {
+          await sendMail({ to, cc, subject, html, text });
+        }
+      } else {
+        console.log("No alert sent (not guest/unanswered).");
+      }
+    }
+  } catch (err) {
+    console.error("Error:", err.message || err);
+    process.exit(1);
+  }
+})();
