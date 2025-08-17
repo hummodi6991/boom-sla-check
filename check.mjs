@@ -1,4 +1,5 @@
-/* Boom SLA checker (API/REST) with robust CSRF login + conversation link */
+/* Boom SLA checker (API/REST) with robust multi-endpoint CSRF preflight
+   and conversation link in the alert email. */
 
 import nodemailer from "nodemailer";
 
@@ -23,10 +24,10 @@ const ALERT_TO  = process.env.ALERT_TO;
 const ALERT_CC  = process.env.ALERT_CC || "";
 const FROM_NAME = process.env.ALERT_FROM_NAME || "Oaktree Boom SLA Bot";
 
-// Optional heuristic toggle
+// Optional heuristic toggle provided by you earlier
 const AGENT_SIDE = (process.env.AGENT_SIDE || "").toLowerCase();
 
-// ---------- Utils ----------
+// ---------- Helpers ----------
 function fail(msg, ctx = {}) { console.error("Error:", msg, ctx); process.exit(1); }
 const nowIso = () => new Date().toISOString();
 
@@ -34,10 +35,10 @@ function extractConversationId(anyUrl) {
   try {
     const u = new URL(anyUrl, ORIGIN);
     const parts = u.pathname.split("/").filter(Boolean);
-    const idxApi = parts.findIndex(p => p === "conversations");
-    if (idxApi >= 0 && parts[idxApi+1]) return parts[idxApi+1];
-    const maybeId = parts[parts.length - 1];
-    if (maybeId && /^[0-9a-f-]{36}$/i.test(maybeId)) return maybeId;
+    const i = parts.findIndex(p => p === "conversations");
+    if (i >= 0 && parts[i+1]) return parts[i+1];
+    const tail = parts[parts.length - 1];
+    if (tail && /^[0-9a-f-]{36}$/i.test(tail)) return tail;
   } catch {}
   if (/^[0-9a-f-]{36}$/i.test(anyUrl)) return anyUrl;
   return null;
@@ -64,7 +65,7 @@ function parseTimestamp(msg) {
       if (!Number.isNaN(d.getTime())) return d;
     }
   }
-  if (msg.meta && msg.meta.ts) {
+  if (msg.meta?.ts) {
     const d = new Date(msg.meta.ts);
     if (!Number.isNaN(d.getTime())) return d;
   }
@@ -112,42 +113,68 @@ function isAgentHumanMessage(msg) {
   return false;
 }
 
-// ---------- Login with CSRF preflight ----------
-function parseSetCookie(setCookieHeader) {
-  if (!setCookieHeader) return [];
-  // GitHub runners may combine multiple cookies in a single header OR give multiple headers
-  const raw = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
-  return raw.flatMap(line => line.split(/,(?=[^;]+?=)/)); // split only on cookie boundaries
+// ---------- Cookie helpers ----------
+function rawSetCookies(res) {
+  // undici/Node 20 may provide getSetCookie(); otherwise use standard get()
+  if (typeof res.headers.getSetCookie === "function") return res.headers.getSetCookie();
+  const single = res.headers.get("set-cookie");
+  return single ? [single] : [];
 }
-
-function getCookieValue(cookies, name) {
+function splitCombinedCookies(arr) {
+  // Some servers combine multiple cookies into one header separated by commas
+  return arr.flatMap(h => h.split(/,(?=[^;]+?=)/));
+}
+function toCookieHeader(arr) {
+  return arr.map(s => s.split(";")[0].trim()).filter(Boolean).join("; ");
+}
+function getCookie(arr, name) {
   const re = new RegExp(`^${name}=([^;]+)`, "i");
-  for (const c of cookies) {
-    const m = c.match(re);
-    if (m) return m[1];
-  }
+  for (const c of arr) { const m = c.match(re); if (m) return m[1]; }
   return null;
 }
 
-async function getCsrfCookies() {
-  const r = await fetch(`${ORIGIN}/sanctum/csrf-cookie`, {
+// ---------- Robust CSRF preflight ----------
+async function tryFetch(url) {
+  const r = await fetch(url, {
     method: "GET",
     headers: {
-      "Accept": "application/json, text/plain, */*",
+      "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
       "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
       "Referer": ORIGIN,
       "Origin": ORIGIN,
-    }
+    },
+    redirect: "follow",
   });
-  if (!r.ok) throw new Error(`CSRF cookie fetch failed: HTTP ${r.status}`);
-  const setCookies = parseSetCookie(r.headers.get("set-cookie"));
-  if (!setCookies.length) throw new Error("No Set-Cookie from CSRF endpoint.");
-  const xsrf = getCookieValue(setCookies, "XSRF-TOKEN");
-  const session = getCookieValue(setCookies, "boom_session") || getCookieValue(setCookies, "laravel_session");
-  const cookieHeader = setCookies.map(s => s.split(";")[0].trim()).join("; ");
-  return { xsrf, session, cookieHeader };
+  return r;
 }
 
+async function getCsrfCookies() {
+  const endpoints = [
+    `${ORIGIN}/sanctum/csrf-cookie`,
+    `${ORIGIN}/csrf-cookie`,
+    `${ORIGIN}/login`,
+  ];
+  let collected = [];
+  for (const ep of endpoints) {
+    try {
+      const r = await tryFetch(ep);
+      const sc = splitCombinedCookies(rawSetCookies(r));
+      if (sc.length) collected = collected.concat(sc);
+      if (collected.length) break; // we have cookies; stop here
+    } catch (e) {
+      // keep trying other endpoints
+    }
+  }
+  if (!collected.length) {
+    console.warn("CSRF preflight returned no Set-Cookie. Will attempt login anyway.");
+    return { xsrf: "", cookieHeader: "" };
+  }
+  const xsrf = getCookie(collected, "XSRF-TOKEN"); // typical with Sanctum
+  const cookieHeader = toCookieHeader(collected);
+  return { xsrf, cookieHeader };
+}
+
+// ---------- Login ----------
 async function loginAndGetCookie() {
   const { xsrf, cookieHeader } = await getCsrfCookies();
 
@@ -161,14 +188,14 @@ async function loginAndGetCookie() {
       "Content-Type": "application/json",
       "Accept": "application/json, text/plain, */*",
       "X-Requested-With": "XMLHttpRequest",
-      "X-XSRF-TOKEN": xsrf ? decodeURIComponent(xsrf) : "",
+      ...(xsrf ? { "X-XSRF-TOKEN": decodeURIComponent(xsrf) } : {}),
       "Origin": ORIGIN,
       "Referer": ORIGIN,
       "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
-      "Cookie": cookieHeader
+      ...(cookieHeader ? { "Cookie": cookieHeader } : {}),
     },
     body: JSON.stringify(payload),
-    redirect: "manual"
+    redirect: "manual",
   });
 
   if (!r.ok && r.status !== 204 && r.status !== 302) {
@@ -176,19 +203,18 @@ async function loginAndGetCookie() {
     throw new Error(`Login failed: HTTP ${r.status} ${body.slice(0, 300)}`);
   }
 
-  // Merge old and new cookies
-  const newCookies = parseSetCookie(r.headers.get("set-cookie"));
-  const allCookies = (cookieHeader ? [cookieHeader] : []).concat(newCookies.map(s => s.split(";")[0].trim()));
-  const finalCookie = allCookies.join("; ");
+  const after = splitCombinedCookies(rawSetCookies(r));
+  const all = (cookieHeader ? [cookieHeader] : []).concat(after.map(s => s.split(";")[0].trim()));
+  const finalCookie = all.filter(Boolean).join("; ");
   return finalCookie;
 }
 
-// ---------- Fetch + SLA ----------
+// ---------- API fetch + SLA ----------
 async function fetchConversation(cookie, idOrUrl) {
   const id = extractConversationId(idOrUrl);
   if (!id) throw new Error(`Could not parse conversation id from: ${idOrUrl}`);
   const url = `${apiBase}/conversations/${id}`;
-  const r = await fetch(url, { headers: { "Accept": "application/json", "Cookie": cookie } });
+  const r = await fetch(url, { headers: { "Accept": "application/json", ...(cookie ? { "Cookie": cookie } : {}) } });
   if (!r.ok) {
     const body = await r.text().catch(() => "");
     throw new Error(`Fetch conversation failed: HTTP ${r.status} ${body.slice(0, 300)}`);
@@ -243,7 +269,7 @@ async function sendEmail({ subject, html, text }) {
   return true;
 }
 
-// ---------- Run ----------
+// ---------- Main ----------
 (async () => {
   try {
     if (!email || !password) fail("Missing BOOM_USER/BOOM_PASS secrets.");
