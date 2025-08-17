@@ -1,16 +1,16 @@
-/* Boom SLA checker (API/REST only) – with conversation link in the email */
+/* Boom SLA checker (API/REST) with robust CSRF login + conversation link */
 
 import nodemailer from "nodemailer";
 
 // ---------- Config & inputs ----------
-const loginUrl = process.env.BOOM_LOGIN_URL || "https://app.boomnow.com/api/login";
-const apiBase  = process.env.BOOM_API_BASE  || "https://app.boomnow.com/api";
+const ORIGIN = "https://app.boomnow.com";
+const loginUrl = process.env.BOOM_LOGIN_URL || `${ORIGIN}/api/login`;
+const apiBase  = process.env.BOOM_API_BASE  || `${ORIGIN}/api`;
 
 const email = process.env.BOOM_USER;
 const password = process.env.BOOM_PASS;
-const tenantId = process.env.BOOM_TENANT_ID ?? null;
+const tenantId = (process.env.BOOM_TENANT_ID || "").trim(); // optional
 
-// INPUTS (from workflow_dispatch or repo/env fallback)
 const rawUrls = (process.env.INPUT_CONVERSATION_URLS || process.env.CONVERSATION_URLS || "").trim();
 const SLA_MIN = Math.max(1, parseInt(process.env.INPUT_SLA_MIN || "5", 10));
 
@@ -26,16 +26,13 @@ const FROM_NAME = process.env.ALERT_FROM_NAME || "Oaktree Boom SLA Bot";
 // Optional heuristic toggle
 const AGENT_SIDE = (process.env.AGENT_SIDE || "").toLowerCase();
 
-// ---------- Helpers ----------
-function fail(msg, ctx = {}) {
-  console.error("Error:", msg, ctx);
-  process.exitCode = 1;
-}
+// ---------- Utils ----------
+function fail(msg, ctx = {}) { console.error("Error:", msg, ctx); process.exit(1); }
 const nowIso = () => new Date().toISOString();
 
 function extractConversationId(anyUrl) {
   try {
-    const u = new URL(anyUrl, "https://app.boomnow.com");
+    const u = new URL(anyUrl, ORIGIN);
     const parts = u.pathname.split("/").filter(Boolean);
     const idxApi = parts.findIndex(p => p === "conversations");
     if (idxApi >= 0 && parts[idxApi+1]) return parts[idxApi+1];
@@ -115,28 +112,87 @@ function isAgentHumanMessage(msg) {
   return false;
 }
 
-// ---------- Core ----------
-async function loginAndGetCookie() {
-  const body = { email, password, tenant_id: tenantId ?? null };
-  const r = await fetch(loginUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Accept": "application/json, text/plain, */*" },
-    body: JSON.stringify(body),
-    redirect: "manual"
-  });
-  if (!r.ok && r.status !== 302) throw new Error(`Login failed: HTTP ${r.status}`);
-  const setCookie = r.headers.get("set-cookie");
-  if (!setCookie) throw new Error("Login succeeded but no Set-Cookie header returned.");
-  const cookie = setCookie.split(",").map(s => s.split(";")[0].trim()).join("; ");
-  return cookie;
+// ---------- Login with CSRF preflight ----------
+function parseSetCookie(setCookieHeader) {
+  if (!setCookieHeader) return [];
+  // GitHub runners may combine multiple cookies in a single header OR give multiple headers
+  const raw = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+  return raw.flatMap(line => line.split(/,(?=[^;]+?=)/)); // split only on cookie boundaries
 }
 
+function getCookieValue(cookies, name) {
+  const re = new RegExp(`^${name}=([^;]+)`, "i");
+  for (const c of cookies) {
+    const m = c.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+async function getCsrfCookies() {
+  const r = await fetch(`${ORIGIN}/sanctum/csrf-cookie`, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+      "Referer": ORIGIN,
+      "Origin": ORIGIN,
+    }
+  });
+  if (!r.ok) throw new Error(`CSRF cookie fetch failed: HTTP ${r.status}`);
+  const setCookies = parseSetCookie(r.headers.get("set-cookie"));
+  if (!setCookies.length) throw new Error("No Set-Cookie from CSRF endpoint.");
+  const xsrf = getCookieValue(setCookies, "XSRF-TOKEN");
+  const session = getCookieValue(setCookies, "boom_session") || getCookieValue(setCookies, "laravel_session");
+  const cookieHeader = setCookies.map(s => s.split(";")[0].trim()).join("; ");
+  return { xsrf, session, cookieHeader };
+}
+
+async function loginAndGetCookie() {
+  const { xsrf, cookieHeader } = await getCsrfCookies();
+
+  // Build payload (omit tenant_id entirely if absent)
+  const payload = { email, password };
+  if (tenantId) payload.tenant_id = tenantId;
+
+  const r = await fetch(loginUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/plain, */*",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-XSRF-TOKEN": xsrf ? decodeURIComponent(xsrf) : "",
+      "Origin": ORIGIN,
+      "Referer": ORIGIN,
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+      "Cookie": cookieHeader
+    },
+    body: JSON.stringify(payload),
+    redirect: "manual"
+  });
+
+  if (!r.ok && r.status !== 204 && r.status !== 302) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`Login failed: HTTP ${r.status} ${body.slice(0, 300)}`);
+  }
+
+  // Merge old and new cookies
+  const newCookies = parseSetCookie(r.headers.get("set-cookie"));
+  const allCookies = (cookieHeader ? [cookieHeader] : []).concat(newCookies.map(s => s.split(";")[0].trim()));
+  const finalCookie = allCookies.join("; ");
+  return finalCookie;
+}
+
+// ---------- Fetch + SLA ----------
 async function fetchConversation(cookie, idOrUrl) {
   const id = extractConversationId(idOrUrl);
   if (!id) throw new Error(`Could not parse conversation id from: ${idOrUrl}`);
   const url = `${apiBase}/conversations/${id}`;
   const r = await fetch(url, { headers: { "Accept": "application/json", "Cookie": cookie } });
-  if (!r.ok) throw new Error(`Fetch conversation failed: HTTP ${r.status}`);
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`Fetch conversation failed: HTTP ${r.status} ${body.slice(0, 300)}`);
+  }
   const json = await r.json();
   const messages = coerceMessages(json);
   return { id, url, json, messages };
@@ -190,21 +246,20 @@ async function sendEmail({ subject, html, text }) {
 // ---------- Run ----------
 (async () => {
   try {
-    if (!email || !password) throw new Error("Missing BOOM_USER/BOOM_PASS secrets.");
-    if (!rawUrls) throw new Error("No conversation_urls provided (workflow input).");
+    if (!email || !password) fail("Missing BOOM_USER/BOOM_PASS secrets.");
+    if (!rawUrls) fail("No conversation_urls provided (workflow input).");
 
     const cookie = await loginAndGetCookie();
     const urls = rawUrls.split(",").map(s => s.trim()).filter(Boolean);
-    if (urls.length === 0) throw new Error("conversation_urls input is empty after parsing.");
+    if (urls.length === 0) fail("conversation_urls input is empty after parsing.");
 
     for (const u of urls) {
       const convo = await fetchConversation(cookie, u);
       const result = decideSLA(convo.messages, SLA_MIN);
-
       console.log("Second check result:", JSON.stringify(result, null, 2));
 
       if (!result.ok && result.reason === "guest_unanswered") {
-        const uiLink = `https://app.boomnow.com/dashboard/guest-experience/sales/${convo.id}`;
+        const uiLink = `${ORIGIN}/dashboard/guest-experience/sales/${convo.id}`;
         const shortId = convo.id.slice(0, 8);
         const subject = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MIN}m — ${shortId}`;
         const text = [
@@ -229,7 +284,6 @@ async function sendEmail({ subject, html, text }) {
             <p style="color:#666;font-size:12px;margin:0">Sent ${nowIso()}</p>
           </div>
         `;
-
         await sendEmail({ subject, html, text });
       } else {
         console.log("No alert sent (not guest/unanswered).");
