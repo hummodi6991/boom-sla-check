@@ -1,60 +1,63 @@
 name: Boom SLA (API, REST)
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"     # every 5 minutes
   workflow_dispatch:
     inputs:
-      conversation_urls:
-        description: "One or more Boom conversation API URLs (GET). You can paste multiple separated by newline/space/comma."
-        required: true
-      sla_minutes:
-        description: "SLA minutes threshold"
+      conversation:
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
         required: false
-        default: "5"
-      alert_to:
-        description: "Optional email to override ALERT_TO secret for this run"
-        required: false
-        default: ""
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    timeout-minutes: 6
+    env:
+      # --- Your existing secrets (unchanged) ---
+      BOOM_USER: ${{ secrets.BOOM_USER }}
+      BOOM_PASS: ${{ secrets.BOOM_PASS }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      ALERT_TO:  ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      # --- Login mechanics you provided ---
+      LOGIN_URL: "https://app.boomnow.com/api/login"
+      LOGIN_METHOD: "POST"
+      LOGIN_CT: "application/json"
+      LOGIN_EMAIL_FIELD: "email"
+      LOGIN_PASSWORD_FIELD: "password"
+      LOGIN_TENANT_FIELD: "tenant_id"        # Boom expects tenant_id (we’ll send null)
+      CSRF_HEADER_NAME: ""                   # not needed
+      CSRF_COOKIE_NAME: ""                   # not needed
+
+      # --- Messages (REST) ---
+      API_KIND: "rest"
+      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
+      MESSAGES_METHOD: "GET"
+
+      # SLA + options
+      SLA_MINUTES: "5"
+      COUNT_AI_SUGGESTION_AS_AGENT: "false"
+
+      # Manual input (may be empty on schedule)
+      CONVERSATION_INPUT: ${{ github.event.inputs.conversation }}
+
+      # Optional repo variable for scheduled runs (Settings → Variables → Repository Variables)
+      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Install deps
-        run: |
-          npm ci || npm i
+        run: npm i nodemailer@6
 
       - name: Run SLA checker
-        env:
-          # --- Required secrets you already have configured ---
-          BOOM_EMAIL: ${{ secrets.BOOM_USER }}
-          BOOM_PASSWORD: ${{ secrets.BOOM_PASS }}
-
-          # Optional: if Boom uses a CSRF cookie endpoint (Laravel style).
-          # If you don't have it, the script will still try login directly.
-          BOOM_CSRF_URL: https://app.boomnow.com/sanctum/csrf-cookie
-
-          # Login endpoint (POST)
-          BOOM_LOGIN_URL: https://app.boomnow.com/api/login
-
-          # SMTP (you already have these)
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          ALERT_TO_DEFAULT: ${{ secrets.ALERT_TO }}
-          ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
-
-          # Inputs
-          DISPATCH_CONVERSATION_URLS: ${{ github.event.inputs.conversation_urls }}
-          DISPATCH_SLA_MINUTES: ${{ github.event.inputs.sla_minutes }}
-          DISPATCH_ALERT_TO: ${{ github.event.inputs.alert_to }}
-        run: |
-          node check.mjs
+        run: node check.mjs
