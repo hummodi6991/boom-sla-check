@@ -1,63 +1,48 @@
 name: Boom SLA (API, REST)
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"     # every 5 minutes
   workflow_dispatch:
     inputs:
-      conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
+      conversation_urls:
+        description: "One or more conversation URLs/UUIDs (comma/space separated)"
         required: false
+      sla_minutes:
+        description: "SLA minutes"
+        required: false
+        default: "5"
+  schedule:
+    - cron: "*/5 * * * *" # optional: run every 5 minutes
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
     env:
-      # --- Your existing secrets (unchanged) ---
+      # 🔽 The script reads these envs
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
+
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      ALERT_TO:  ${{ secrets.ALERT_TO }}
+
+      ALERT_TO: ${{ secrets.ALERT_TO }}
+      ALERT_CC: ${{ secrets.ALERT_CC }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
 
-      # --- Login mechanics you provided ---
-      LOGIN_URL: "https://app.boomnow.com/api/login"
-      LOGIN_METHOD: "POST"
-      LOGIN_CT: "application/json"
-      LOGIN_EMAIL_FIELD: "email"
-      LOGIN_PASSWORD_FIELD: "password"
-      LOGIN_TENANT_FIELD: "tenant_id"        # Boom expects tenant_id (we’ll send null)
-      CSRF_HEADER_NAME: ""                   # not needed
-      CSRF_COOKIE_NAME: ""                   # not needed
-
-      # --- Messages (REST) ---
-      API_KIND: "rest"
-      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
-      MESSAGES_METHOD: "GET"
-
-      # SLA + options
-      SLA_MINUTES: "5"
-      COUNT_AI_SUGGESTION_AS_AGENT: "false"
-
-      # Manual input (may be empty on schedule)
-      CONVERSATION_INPUT: ${{ github.event.inputs.conversation }}
-
-      # Optional repo variable for scheduled runs (Settings → Variables → Repository Variables)
-      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
+      # 🔽 Provide conversation URLs from (in order): manual input, repo Variables, repo Secrets
+      CONVERSATION_URLS: ${{ inputs.conversation_urls || vars.CONVERSATION_URLS || secrets.CONVERSATION_URLS }}
+      SLA_MINUTES: ${{ inputs.sla_minutes || vars.SLA_MINUTES || '5' }}
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+            node-version: 20
 
       - name: Install deps
-        run: npm i nodemailer@6
+        run: npm install nodemailer
 
       - name: Run SLA checker
         run: node check.mjs
