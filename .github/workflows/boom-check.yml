@@ -4,14 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       conversation_urls:
-        description: "Comma-separated conversation URLs or IDs (UUIDs)"
+        description: "One or more Boom conversation API URLs (GET). You can paste multiple separated by newline/space/comma."
         required: true
-        type: string
-      sla_min:
-        description: "SLA minutes"
+      sla_minutes:
+        description: "SLA minutes threshold"
         required: false
         default: "5"
-        type: string
+      alert_to:
+        description: "Optional email to override ALERT_TO secret for this run"
+        required: false
+        default: ""
 
 jobs:
   check:
@@ -27,30 +29,32 @@ jobs:
 
       - name: Install deps
         run: |
-          npm ci || npm i nodemailer
+          npm ci || npm i
 
       - name: Run SLA checker
         env:
-          # Boom API
-          BOOM_LOGIN_URL: https://app.boomnow.com/api/login
-          BOOM_API_BASE: https://app.boomnow.com/api
-          BOOM_USER: ${{ secrets.BOOM_USER }}
-          BOOM_PASS: ${{ secrets.BOOM_PASS }}
-          BOOM_TENANT_ID: ${{ secrets.BOOM_TENANT_ID }}
+          # --- Required secrets you already have configured ---
+          BOOM_EMAIL: ${{ secrets.BOOM_USER }}
+          BOOM_PASSWORD: ${{ secrets.BOOM_PASS }}
 
-          # Email / SMTP
+          # Optional: if Boom uses a CSRF cookie endpoint (Laravel style).
+          # If you don't have it, the script will still try login directly.
+          BOOM_CSRF_URL: https://app.boomnow.com/sanctum/csrf-cookie
+
+          # Login endpoint (POST)
+          BOOM_LOGIN_URL: https://app.boomnow.com/api/login
+
+          # SMTP (you already have these)
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          ALERT_TO:   ${{ secrets.ALERT_TO }}
-          ALERT_CC:   ${{ secrets.ALERT_CC }}
+          ALERT_TO_DEFAULT: ${{ secrets.ALERT_TO }}
           ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
 
-          # Heuristic (optional)
-          AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
-
-          # 👇 Map workflow inputs → env vars the script reads
-          INPUT_CONVERSATION_URLS: ${{ inputs.conversation_urls }}
-          INPUT_SLA_MIN:          ${{ inputs.sla_min }}
-        run: node check.mjs
+          # Inputs
+          DISPATCH_CONVERSATION_URLS: ${{ github.event.inputs.conversation_urls }}
+          DISPATCH_SLA_MINUTES: ${{ github.event.inputs.sla_minutes }}
+          DISPATCH_ALERT_TO: ${{ github.event.inputs.alert_to }}
+        run: |
+          node check.mjs
