@@ -1,128 +1,60 @@
-name: Boom SLA check
+name: Boom SLA (API, REST)
 
 on:
+  schedule:
+    - cron: "*/5 * * * *"     # every 5 minutes
   workflow_dispatch:
     inputs:
       conversation:
-        description: 'Boom conversation or dashboard URL (optional)'
+        description: "Optional: Boom conversation page URL to check"
         required: false
-      alert_to:
-        description: 'Override recipients, comma-separated (optional)'
-        required: false
-
-permissions:
-  contents: read
-
-concurrency:
-  group: boom-sla-check
-  cancel-in-progress: false
-
-env:
-  # <-- Your existing secret names (unchanged)
-  BOOM_USER: ${{ secrets.BOOM_USER }}
-  BOOM_PASS: ${{ secrets.BOOM_PASS }}
-  SMTP_HOST: ${{ secrets.SMTP_HOST }}
-  SMTP_PORT: ${{ secrets.SMTP_PORT }}
-  SMTP_USER: ${{ secrets.SMTP_USER }}
-  SMTP_PASS: ${{ secrets.SMTP_PASS }}
-  ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
-  ALERT_TO: ${{ secrets.ALERT_TO }}
-  AGENT_SIDE: ${{ secrets.AGENT_SIDE }}
 
 jobs:
-  run-check:
+  check:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 6
+    env:
+      # --- Your existing secrets (leave names as-is) ---
+      BOOM_USER: ${{ secrets.BOOM_USER }}
+      BOOM_PASS: ${{ secrets.BOOM_PASS }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      ALERT_TO:  ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+
+      # --- Login mechanics (from your capture) ---
+      LOGIN_URL: "https://app.boomnow.com/api/login"
+      LOGIN_METHOD: "POST"
+      LOGIN_CT: "application/json"
+      LOGIN_EMAIL_FIELD: "email"
+      LOGIN_PASSWORD_FIELD: "password"
+      LOGIN_TENANT_FIELD: "tenant_id"        # Boom expects tenant_id (we’ll send null)
+      CSRF_HEADER_NAME: ""                   # leave blank (not needed for this login)
+      CSRF_COOKIE_NAME: ""                   # leave blank (not needed for this login)
+
+      # --- Messages (REST) ---
+      API_KIND: "rest"
+      # Use a template with {{conversationId}} so we can check any thread you pass in
+      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
+      MESSAGES_METHOD: "GET"
+
+      # SLA + options
+      SLA_MINUTES: "5"
+      COUNT_AI_SUGGESTION_AS_AGENT: "false"  # AI suggestions do NOT silence alerts
+      # From the manual Run workflow input (optional)
+      CONVERSATION_URL: ${{ github.event.inputs.conversation }}
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Resolve conversation URL
-        shell: bash
-        run: |
-          if [ -n "${{ github.event.inputs.conversation }}" ]; then
-            echo "CONVERSATION_URL=${{ github.event.inputs.conversation }}" >> "$GITHUB_ENV"
-          else
-            echo "CONVERSATION_URL=" >> "$GITHUB_ENV"
-          fi
-          echo "CONVERSATION_URL=$CONVERSATION_URL"
-
-      - name: Resolve recipients
-        shell: bash
-        run: |
-          if [ -n "${{ github.event.inputs.alert_to }}" ]; then
-            echo "ALERT_TO=${{ github.event.inputs.alert_to }}" >> "$GITHUB_ENV"
-          elif [ -n "${{ env.ALERT_TO }}" ]; then
-            echo "ALERT_TO=${{ env.ALERT_TO }}" >> "$GITHUB_ENV"
-          else
-            echo "ALERT_TO=" >> "$GITHUB_ENV"
-          fi
-          echo "ALERT_TO=$ALERT_TO"
-
-      # --- Node + deps ---
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
-      - name: Install dependencies
-        shell: bash
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install --no-audit --no-fund
-          fi
+      - name: Install deps
+        run: npm i nodemailer@6
 
-      - name: Install Playwright Chromium (with system deps)
-        run: npx playwright install --with-deps chromium
-
-      # --- Debug: show repo layout so we can see where your script actually is
-      - name: Show repo layout (top 3 levels)
-        shell: bash
-        run: |
-          echo "== PWD ==" && pwd
-          echo "== TREE (maxdepth 3) =="
-          find . -maxdepth 3 -type d -print | sed 's/^\.\///'
-          echo "== JS candidates (check.js / check.mjs) =="
-          find . -maxdepth 5 -type f \( -name "check.js" -o -name "check.mjs" \) -print
-
-      # --- Run the checker (auto-detect check.js/check.mjs anywhere) ---
-      - name: Run Playwright checker
-        shell: bash
-        env:
-          CONVERSATION_URL: ${{ env.CONVERSATION_URL }}
-          ALERT_TO: ${{ env.ALERT_TO }}
-          ALERT_FROM_NAME: ${{ env.ALERT_FROM_NAME }}
-          BOOM_USER: ${{ env.BOOM_USER }}
-          BOOM_PASS: ${{ env.BOOM_PASS }}
-          SMTP_HOST: ${{ env.SMTP_HOST }}
-          SMTP_PORT: ${{ env.SMTP_PORT }}
-          SMTP_USER: ${{ env.SMTP_USER }}
-          SMTP_PASS: ${{ env.SMTP_PASS }}
-          AGENT_SIDE: ${{ env.AGENT_SIDE }}
-        run: |
-          set -euo pipefail
-          echo "Node version: $(node -v)"
-          # Find checker script
-          SCRIPT="$(find . -maxdepth 5 -type f \( -name 'check.js' -o -name 'check.mjs' \) | head -n1 || true)"
-          if [ -z "$SCRIPT" ]; then
-            echo "::error::Could not find check.js or check.mjs in the repository."
-            echo "Tip: place your script at repo root as check.js, or adjust the workflow to its folder."
-            echo "Repository tree (again for convenience):"
-            find . -maxdepth 4 -type f -printf '%p\n' | sed 's/^\.\///' | head -n 200
-            exit 1
-          fi
-          echo "Found script: $SCRIPT"
-          node "$SCRIPT"
-
-      # --- Upload artifacts (screenshots + HTML) ---
-      - name: Upload page artifacts (if any)
-        uses: actions/upload-artifact@v4
-        with:
-          name: boom-sla-artifacts
-          path: |
-            /tmp/boom-*.png
-            /tmp/boom-*.html
-          if-no-files-found: ignore
+      - name: Run SLA checker
+        run: node check.mjs
