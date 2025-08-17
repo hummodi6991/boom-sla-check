@@ -1,9 +1,4 @@
-/* Boom SLA checker (API/REST only) – with conversation link in the email
- * - Logs into Boom using /api/login
- * - Fetches messages for one or more conversations
- * - Decides guest unanswered >= SLA minutes
- * - Sends email via SMTP secrets, including a clickable UI link
- */
+/* Boom SLA checker (API/REST only) – with conversation link in the email */
 
 import nodemailer from "nodemailer";
 
@@ -15,8 +10,8 @@ const email = process.env.BOOM_USER;
 const password = process.env.BOOM_PASS;
 const tenantId = process.env.BOOM_TENANT_ID ?? null;
 
-// INPUTS (from workflow_dispatch)
-const rawUrls = (process.env.INPUT_CONVERSATION_URLS || "").trim();
+// INPUTS (from workflow_dispatch or repo/env fallback)
+const rawUrls = (process.env.INPUT_CONVERSATION_URLS || process.env.CONVERSATION_URLS || "").trim();
 const SLA_MIN = Math.max(1, parseInt(process.env.INPUT_SLA_MIN || "5", 10));
 
 // Email / SMTP
@@ -38,10 +33,6 @@ function fail(msg, ctx = {}) {
 }
 const nowIso = () => new Date().toISOString();
 
-// Parse conversation ID from:
-// - /api/conversations/<uuid>
-// - /dashboard/.../<uuid>
-// - raw <uuid>
 function extractConversationId(anyUrl) {
   try {
     const u = new URL(anyUrl, "https://app.boomnow.com");
@@ -213,7 +204,6 @@ async function sendEmail({ subject, html, text }) {
       console.log("Second check result:", JSON.stringify(result, null, 2));
 
       if (!result.ok && result.reason === "guest_unanswered") {
-        // ✅ UI link added (clickable)
         const uiLink = `https://app.boomnow.com/dashboard/guest-experience/sales/${convo.id}`;
         const shortId = convo.id.slice(0, 8);
         const subject = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MIN}m — ${shortId}`;
