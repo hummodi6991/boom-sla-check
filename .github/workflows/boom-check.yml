@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Optional: Boom conversation page URL to check"
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
         required: false
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 6
     env:
-      # --- Your existing secrets (leave names as-is) ---
+      # --- Your existing secrets (unchanged) ---
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -24,27 +24,30 @@ jobs:
       ALERT_TO:  ${{ secrets.ALERT_TO }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
 
-      # --- Login mechanics (from your capture) ---
+      # --- Login mechanics you provided ---
       LOGIN_URL: "https://app.boomnow.com/api/login"
       LOGIN_METHOD: "POST"
       LOGIN_CT: "application/json"
       LOGIN_EMAIL_FIELD: "email"
       LOGIN_PASSWORD_FIELD: "password"
       LOGIN_TENANT_FIELD: "tenant_id"        # Boom expects tenant_id (we’ll send null)
-      CSRF_HEADER_NAME: ""                   # leave blank (not needed for this login)
-      CSRF_COOKIE_NAME: ""                   # leave blank (not needed for this login)
+      CSRF_HEADER_NAME: ""                   # not needed
+      CSRF_COOKIE_NAME: ""                   # not needed
 
       # --- Messages (REST) ---
       API_KIND: "rest"
-      # Use a template with {{conversationId}} so we can check any thread you pass in
       MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
       MESSAGES_METHOD: "GET"
 
       # SLA + options
       SLA_MINUTES: "5"
-      COUNT_AI_SUGGESTION_AS_AGENT: "false"  # AI suggestions do NOT silence alerts
-      # From the manual Run workflow input (optional)
-      CONVERSATION_URL: ${{ github.event.inputs.conversation }}
+      COUNT_AI_SUGGESTION_AS_AGENT: "false"
+
+      # Manual input (may be empty on schedule)
+      CONVERSATION_INPUT: ${{ github.event.inputs.conversation }}
+
+      # Optional repo variable for scheduled runs (Settings → Variables → Repository Variables)
+      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
     steps:
       - uses: actions/checkout@v4
