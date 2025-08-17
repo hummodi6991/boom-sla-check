@@ -1,274 +1,251 @@
-// check.mjs — Boom SLA alerts via REST API (accepts UI URL / API URL / UUID)
-// Decides: alert when last message is guest and no human agent reply in >= SLA_MINUTES.
-// Ignores internal notes and AI suggestions (unless actually approved/sent).
+/* Boom SLA checker (API/REST only) – with conversation link in the email
+ * - Logs into Boom using /api/login
+ * - Fetches messages for one or more conversations
+ * - Decides guest unanswered >= SLA minutes
+ * - Sends email via SMTP secrets, including a clickable UI link
+ */
 
 import nodemailer from "nodemailer";
 
-const env = (k, d="") => (process.env[k] ?? d).toString().trim();
+// ---------- Config & inputs ----------
+const loginUrl = process.env.BOOM_LOGIN_URL || "https://app.boomnow.com/api/login";
+const apiBase  = process.env.BOOM_API_BASE  || "https://app.boomnow.com/api";
 
-// --- Secrets (from GitHub) ---
-const BOOM_USER  = env("BOOM_USER");
-const BOOM_PASS  = env("BOOM_PASS");
-const SMTP_HOST  = env("SMTP_HOST");
-const SMTP_PORT  = parseInt(env("SMTP_PORT","587"),10);
-const SMTP_USER  = env("SMTP_USER");
-const SMTP_PASS  = env("SMTP_PASS");
-const ALERT_TO   = env("ALERT_TO");
-const FROM_NAME  = env("ALERT_FROM_NAME","Boom SLA Bot");
+const email = process.env.BOOM_USER;
+const password = process.env.BOOM_PASS;
+const tenantId = process.env.BOOM_TENANT_ID ?? null;
 
-// --- App mechanics ---
-const LOGIN_URL            = env("LOGIN_URL");
-const LOGIN_METHOD         = env("LOGIN_METHOD","POST");
-const LOGIN_CT             = env("LOGIN_CT","application/json");
-const LOGIN_EMAIL_FIELD    = env("LOGIN_EMAIL_FIELD","email");
-const LOGIN_PASSWORD_FIELD = env("LOGIN_PASSWORD_FIELD","password");
-const LOGIN_TENANT_FIELD   = env("LOGIN_TENANT_FIELD","");  // optional
-const CSRF_HEADER_NAME     = env("CSRF_HEADER_NAME","");
-const CSRF_COOKIE_NAME     = env("CSRF_COOKIE_NAME","");
+// INPUTS (from workflow_dispatch)
+const rawUrls = (process.env.INPUT_CONVERSATION_URLS || "").trim();
+const SLA_MIN = Math.max(1, parseInt(process.env.INPUT_SLA_MIN || "5", 10));
 
-const API_KIND             = env("API_KIND","rest");
-const MESSAGES_URL_TMPL    = env("MESSAGES_URL");
-const MESSAGES_METHOD      = env("MESSAGES_METHOD","GET");
+// Email / SMTP
+const SMTP_HOST = process.env.SMTP_HOST;
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || "587", 10);
+const SMTP_USER = process.env.SMTP_USER;
+const SMTP_PASS = process.env.SMTP_PASS;
+const ALERT_TO  = process.env.ALERT_TO;
+const ALERT_CC  = process.env.ALERT_CC || "";
+const FROM_NAME = process.env.ALERT_FROM_NAME || "Oaktree Boom SLA Bot";
 
-const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
-const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
+// Optional heuristic toggle
+const AGENT_SIDE = (process.env.AGENT_SIDE || "").toLowerCase();
 
-// Inputs / defaults
-const CONVERSATION_INPUT   = env("CONVERSATION_INPUT","");        // UI URL / API URL / UUID
-const DEFAULT_CONVO_ID     = env("DEFAULT_CONVERSATION_ID","");   // repo variable fallback
+// ---------- Helpers ----------
+function fail(msg, ctx = {}) {
+  console.error("Error:", msg, ctx);
+  process.exitCode = 1;
+}
+const nowIso = () => new Date().toISOString();
 
-// --- tiny cookie jar ---
-class Jar {
-  constructor(){ this.map = new Map(); }
-  ingest(setCookie) {
-    if(!setCookie) return;
-    const lines = Array.isArray(setCookie) ? setCookie : [setCookie];
-    for (const ln of lines) {
-      const m = String(ln).match(/^([^=]+)=([^;]+)/);
-      if (m) this.map.set(m[1].trim(), m[2]);
+// Parse conversation ID from:
+// - /api/conversations/<uuid>
+// - /dashboard/.../<uuid>
+// - raw <uuid>
+function extractConversationId(anyUrl) {
+  try {
+    const u = new URL(anyUrl, "https://app.boomnow.com");
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idxApi = parts.findIndex(p => p === "conversations");
+    if (idxApi >= 0 && parts[idxApi+1]) return parts[idxApi+1];
+    const maybeId = parts[parts.length - 1];
+    if (maybeId && /^[0-9a-f-]{36}$/i.test(maybeId)) return maybeId;
+  } catch {}
+  if (/^[0-9a-f-]{36}$/i.test(anyUrl)) return anyUrl;
+  return null;
+}
+
+function coerceMessages(any) {
+  if (!any) return [];
+  if (Array.isArray(any)) return any;
+  for (const k of Object.keys(any)) {
+    if (Array.isArray(any[k]) && k.toLowerCase().includes("message")) return any[k];
+    if (any[k] && typeof any[k] === "object") {
+      const found = coerceMessages(any[k]);
+      if (found.length) return found;
     }
   }
-  get(name){ return this.map.get(name) || ""; }
-  header(){ return [...this.map.entries()].map(([k,v])=>`${k}=${v}`).join("; "); }
-}
-const jar = new Jar();
-
-async function jf(url, init = {}) {
-  const headers = new Headers(init.headers || {});
-  headers.set("accept", "application/json, text/plain, */*");
-  const ck = jar.header();
-  if (ck) headers.set("cookie", ck);
-
-  if (CSRF_HEADER_NAME && CSRF_COOKIE_NAME && !headers.has(CSRF_HEADER_NAME)) {
-    const val = jar.get(CSRF_COOKIE_NAME);
-    if (val) headers.set(CSRF_HEADER_NAME, decodeURIComponent(val));
-  }
-
-  const res = await fetch(url, { ...init, headers, redirect: "manual" });
-  const setc = res.headers.get("set-cookie");
-  if (setc) jar.ingest(setc);
-
-  // Follow simple redirects
-  let r = res, hops=0;
-  while ([301,302,303,307,308].includes(r.status) && hops<3) {
-    const loc = r.headers.get("location");
-    if (!loc) break;
-    r = await fetch(new URL(loc, url), { headers, redirect: "manual" });
-    const setc2 = r.headers.get("set-cookie");
-    if (setc2) jar.ingest(setc2);
-    hops++;
-  }
-  return r;
-}
-
-function formEncode(obj) {
-  return Object.entries(obj).map(([k,v]) =>
-    `${encodeURIComponent(k)}=${encodeURIComponent(v ?? "")}`).join("&");
-}
-
-async function login() {
-  if (!LOGIN_URL || !BOOM_USER || !BOOM_PASS) {
-    throw new Error("LOGIN_URL or BOOM_USER/BOOM_PASS missing");
-  }
-  const bodyObj = {
-    [LOGIN_EMAIL_FIELD]: BOOM_USER,
-    [LOGIN_PASSWORD_FIELD]: BOOM_PASS,
-  };
-  if (LOGIN_TENANT_FIELD) bodyObj[LOGIN_TENANT_FIELD] = null;
-
-  const headers = {};
-  let body;
-  if (LOGIN_CT.includes("json")) {
-    headers["content-type"] = "application/json";
-    body = JSON.stringify(bodyObj);
-  } else {
-    headers["content-type"] = "application/x-www-form-urlencoded";
-    body = formEncode(bodyObj);
-  }
-
-  const res = await jf(LOGIN_URL, { method: LOGIN_METHOD, headers, body });
-  if (res.status >= 400) throw new Error(`Login failed: ${res.status}`);
-
-  let token = null;
-  try {
-    const j = await res.clone().json();
-    token = j?.token || j?.accessToken || j?.data?.accessToken || null;
-  } catch {}
-  return token;
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function extractConversationId(input) {
-  const s = (input || "").trim();
-  if (!s) return "";
-
-  if (UUID_RE.test(s)) return s;
-
-  // API URL form
-  if (s.includes("/api/conversations/")) {
-    const m = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
-    if (m) return m[1];
-  }
-
-  // UI URL form (dashboard page)
-  try {
-    const parts = new URL(s).pathname.split("/");
-    const id = parts.find(x => UUID_RE.test(x));
-    if (id) return id;
-  } catch {}
-
-  return "";
-}
-
-function buildMessagesUrl() {
-  const idFromInput = extractConversationId(CONVERSATION_INPUT);
-  const id = idFromInput || DEFAULT_CONVO_ID;
-
-  if (!id) {
-    throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
-  }
-  if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
-  return MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
-}
-
-function normalizeMessages(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.messages)) return data.messages;
-  if (Array.isArray(data?.thread))   return data.thread;
-  if (Array.isArray(data?.items))    return data.items;
-  if (Array.isArray(data?.conversation?.messages)) return data.conversation.messages;
-  if (Array.isArray(data?.data?.conversation?.messages)) return data.data.conversation.messages;
-
-  // Fallback search
-  const candidates = [];
-  (function crawl(v){
-    if (!v || typeof v!=="object") return;
-    if (Array.isArray(v) && v.some(x => x && typeof x==="object" && ("by" in x || "sent_at" in x || "text" in x || "body" in x))) {
-      candidates.push(v); return;
-    }
-    for (const k of Object.keys(v)) crawl(v[k]);
-  })(data);
-  if (candidates.length) return candidates[0];
-
   return [];
 }
 
-function whoSent(m) {
-  const moduleVal = (m.module || "").toString().toLowerCase();
-  const msgType   = (m.msg_type || "").toString().toLowerCase();
-  if (moduleVal === "note" || msgType === "note") return "internal";
-
-  const by = (m.by || m.senderType || m.author?.role || "").toString().toLowerCase();
-  const isAI = !!m.generated_by_ai;
-
-  if (by === "guest") return "guest";
-  if (by === "host") {
-    if (!isAI) return "agent";
-    const status = (m.ai_status || "").toString().toLowerCase();
-    if (["approved","sent","delivered"].includes(status)) return "agent";
-    return "ai";
+function parseTimestamp(msg) {
+  const keys = ["created_at", "inserted_at", "createdAt", "timestamp", "ts"];
+  for (const k of keys) {
+    if (msg[k]) {
+      const d = new Date(msg[k]);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
   }
-
-  const dir = (m.direction || "").toString().toLowerCase();
-  if (dir === "inbound") return "guest";
-  if (dir === "outbound") return "agent";
-
-  return "guest"; // conservative default
+  if (msg.meta && msg.meta.ts) {
+    const d = new Date(msg.meta.ts);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return null;
 }
 
-function tsOf(m) {
-  const t = m.sent_at || m.createdAt || m.timestamp || m.ts || m.time || null;
-  const d = t ? new Date(t) : null;
-  return d && !isNaN(+d) ? d : null;
+function isAutomation(msg) {
+  const flags = [
+    msg.is_automation, msg.isAutomation, msg.automation,
+    msg.is_ai, msg.isAi, msg.ai, msg.is_bot, msg.bot, msg.is_suggestion
+  ];
+  if (flags.some(Boolean)) return true;
+  const t = (msg.type || msg.message_type || "").toString().toLowerCase();
+  if (t.includes("suggestion") || t.includes("automation") || t.includes("ai")) return true;
+  const text = ((msg.text || msg.body || msg.content || "") + "").toLowerCase();
+  if (text.includes("confidence:") && (text.includes("approve") || text.includes("reject"))) return true;
+  return false;
 }
 
-function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
-  const list = (messages || []).filter(Boolean).filter(m => {
-    const moduleVal = (m.module || "").toString().toLowerCase();
-    const msgType   = (m.msg_type || "").toString().toLowerCase();
-    return moduleVal !== "note" && msgType !== "note";
-  }).map(x => ({...x, _ts: tsOf(x)}));
-
-  if (!list.length) return { ok: true, reason: "empty" };
-  list.sort((a,b) => (a._ts?.getTime()||0) - (b._ts?.getTime()||0));
-  const last = list[list.length-1];
-  const lastSender = whoSent(last);
-
-  let lastAgent = null;
-  for (let i=list.length-1; i>=0; i--) {
-    const role = whoSent(list[i]);
-    if (role === "agent") { lastAgent = list[i]; break; }
-    if (role === "ai" && COUNT_AI_AS_AGENT) { lastAgent = list[i]; break; }
-  }
-
-  const minsSinceAgent = lastAgent? Math.round((now - lastAgent._ts)/60000) : null;
-
-  if (lastSender === "guest" && (lastAgent === null || minsSinceAgent === null || minsSinceAgent >= slaMin)) {
-    return { ok: false, reason: "guest_unanswered", minsSinceAgent };
-  }
-  return { ok: true, reason: "no_breach" };
+function isGuestMessage(msg) {
+  const role = (msg.role || msg.sender_role || msg.senderType || msg.side || "").toString().toLowerCase();
+  const authorType = (msg.author?.type || msg.author_type || "").toLowerCase();
+  if (role.includes("guest") || role.includes("customer") || role === "inbound") return true;
+  if (authorType.includes("guest")) return true;
+  const channel = (msg.channel || msg.source || "").toString().toLowerCase();
+  if (["whatsapp", "sms", "email_inbound"].includes(channel) && !isAutomation(msg)) return true;
+  return false;
 }
 
-async function sendEmail(subject, html) {
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !ALERT_TO) {
-    console.log("Alert needed, but SMTP/env not fully set.");
-    return;
+function isAgentHumanMessage(msg) {
+  if (AGENT_SIDE === "channel") {
+    const role = (msg.role || msg.sender_role || "").toString().toLowerCase();
+    if (role.includes("agent") || role.includes("user") || role.includes("staff")) return !isAutomation(msg);
   }
-  const tr = nodemailer.createTransport({
+  if (AGENT_SIDE === "agent") {
+    const role = (msg.role || msg.sender_role || msg.side || "").toString().toLowerCase();
+    if (role.includes("agent") || role.includes("user") || role.includes("staff")) return !isAutomation(msg);
+  }
+  const authorType = (msg.author?.type || msg.author_type || "").toLowerCase();
+  const role = (msg.role || msg.sender_role || msg.side || "").toLowerCase();
+  if (authorType.includes("user") || authorType.includes("agent") || role.includes("agent") || role.includes("staff")) {
+    return !isAutomation(msg);
+  }
+  if (msg.private || msg.internal) return false;
+  return false;
+}
+
+// ---------- Core ----------
+async function loginAndGetCookie() {
+  const body = { email, password, tenant_id: tenantId ?? null };
+  const r = await fetch(loginUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Accept": "application/json, text/plain, */*" },
+    body: JSON.stringify(body),
+    redirect: "manual"
+  });
+  if (!r.ok && r.status !== 302) throw new Error(`Login failed: HTTP ${r.status}`);
+  const setCookie = r.headers.get("set-cookie");
+  if (!setCookie) throw new Error("Login succeeded but no Set-Cookie header returned.");
+  const cookie = setCookie.split(",").map(s => s.split(";")[0].trim()).join("; ");
+  return cookie;
+}
+
+async function fetchConversation(cookie, idOrUrl) {
+  const id = extractConversationId(idOrUrl);
+  if (!id) throw new Error(`Could not parse conversation id from: ${idOrUrl}`);
+  const url = `${apiBase}/conversations/${id}`;
+  const r = await fetch(url, { headers: { "Accept": "application/json", "Cookie": cookie } });
+  if (!r.ok) throw new Error(`Fetch conversation failed: HTTP ${r.status}`);
+  const json = await r.json();
+  const messages = coerceMessages(json);
+  return { id, url, json, messages };
+}
+
+function decideSLA(messages, slaMin) {
+  if (!messages.length) return { ok: true, reason: "no_messages" };
+  const timed = messages.map(m => ({ m, ts: parseTimestamp(m) }))
+                        .filter(x => x.ts !== null)
+                        .sort((a, b) => a.ts - b.ts);
+  if (!timed.length) return { ok: true, reason: "no_timestamps" };
+
+  let lastAgentTs = null;
+  let lastGuestTs = null;
+  for (const { m, ts } of timed) {
+    if (isGuestMessage(m)) lastGuestTs = ts;
+    if (isAgentHumanMessage(m)) lastAgentTs = ts;
+  }
+  if (!lastGuestTs) return { ok: true, reason: "no_guest" };
+  if (lastAgentTs && lastAgentTs >= lastGuestTs) return { ok: true, reason: "agent_after_guest" };
+
+  const now = new Date();
+  const minsSinceAgent = lastAgentTs ? Math.floor((now - lastAgentTs) / 60000) : Infinity;
+  if (minsSinceAgent >= slaMin) return { ok: false, reason: "guest_unanswered", minsSinceAgent };
+  return { ok: true, reason: "within_sla", minsSinceAgent };
+}
+
+async function sendEmail({ subject, html, text }) {
+  if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS || !ALERT_TO) {
+    console.log("Email not sent (SMTP or recipients not fully set).");
+    return false;
+  }
+  const transporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS }
   });
-  await tr.sendMail({ from: `"${FROM_NAME}" <${SMTP_USER}>`, to: ALERT_TO, subject, html });
+  const info = await transporter.sendMail({
+    from: `"${FROM_NAME}" <${SMTP_USER}>`,
+    to: ALERT_TO,
+    cc: ALERT_CC || undefined,
+    subject,
+    text,
+    html
+  });
+  console.log("Alert email sent:", info.messageId);
+  return true;
 }
 
+// ---------- Run ----------
 (async () => {
-  // 1) Login
-  const token = await login();
+  try {
+    if (!email || !password) throw new Error("Missing BOOM_USER/BOOM_PASS secrets.");
+    if (!rawUrls) throw new Error("No conversation_urls provided (workflow input).");
 
-  // 2) Build messages URL from UI URL / API URL / UUID / default
-  const messagesUrl = buildMessagesUrl();
-  const headers = token ? { authorization: `Bearer ${token}` } : {};
-  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
-  if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
+    const cookie = await loginAndGetCookie();
+    const urls = rawUrls.split(",").map(s => s.trim()).filter(Boolean);
+    if (urls.length === 0) throw new Error("conversation_urls input is empty after parsing.");
 
-  // 3) Parse and evaluate
-  const data = await res.json();
-  const msgs = normalizeMessages(data);
-  const result = evaluate(msgs);
-  console.log("Second check result:", JSON.stringify(result, null, 2));
+    for (const u of urls) {
+      const convo = await fetchConversation(cookie, u);
+      const result = decideSLA(convo.messages, SLA_MIN);
 
-  // 4) Alert if needed
-  if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
-    await sendEmail(subj, `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>`);
-    console.log("✅ Alert email sent.");
-  } else {
-    console.log("No alert sent.");
+      console.log("Second check result:", JSON.stringify(result, null, 2));
+
+      if (!result.ok && result.reason === "guest_unanswered") {
+        // ✅ UI link added (clickable)
+        const uiLink = `https://app.boomnow.com/dashboard/guest-experience/sales/${convo.id}`;
+        const shortId = convo.id.slice(0, 8);
+        const subject = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MIN}m — ${shortId}`;
+        const text = [
+          `Boom SLA Alert`,
+          `Conversation: ${convo.id}`,
+          `Reason: ${result.reason}`,
+          `Minutes since last human agent: ${result.minsSinceAgent}`,
+          `Open: ${uiLink}`,
+          `Sent: ${nowIso()}`
+        ].join("\n");
+
+        const html = `
+          <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; line-height:1.45">
+            <h3 style="margin:0 0 8px">Boom SLA Alert</h3>
+            <p style="margin:0 0 4px"><strong>Conversation:</strong> ${convo.id}</p>
+            <p style="margin:0 0 4px"><strong>Reason:</strong> ${result.reason}</p>
+            <p style="margin:0 0 12px"><strong>Minutes since last human agent:</strong> ${result.minsSinceAgent}</p>
+            <p style="margin:0 0 12px">
+              <a href="${uiLink}">🔗 Open conversation in Boom</a>
+            </p>
+            <hr style="border:none;border-top:1px solid #eee;margin:12px 0">
+            <p style="color:#666;font-size:12px;margin:0">Sent ${nowIso()}</p>
+          </div>
+        `;
+
+        await sendEmail({ subject, html, text });
+      } else {
+        console.log("No alert sent (not guest/unanswered).");
+      }
+    }
+  } catch (err) {
+    fail(err.message);
   }
-})().catch(e => {
-  console.error(e);
-  process.exit(1);
-});
+})();
