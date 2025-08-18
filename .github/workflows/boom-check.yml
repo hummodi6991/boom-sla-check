@@ -2,11 +2,11 @@ name: Boom SLA (API, REST)
 
 on:
   schedule:
-    - cron: "*/5 * * * *"     # every 5 minutes
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID is set."
         required: false
 
 jobs:
@@ -17,7 +17,6 @@ jobs:
       # -------- Credentials / Auth (secrets & vars) --------
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
-
       LOGIN_URL: ${{ vars.LOGIN_URL }}
       LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
       LOGIN_CT: ${{ vars.LOGIN_CT }}
@@ -25,12 +24,18 @@ jobs:
       LOGIN_PASSWORD_FIELD: ${{ vars.LOGIN_PASSWORD_FIELD }}
       LOGIN_TENANT_FIELD: ${{ vars.LOGIN_TENANT_FIELD }}
 
+      # Optional direct bearer auth (skip login if set)
+      API_BEARER: ${{ secrets.API_BEARER }}
+
+      # Optional CSRF
       CSRF_HEADER_NAME: ${{ vars.CSRF_HEADER_NAME }}
       CSRF_COOKIE_NAME: ${{ vars.CSRF_COOKIE_NAME }}
 
       # -------- Messages API --------
       MESSAGES_URL: ${{ vars.MESSAGES_URL }}
       MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
+      # Optional extra headers as JSON, e.g. {"x-tenant":"acme"}
+      MESSAGES_HEADERS_JSON: ${{ vars.MESSAGES_HEADERS_JSON }}
 
       # -------- SLA & AI handling --------
       SLA_MINUTES: ${{ vars.SLA_MINUTES }}
@@ -56,13 +61,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Install deps
         run: npm i nodemailer@6
-
       - name: Run SLA checker
         run: node check.mjs
