@@ -1,8 +1,6 @@
-name: Boom SLA (API, REST)
+name: Boom SLA (API, REST) — Manual Only
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       conversation:
@@ -36,6 +34,10 @@ jobs:
       MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
       # Optional extra headers as JSON, e.g. {"x-tenant":"acme"}
       MESSAGES_HEADERS_JSON: ${{ vars.MESSAGES_HEADERS_JSON }}
+      # Optional path to messages array in JSON (e.g., data.records)
+      MESSAGES_PATH: ${{ vars.MESSAGES_PATH }}
+      # Optional extra timestamp fields (comma-separated)
+      EXTRA_TS_FIELDS: ${{ vars.EXTRA_TS_FIELDS }}
 
       # -------- SLA & AI handling --------
       SLA_MINUTES: ${{ vars.SLA_MINUTES }}
@@ -61,10 +63,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
       - name: Install deps
         run: npm i nodemailer@6
+
       - name: Run SLA checker
         run: node check.mjs
