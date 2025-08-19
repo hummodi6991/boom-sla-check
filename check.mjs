@@ -30,7 +30,52 @@ const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
 const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
 
 // Inputs / defaults
-const CONVERSATION_INPUT   = env("CONVERSATION_INPUT","");        // UI URL / API URL / UUID
+import fs from "fs";
+
+// Pull the conversation input from the environment if present.  When the workflow
+// is triggered via a `repository_dispatch` event (from PowerÂ Automate), there
+// may not be an `inputs.conversation` value.  Instead, the conversation may
+// reside inside the repository dispatch's `client_payload`.  In that case we
+// read the GitHub event JSON file and extract the conversation URL/UUID.
+let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
+if (!CONVERSATION_INPUT) {
+  const eventName = process.env.GITHUB_EVENT_NAME;
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (eventName === "repository_dispatch" && eventPath && fs.existsSync(eventPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(eventPath, "utf8"));
+      const payload = data.client_payload || {};
+      // Explicit keys we recognise
+      const keys = [
+        "conversation",
+        "conversationId",
+        "conversation_id",
+        "conversationUrl",
+        "conversation_url",
+        "url",
+      ];
+      for (const k of keys) {
+        const v = payload[k];
+        if (typeof v === "string" && v.trim()) {
+          CONVERSATION_INPUT = v.trim();
+          break;
+        }
+      }
+      // As a fallback, look for the first string value in client_payload
+      if (!CONVERSATION_INPUT) {
+        for (const v of Object.values(payload)) {
+          if (typeof v === "string" && v.trim()) {
+            CONVERSATION_INPUT = v.trim();
+            break;
+          }
+        }
+      }
+      // Propagate to process.env so downstream code sees the value
+      if (CONVERSATION_INPUT) process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
+    } catch {}
+  }
+}
+
 const DEFAULT_CONVO_ID     = env("DEFAULT_CONVERSATION_ID","");   // repo variable fallback
 // Build a UI link to the conversation.  When a full URL is supplied via
 // CONVERSATION_INPUT the function returns a cleaned version of that URL,
@@ -314,13 +359,13 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
+    const subj = `Ã¢ÂÂ Ã¯Â¸Â Boom SLA: guest unanswered Ã¢ÂÂ¥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${escapeHtml(convoLink)}">${escapeHtml(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const bodyHtml = `<p>Guest appears unanswered Ã¢ÂÂ¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("â Alert email sent.");
+    console.log("Ã¢ÂÂ Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
