@@ -31,7 +31,6 @@ const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
 const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
 
 // --- Inputs / defaults ---
-// Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
 let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
 if (!CONVERSATION_INPUT) {
   const eventName = process.env.GITHUB_EVENT_NAME;
@@ -59,32 +58,87 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 function firstUrlLike(s) {
   const m = String(s||"").match(/https?:\/\/\S+/);
   if (!m) return "";
-  // strip trailing punctuation that often rides along in emails
   return m[0].replace(/[>),.;!]+$/, "");
 }
 
+// --- NEW: unwrap tracking links that hide a real URL in base64 ---
+function tryB64Decode(raw) {
+  try {
+    let t = raw;
+    // URL-safe → standard
+    t = t.replace(/-/g, "+").replace(/_/g, "/");
+    // pad
+    const pad = t.length % 4;
+    if (pad) t = t + "=".repeat(4 - pad);
+    const out = Buffer.from(t, "base64").toString("utf8").trim();
+    return out;
+  } catch { return ""; }
+}
+
+function expandTrackedUrl(urlStr) {
+  if (!urlStr) return "";
+  let out = urlStr;
+
+  try {
+    const u = new URL(urlStr);
+
+    // 1) If any path segment looks like base64, try to decode to a URL
+    const segs = u.pathname.split("/").filter(Boolean);
+    for (let i = segs.length - 1; i >= 0; i--) {
+      const seg = decodeURIComponent(segs[i]);
+      if (/^[A-Za-z0-9+/_=-]{16,}$/.test(seg)) {
+        const dec = tryB64Decode(seg);
+        if (/^https?:\/\//i.test(dec)) return dec;
+      }
+    }
+
+    // 2) Common trackers pass ?url=<base64> or similar
+    for (const [k, v] of u.searchParams.entries()) {
+      const val = decodeURIComponent(v);
+      // either already a URL or base64 of one
+      if (/^https?:\/\//i.test(val)) return val;
+      if (/^[A-Za-z0-9+/_=-]{16,}$/.test(val)) {
+        const dec = tryB64Decode(val);
+        if (/^https?:\/\//i.test(dec)) return dec;
+      }
+    }
+  } catch {
+    // fall through – just return what we got
+  }
+
+  return out;
+}
+
+// Pull a UUID from any acceptable input
 function extractConversationId(input) {
   const s = (input || "").trim();
   if (!s) return "";
 
-  // 1) exact UUID
+  // 1) exact UUID in the whole string
   const direct = s.match(UUID_RE);
   if (direct && direct[0] && s.length === direct[0].length) return direct[0];
 
-  // 2) if string contains /api/conversations/<uuid> anywhere
-  const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
-  if (fromApi) return fromApi[1];
-
-  // 3) attempt to pull the first URL from the text, then search path segments for UUID
-  const urlStr = firstUrlLike(s);
+  // 2) examine a URL (unwrap trackers first)
+  const rawUrl = firstUrlLike(s);
+  const urlStr = expandTrackedUrl(rawUrl);
   if (urlStr) {
     try {
       const u = new URL(urlStr);
       const parts = u.pathname.split("/").filter(Boolean);
       const fromPath = parts.find(x => UUID_RE.test(x));
       if (fromPath) return fromPath.match(UUID_RE)[0];
+
+      // Also check query parameters just in case
+      for (const [, v] of u.searchParams.entries()) {
+        const m = String(v).match(UUID_RE);
+        if (m) return m[0];
+      }
     } catch {}
   }
+
+  // 3) look for an /api/conversations/<uuid> pattern anywhere
+  const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
+  if (fromApi) return fromApi[1];
 
   // 4) last resort: any UUID anywhere in the text
   return direct ? direct[0] : "";
@@ -94,21 +148,26 @@ function extractConversationId(input) {
 function buildConversationLink() {
   const input = (CONVERSATION_INPUT || "").trim();
   const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
-  // If an http(s) URL is present in the input, return the cleaned URL
+
+  // If there's a URL in the input, unwrap trackers and present the clean URL (trim at uuid)
   if (/^https?:\/\//i.test(input)) {
     try {
-      const u = new URL(firstUrlLike(input));
-      // strip leading /api and anything after the uuid
+      const expanded = expandTrackedUrl(firstUrlLike(input));
+      const u = new URL(expanded);
       const parts = u.pathname.split("/").filter(Boolean);
       const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
       if (uuidIndex >= 0) {
         const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
         u.pathname = "/" + slice.join("/");
+        u.search = "";
+        u.hash = "";
         return u.toString();
       }
       return u.toString();
     } catch {}
   }
+
+  // Else, compose from the template + id
   if (id && MESSAGES_URL_TMPL) {
     try {
       const urlStr = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
@@ -118,6 +177,8 @@ function buildConversationLink() {
       if (uuidIndex >= 0) {
         const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
         u.pathname = "/" + slice.join("/");
+        u.search = "";
+        u.hash = "";
         return u.toString();
       }
       return u.origin;
@@ -320,13 +381,13 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
+    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("â Alert email sent.");
+    console.log("✅ Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
