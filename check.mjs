@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import fs from "fs";
 
 const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 
@@ -29,14 +30,8 @@ const MESSAGES_METHOD      = env("MESSAGES_METHOD","GET");
 const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
 const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
 
-// Inputs / defaults
-import fs from "fs";
-
-// Pull the conversation input from the environment if present.  When the workflow
-// is triggered via a `repository_dispatch` event (from PowerÂ Automate), there
-// may not be an `inputs.conversation` value.  Instead, the conversation may
-// reside inside the repository dispatch's `client_payload`.  In that case we
-// read the GitHub event JSON file and extract the conversation URL/UUID.
+// --- Inputs / defaults ---
+// Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
 let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
 if (!CONVERSATION_INPUT) {
   const eventName = process.env.GITHUB_EVENT_NAME;
@@ -44,71 +39,76 @@ if (!CONVERSATION_INPUT) {
   if (eventName === "repository_dispatch" && eventPath && fs.existsSync(eventPath)) {
     try {
       const data = JSON.parse(fs.readFileSync(eventPath, "utf8"));
-      const payload = data.client_payload || {};
-      // Explicit keys we recognise
-      const keys = [
-        "conversation",
-        "conversationId",
-        "conversation_id",
-        "conversationUrl",
-        "conversation_url",
-        "url",
-      ];
-      for (const k of keys) {
-        const v = payload[k];
-        if (typeof v === "string" && v.trim()) {
-          CONVERSATION_INPUT = v.trim();
-          break;
-        }
+      const p = data.client_payload || {};
+      const candidates = [
+        p.conversation, p.conversationUrl, p.conversation_url,
+        p.url, p.text, p.body
+      ].filter(v => typeof v === "string" && v.trim());
+      if (candidates.length) {
+        CONVERSATION_INPUT = candidates[0].trim();
+        process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
       }
-      // As a fallback, look for the first string value in client_payload
-      if (!CONVERSATION_INPUT) {
-        for (const v of Object.values(payload)) {
-          if (typeof v === "string" && v.trim()) {
-            CONVERSATION_INPUT = v.trim();
-            break;
-          }
-        }
-      }
-      // Propagate to process.env so downstream code sees the value
-      if (CONVERSATION_INPUT) process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
     } catch {}
   }
 }
+const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
 
-const DEFAULT_CONVO_ID     = env("DEFAULT_CONVERSATION_ID","");   // repo variable fallback
-// Build a UI link to the conversation.  When a full URL is supplied via
-// CONVERSATION_INPUT the function returns a cleaned version of that URL,
-// stripping any `/api` prefix and trailing segments after the conversation UUID.
-// Otherwise it uses the conversation ID with the MESSAGES_URL_TMPL to derive
-// a sensible link.  If no link can be formed an empty string is returned.
+// === Utils ===
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+
+function firstUrlLike(s) {
+  const m = String(s||"").match(/https?:\/\/\S+/);
+  if (!m) return "";
+  // strip trailing punctuation that often rides along in emails
+  return m[0].replace(/[>),.;!]+$/, "");
+}
+
+function extractConversationId(input) {
+  const s = (input || "").trim();
+  if (!s) return "";
+
+  // 1) exact UUID
+  const direct = s.match(UUID_RE);
+  if (direct && direct[0] && s.length === direct[0].length) return direct[0];
+
+  // 2) if string contains /api/conversations/<uuid> anywhere
+  const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
+  if (fromApi) return fromApi[1];
+
+  // 3) attempt to pull the first URL from the text, then search path segments for UUID
+  const urlStr = firstUrlLike(s);
+  if (urlStr) {
+    try {
+      const u = new URL(urlStr);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const fromPath = parts.find(x => UUID_RE.test(x));
+      if (fromPath) return fromPath.match(UUID_RE)[0];
+    } catch {}
+  }
+
+  // 4) last resort: any UUID anywhere in the text
+  return direct ? direct[0] : "";
+}
+
+// Build a human UI link for the email body
 function buildConversationLink() {
   const input = (CONVERSATION_INPUT || "").trim();
   const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
-  // If the input begins with http/https treat it as a URL
+  // If an http(s) URL is present in the input, return the cleaned URL
   if (/^https?:\/\//i.test(input)) {
     try {
-      const u = new URL(input);
+      const u = new URL(firstUrlLike(input));
+      // strip leading /api and anything after the uuid
       const parts = u.pathname.split("/").filter(Boolean);
       const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
       if (uuidIndex >= 0) {
-        const slice = parts.slice(0, uuidIndex + 1);
-        // drop leading api if present
-        const filtered = [];
-        for (let i = 0; i < slice.length; i++) {
-          const part = slice[i];
-          if (i === 0 && part.toLowerCase() === "api") continue;
-          filtered.push(part);
-        }
-        u.pathname = "/" + filtered.join("/");
+        const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
+        u.pathname = "/" + slice.join("/");
         return u.toString();
       }
       return u.toString();
-    } catch (e) {
-      // ignore parse errors
-    }
+    } catch {}
   }
-  // If we have an id and a MESSAGES_URL_TMPL, derive a link
   if (id && MESSAGES_URL_TMPL) {
     try {
       const urlStr = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
@@ -116,25 +116,17 @@ function buildConversationLink() {
       const parts = u.pathname.split("/").filter(Boolean);
       const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
       if (uuidIndex >= 0) {
-        const slice = parts.slice(0, uuidIndex + 1);
-        const filtered = [];
-        for (let i = 0; i < slice.length; i++) {
-          const part = slice[i];
-          if (i === 0 && part.toLowerCase() === "api") continue;
-          filtered.push(part);
-        }
-        u.pathname = "/" + filtered.join("/");
+        const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
+        u.pathname = "/" + slice.join("/");
         return u.toString();
       }
       return u.origin;
-    } catch (e) {
-      // ignore
-    }
+    } catch {}
   }
   return id ? id.toString() : "";
 }
 
-// --- tiny cookie jar ---
+// --- tiny cookie jar & fetch helper ---
 class Jar {
   constructor(){ this.map = new Map(); }
   ingest(setCookie) {
@@ -165,7 +157,7 @@ async function jf(url, init = {}) {
   const setc = res.headers.get("set-cookie");
   if (setc) jar.ingest(setc);
 
-  // Follow simple redirects
+  // follow redirects
   let r = res, hops=0;
   while ([301,302,303,307,308].includes(r.status) && hops<3) {
     const loc = r.headers.get("location");
@@ -212,41 +204,6 @@ async function login() {
     token = j?.token || j?.accessToken || j?.data?.accessToken || null;
   } catch {}
   return token;
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function extractConversationId(input) {
-  const s = (input || "").trim();
-  if (!s) return "";
-
-  if (UUID_RE.test(s)) return s;
-
-  // API URL form
-  if (s.includes("/api/conversations/")) {
-    const m = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
-    if (m) return m[1];
-  }
-
-  // UI URL form (dashboard page)
-  try {
-    const parts = new URL(s).pathname.split("/");
-    const id = parts.find(x => UUID_RE.test(x));
-    if (id) return id;
-  } catch {}
-
-  return "";
-}
-
-function buildMessagesUrl() {
-  const idFromInput = extractConversationId(CONVERSATION_INPUT);
-  const id = idFromInput || DEFAULT_CONVO_ID;
-
-  if (!id) {
-    throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
-  }
-  if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
-  return MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
 }
 
 function normalizeMessages(data) {
@@ -346,7 +303,11 @@ async function sendEmail(subject, html) {
   const token = await login();
 
   // 2) Build messages URL from UI URL / API URL / UUID / default
-  const messagesUrl = buildMessagesUrl();
+  const id = extractConversationId(CONVERSATION_INPUT) || DEFAULT_CONVO_ID;
+  if (!id) throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
+  if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
+
+  const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
   const headers = token ? { authorization: `Bearer ${token}` } : {};
   const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
   if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
@@ -359,13 +320,13 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `Ã¢ÂÂ Ã¯Â¸Â Boom SLA: guest unanswered Ã¢ÂÂ¥ ${SLA_MINUTES}m`;
+    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
-    const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const linkHtml = convoLink ? `<p>Conversation: <a href="${escapeHtml(convoLink)}">${escapeHtml(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered Ã¢ÂÂ¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
+    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("Ã¢ÂÂ Alert email sent.");
+    console.log("✅ Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
