@@ -32,7 +32,16 @@ const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLower
 
 // --- Inputs / defaults ---
 // Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
-let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
+// Pull a conversation input from either an explicit env var or the dispatched event payload.
+//
+// Power Automate and other systems aren't always consistent about how they name
+// payload fields. Some will use `conversation`, others `conversationUrl`,
+// `conversationURL`, `conversation_url`, `url`, `text` or even something else.
+// Rather than trying to predict every possible key name, fall back to
+// inspecting all string values in the client_payload and choose the first
+// plausible URL or UUID. This makes the checker resilient to upstream
+// variations without requiring changes to the workflow file.
+let CONVERSATION_INPUT = env("CONVERSATION_INPUT", "");
 if (!CONVERSATION_INPUT) {
   const eventName = process.env.GITHUB_EVENT_NAME;
   const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -40,15 +49,41 @@ if (!CONVERSATION_INPUT) {
     try {
       const data = JSON.parse(fs.readFileSync(eventPath, "utf8"));
       const p = data.client_payload || {};
-      const candidates = [
-        p.conversation, p.conversationUrl, p.conversation_url,
-        p.url, p.text, p.body
-      ].filter(v => typeof v === "string" && v.trim());
-      if (candidates.length) {
-        CONVERSATION_INPUT = candidates[0].trim();
-        process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
+      // Helper: recursively gather all string values from an object/array.
+      function gatherStrings(val, out) {
+        if (!val) return;
+        if (typeof val === "string") {
+          out.push(val);
+        } else if (Array.isArray(val)) {
+          for (const item of val) gatherStrings(item, out);
+        } else if (typeof val === "object") {
+          for (const key of Object.keys(val)) gatherStrings(val[key], out);
+        }
       }
-    } catch {}
+      const allStrings = [];
+      gatherStrings(p, allStrings);
+      // First, look for an exact match on known keys (for backwards compatibility)
+      const preferredKeys = ["conversation", "conversationUrl", "conversationURL", "conversation_url", "url", "text", "body"];
+      for (const key of preferredKeys) {
+        const v = p[key];
+        if (typeof v === "string" && v.trim()) {
+          CONVERSATION_INPUT = v.trim();
+          break;
+        }
+      }
+      // If no preferred key was found, scan for the first plausible URL or UUID in any string.
+      if (!CONVERSATION_INPUT && allStrings.length) {
+        const candidate = allStrings.find(s => {
+          const cleaned = s.trim();
+          // Accept strings that contain an http(s) URL or a 36âcharacter UUID
+          return /https?:\/\//i.test(cleaned) || UUID_RE.test(cleaned);
+        });
+        if (candidate) CONVERSATION_INPUT = candidate.trim();
+      }
+      if (CONVERSATION_INPUT) process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
+    } catch {
+      /* ignore malformed event files */
+    }
   }
 }
 const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
@@ -320,13 +355,13 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
+    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("✅ Alert email sent.");
+    console.log("â Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
