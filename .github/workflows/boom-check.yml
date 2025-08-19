@@ -1,61 +1,68 @@
-name: Boom SLA (API, REST)
+# .github/workflows/boom-check.yml
+name: Boom SLA Check
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"     # every 5 minutes
+  # Triggered by Power Automate: use the same event type string there
+  repository_dispatch:
+    types: [boom-sla-trigger]
+
+  # Optional: keep manual button in GitHub
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID is set."
         required: false
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    permissions:
+      contents: read
+
     env:
-      BOOM_USER: ${{ secrets.BOOM_USER }}
-      BOOM_PASS: ${{ secrets.BOOM_PASS }}
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      ALERT_TO:  ${{ secrets.ALERT_TO }}
-      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      # Secrets (credentials)
+      BOOM_USER:  ${{ secrets.BOOM_USER }}
+      BOOM_PASS:  ${{ secrets.BOOM_PASS }}
+      SMTP_HOST:  ${{ secrets.SMTP_HOST }}
+      SMTP_PORT:  ${{ secrets.SMTP_PORT }}
+      SMTP_USER:  ${{ secrets.SMTP_USER }}
+      SMTP_PASS:  ${{ secrets.SMTP_PASS }}
 
-      LOGIN_URL: "https://app.boomnow.com/api/login"
-      LOGIN_METHOD: "POST"
-      LOGIN_CT: "application/json"
-      LOGIN_EMAIL_FIELD: "email"
-      LOGIN_PASSWORD_FIELD: "password"
-      LOGIN_TENANT_FIELD: "tenant_id"
-      CSRF_HEADER_NAME: ""
-      CSRF_COOKIE_NAME: ""
+      # Non-secrets / repo variables
+      ALERT_TO:   ${{ vars.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ vars.ALERT_FROM_NAME }}
 
-      API_KIND: "rest"
-      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
-      MESSAGES_METHOD: "GET"
+      LOGIN_URL:  ${{ vars.LOGIN_URL }}
+      LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
+      LOGIN_CT:   ${{ vars.LOGIN_CT }}
+      LOGIN_EMAIL_FIELD: ${{ vars.LOGIN_EMAIL_FIELD }}
+      LOGIN_PASSWORD_FIELD: ${{ vars.LOGIN_PASSWORD_FIELD }}
+      LOGIN_TENANT_FIELD: ${{ vars.LOGIN_TENANT_FIELD }}
+      CSRF_HEADER_NAME: ${{ vars.CSRF_HEADER_NAME }}
+      CSRF_COOKIE_NAME: ${{ vars.CSRF_COOKIE_NAME }}
 
-      SLA_MINUTES: "5"
-      COUNT_AI_SUGGESTION_AS_AGENT: "false"
+      API_KIND:   ${{ vars.API_KIND }}
+      MESSAGES_URL: ${{ vars.MESSAGES_URL }}
+      MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
+      SLA_MINUTES: ${{ vars.SLA_MINUTES }}
+      COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
 
-      CONVERSATION_INPUT: ${{ github.event.inputs.conversation }}
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
-    steps:
-      - uses: actions/checkout@v4
+      # Accept payload from either repository_dispatch or workflow_dispatch
+      CONVERSATION_INPUT: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.conversation || github.event.inputs.conversation }}
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
 
       - name: Install deps
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm i
-          fi
+        run: npm ci --omit=dev
 
-      - name: Run SLA checker
+      - name: Run SLA check
         run: node check.mjs
