@@ -1,3 +1,4 @@
+// check.mjs
 import nodemailer from "nodemailer";
 import fs from "fs";
 
@@ -24,7 +25,7 @@ const CSRF_HEADER_NAME     = env("CSRF_HEADER_NAME","");
 const CSRF_COOKIE_NAME     = env("CSRF_COOKIE_NAME","");
 
 const API_KIND             = env("API_KIND","rest");
-const MESSAGES_URL_TMPL    = env("MESSAGES_URL");
+const MESSAGES_URL_TMPL    = env("MESSAGES_URL"); // e.g. https://app.boomnow.com/api/guest-experience/conversations/{{conversationId}}/messages
 const MESSAGES_METHOD      = env("MESSAGES_METHOD","GET");
 
 const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
@@ -33,6 +34,7 @@ const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLower
 // --- Inputs / defaults ---
 let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
 if (!CONVERSATION_INPUT) {
+  // If triggered via repository_dispatch, try to read the payload
   const eventName = process.env.GITHUB_EVENT_NAME;
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (eventName === "repository_dispatch" && eventPath && fs.existsSync(eventPath)) {
@@ -61,13 +63,11 @@ function firstUrlLike(s) {
   return m[0].replace(/[>),.;!]+$/, "");
 }
 
-// --- NEW: unwrap tracking links that hide a real URL in base64 ---
+// --- unwrap tracking links (e.g. Mailjet) that hide a real URL in base64 ---
 function tryB64Decode(raw) {
   try {
     let t = raw;
-    // URL-safe → standard
-    t = t.replace(/-/g, "+").replace(/_/g, "/");
-    // pad
+    t = t.replace(/-/g, "+").replace(/_/g, "/"); // URL-safe -> standard
     const pad = t.length % 4;
     if (pad) t = t + "=".repeat(4 - pad);
     const out = Buffer.from(t, "base64").toString("utf8").trim();
@@ -92,10 +92,9 @@ function expandTrackedUrl(urlStr) {
       }
     }
 
-    // 2) Common trackers pass ?url=<base64> or similar
-    for (const [k, v] of u.searchParams.entries()) {
+    // 2) Common trackers pass ?url=<base64> (or a direct URL)
+    for (const [, v] of u.searchParams.entries()) {
       const val = decodeURIComponent(v);
-      // either already a URL or base64 of one
       if (/^https?:\/\//i.test(val)) return val;
       if (/^[A-Za-z0-9+/_=-]{16,}$/.test(val)) {
         const dec = tryB64Decode(val);
@@ -144,7 +143,7 @@ function extractConversationId(input) {
   return direct ? direct[0] : "";
 }
 
-// Build a human UI link for the email body
+// Build a human UI link for the email body (clean, untracked)
 function buildConversationLink() {
   const input = (CONVERSATION_INPUT || "").trim();
   const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
@@ -218,7 +217,7 @@ async function jf(url, init = {}) {
   const setc = res.headers.get("set-cookie");
   if (setc) jar.ingest(setc);
 
-  // follow redirects
+  // follow redirects (limited)
   let r = res, hops=0;
   while ([301,302,303,307,308].includes(r.status) && hops<3) {
     const loc = r.headers.get("location");
@@ -365,13 +364,55 @@ async function sendEmail(subject, html) {
 
   // 2) Build messages URL from UI URL / API URL / UUID / default
   const id = extractConversationId(CONVERSATION_INPUT) || DEFAULT_CONVO_ID;
-  if (!id) throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
+  if (!id) {
+    // This is the line you highlighted: it fails fast when we have no way to target a conversation.
+    throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
+  }
   if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
 
-  const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
   const headers = token ? { authorization: `Bearer ${token}` } : {};
-  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
-  if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
+
+  // ---- 404 FALLBACK BLOCK (tries multiple Boom API shapes) ----
+  async function fetchMessagesWithFallback(convId) {
+    const tried = [];
+    const primary = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, convId);
+
+    const attempt = async (url) => {
+      tried.push(url);
+      console.log(`[SLA] Trying messages URL: ${url}`);
+      const res = await jf(url, { method: MESSAGES_METHOD, headers });
+      if (res.status === 404) return null; // try next candidate
+      if (res.status >= 400) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`Messages fetch failed: ${res.status} ${body.slice(0,200)}`);
+      }
+      return res;
+    };
+
+    // 1) primary from env
+    let res = await attempt(primary);
+    if (res) return res;
+
+    // 2) derive origin and try common shapes
+    const base = new URL(primary);
+    const origin = base.origin;
+
+    const candidates = [
+      `${origin}/api/conversations/${convId}/messages`,
+      `${origin}/api/guest-experience/conversations/${convId}/messages`,
+      `${origin}/api/guest-experience/messages?conversationId=${convId}`,
+      `${origin}/api/messages?conversationId=${convId}`,
+    ];
+
+    for (const u of candidates) {
+      res = await attempt(u);
+      if (res) return res;
+    }
+
+    throw new Error(`Messages fetch failed: 404. Tried:\n- ${tried.join("\n- ")}`);
+  }
+
+  const res = await fetchMessagesWithFallback(id);
 
   // 3) Parse and evaluate
   const data = await res.json();
