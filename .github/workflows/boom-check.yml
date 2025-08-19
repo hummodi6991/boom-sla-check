@@ -1,59 +1,140 @@
 name: Boom SLA (API, REST)
 on:
-  # Keep the existing 5‑minute schedule so the checker still runs regularly
-  schedule:
-    - cron: "*/5 * * * *"     # every 5 minutes
-  # Allow manual runs from the Actions UI with an optional conversation input
-  workflow_dispatch:
-    inputs:
-      conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
-        required: false
-  # Accept repository_dispatch events from Power Automate.  Any event_type will be honoured.
-  repository_dispatch:
-
+# Keep the existing 5-minute schedule so the checker still runs regularly
+schedule:
+- cron: "*/5 * * * *" # every 5 minutes
+# Allow manual runs from the Actions UI with an optional conversation input
+workflow
+_dispatch:
+inputs:
+conversation:
+DEFAULT
+description: "Conversation (UI URL / API URL / UUID). Optional if
+CONVERSATION
+_ID repo variable is set."
+_
+required: false
+# Accept repository_dispatch events from Power Automate. Any event_type will be honoured.
+repository_dispatch:
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 6
-    env:
-      BOOM_USER: ${{ secrets.BOOM_USER }}
-      BOOM_PASS: ${{ secrets.BOOM_PASS }}
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      ALERT_TO:  ${{ secrets.ALERT_TO }}
-      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
-      LOGIN_URL: "https://app.boomnow.com/api/login"
-      LOGIN_METHOD: "POST"
-      LOGIN_CT: "application/json"
-      LOGIN_EMAIL_FIELD: "email"
-      LOGIN_PASSWORD_FIELD: "password"
-      LOGIN_TENANT_FIELD: "tenant_id"
-      CSRF_HEADER_NAME: ""
-      CSRF_COOKIE_NAME: ""
-      API_KIND: "rest"
-      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
-      MESSAGES_METHOD: "GET"
-      SLA_MINUTES: "5"
-      COUNT_AI_SUGGESTION_AS_AGENT: "false"
-      # Pull the conversation from either workflow dispatch inputs or repository_dispatch client_payload.
-      # Power Automate's repository dispatch can attach a `conversation` or `conversationUrl` field under client_payload;
-      # if none are present this will evaluate to an empty string and the checker will fall back to the default conversation ID.
-      CONVERSATION_INPUT: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || github.event.client_payload.conversationUrl || github.event.client_payload.conversation_url }}
-      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install deps
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm i
-          fi
-      - name: Run SLA checker
-        run: node check.mjs
+check:
+runs-on: ubuntu-latest
+timeout-minutes: 6
+env:
+BOOM
+_
+USER: ${{ secrets.BOOM_USER }}
+BOOM
+_
+PASS: ${{ secrets.BOOM_PASS }}
+SMTP
+_
+HOST: ${{ secrets.SMTP_HOST }}
+SMTP
+_
+PORT: ${{ secrets.SMTP_PORT }}
+SMTP
+_
+USER: ${{ secrets.SMTP_USER }}
+SMTP
+_
+PASS: ${{ secrets.SMTP_PASS }}
+ALERT
+_
+TO: ${{ secrets.ALERT_TO }}
+ALERT
+FROM
+_
+_
+NAME: ${{ secrets.ALERT_
+FROM
+_NAME }}
+LOGIN
+_
+URL: "https://app.boomnow.com/api/login"
+LOGIN
+METHOD: "POST"
+_
+LOGIN
+_CT: "application/json"
+LOGIN
+EMAIL
+FIELD: "email"
+_
+_
+LOGIN
+PASSWORD
+_
+_FIELD: "password"
+LOGIN
+TENANT
+FIELD: "tenant
+id"
+_
+_
+_
+CSRF
+HEADER
+NAME: ""
+_
+_
+CSRF
+COOKIE
+NAME: ""
+_
+_
+API
+KIND: "rest"
+_
+MESSAGES
+_
+URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
+MESSAGES
+METHOD: "GET"
+_
+SLA
+MINUTES: "5"
+_
+COUNT
+AI
+SUGGESTION
+AS
+AGENT: "false"
+_
+_
+_
+_
+# Pull the conversation from either workflow dispatch inputs or repository_dispatch
+client
+_payload.
+# Power Automate's repository dispatch can attach a `conversation` or `conversationUrl`
+field under client
+_payload;
+# if none are present this will evaluate to an empty string and the checker will fall back to the
+default conversation ID.
+CONVERSATION
+_
+INPUT: ${{ github.event.inputs.conversation ||
+github.event.client_payload.conversation || github.event.client_payload.conversationUrl ||
+github.event.client_payload.conversation_url }}
+DEFAULT
+CONVERSATION
+_
+_
+ID: ${{ vars.DEFAULT_
+CONVERSATION
+_ID }}
+steps:
+- uses: actions/checkout@v4
+- uses: actions/setup-node@v4
+with:
+node-version: "20"
+- name: Install deps
+run: |
+if [ -f package-lock.json ]; then
+npm ci
+else
+npm i
+fi
+- name: Run SLA checker
+run: node check.mjs
