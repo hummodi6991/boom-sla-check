@@ -272,7 +272,6 @@ function normalizeMessages(data) {
   (function crawl(v){
     if (v == null) return;
     if (Array.isArray(v)) {
-      // prefer arrays of objects, but accept primitives if nothing else is found
       if (v.some(x => x && typeof x === "object")) candidates.push(v);
       return;
     }
@@ -291,12 +290,12 @@ function whoSent(m) {
 
   const str = (x) => String(x ?? "").toLowerCase();
 
-  // treat explicit notes as internal
+  // explicit notes as internal
   const moduleVal = str(m.module);
   const msgType   = str(m.msg_type || m.message_type);
   if (moduleVal === "note" || msgType === "note") return "internal";
 
-  // compile role-ish hints
+  // role-ish hints
   const roles = [
     m.role, m.by, m.senderType, m.sender_type,
     m.author?.role, m.author_role,
@@ -322,7 +321,7 @@ function whoSent(m) {
   const guestish = [m.is_guest, m.from_guest, m.guest_id, m.customer_id && !m.agent_id].some(Boolean);
   if (guestish) return "guest";
 
-  // AI messages: approved/sent counts as agent; otherwise depends on COUNT_AI_SUGGESTION_AS_AGENT
+  // AI messages: approved/sent counts as agent; otherwise depends on COUNT_AI_AS_AGENT
   const aiStatus = str(m.ai_status || m.aiStatus || m.status);
   const isAI = !!(m.generated_by_ai || m.ai || m.is_ai);
   if (isAI) {
@@ -343,14 +342,12 @@ function tsOf(m) {
 
   if (cand === undefined || cand === null) return null;
 
-  // number-like? treat as ms if large, else seconds
   if (typeof cand === "number") {
     const ms = cand > 1e12 ? cand : cand * 1000;
     const d = new Date(ms);
     return isNaN(+d) ? null : d;
   }
 
-  // string: try Date parsing
   const d = new Date(String(cand));
   return isNaN(+d) ? null : d;
 }
@@ -457,6 +454,45 @@ async function sendEmail(subject, html) {
   const msgs = normalizeMessages(data);
   const result = evaluate(msgs);
   console.log("Second check result:", JSON.stringify(result, null, 2));
+
+  // --- DEBUG: print & save raw message shapes + classifications when enabled ---
+  if (String(process.env.DEBUG_MESSAGES) === "1") {
+    const last = msgs.slice(-10);
+
+    const mask = (s) => String(s ?? "")
+      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "<email>")
+      .replace(/\b\d{6,}\b/g, "<digits>");
+
+    console.log("[DEBUG] lastN raw messages (masked):");
+    const masked = last.map(m => {
+      const copy = { ...m };
+      if (copy.text) copy.text = mask(copy.text);
+      if (copy.body) copy.body = mask(copy.body);
+      return copy;
+    });
+    console.log(JSON.stringify(masked, null, 2));
+
+    const summary = last.map((m, i) => ({
+      idx: msgs.length - last.length + i,
+      by: m.by ?? m.senderType ?? m.author?.role ?? null,
+      type: m.msg_type ?? m.message_type ?? null,
+      module: m.module ?? null,
+      direction: m.direction ?? m.message_direction ?? null,
+      ai_status: m.ai_status ?? null,
+      text_preview: mask((m.text ?? m.body ?? "").toString()).slice(0, 60),
+      who: whoSent(m),
+      ts: tsOf(m)
+    }));
+    console.log("[DEBUG] classification summary:");
+    console.log(JSON.stringify(summary, null, 2));
+
+    // also write to files so you can download as workflow artifacts if desired
+    try {
+      fs.mkdirSync("out", { recursive: true });
+      fs.writeFileSync("out/messages.json", JSON.stringify(masked, null, 2));
+      fs.writeFileSync("out/classification.json", JSON.stringify(summary, null, 2));
+    } catch {}
+  }
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
