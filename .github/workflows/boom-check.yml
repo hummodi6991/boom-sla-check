@@ -20,7 +20,7 @@ jobs:
       LOGIN_CT: ${{ vars.LOGIN_CT }}
       LOGIN_EMAIL_FIELD: ${{ vars.LOGIN_EMAIL_FIELD }}
       LOGIN_PASSWORD_FIELD: ${{ vars.LOGIN_PASSWORD_FIELD }}
-      LOGIN_TENANT_FIELD: ${{ vars.LOGIN_TENANT_FIELD }}
+     
 
       # Optional direct bearer auth (skip login if set)
       API_BEARER: ${{ secrets.API_BEARER }}
