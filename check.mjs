@@ -31,13 +31,8 @@ const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
 const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
 
 // --- Inputs / defaults ---
-// Prefer an explicit env variable. If missing and this is a repository_dispatch run,
-// parse the GitHub event JSON. Power Automate may use different property names for
-// the conversation URL/UUID, so we search the entire client_payload for the first
-// string that yields a valid UUID when passed through extractConversationId().
-// As a last resort, if no UUID-bearing string is found, we fall back to the first
-// string containing any URL or UUID.
-let CONVERSATION_INPUT = env("CONVERSATION_INPUT", "");
+// Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
+let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
 if (!CONVERSATION_INPUT) {
   const eventName = process.env.GITHUB_EVENT_NAME;
   const eventPath = process.env.GITHUB_EVENT_PATH;
@@ -45,65 +40,15 @@ if (!CONVERSATION_INPUT) {
     try {
       const data = JSON.parse(fs.readFileSync(eventPath, "utf8"));
       const p = data.client_payload || {};
-      // Helper to recursively gather all string values from an object
-      function gatherStrings(val, out) {
-        if (typeof val === "string") {
-          out.push(val);
-        } else if (Array.isArray(val)) {
-          for (const item of val) gatherStrings(item, out);
-        } else if (val && typeof val === "object") {
-          for (const key of Object.keys(val)) gatherStrings(val[key], out);
-        }
-      }
-      const allStrings = [];
-      gatherStrings(p, allStrings);
-      // Try preferred keys first for backwards compatibility
-      const preferredKeys = [
-        "conversation",
-        "conversationUrl",
-        "conversationURL",
-        "conversation_url",
-        "url",
-        "text",
-        "body"
-      ];
-      for (const key of preferredKeys) {
-        const v = p[key];
-        if (typeof v === "string" && v.trim()) {
-          CONVERSATION_INPUT = v.trim();
-          break;
-        }
-      }
-      // Otherwise, find the first string with a valid conversationId
-      if (!CONVERSATION_INPUT) {
-        for (const s of allStrings) {
-          const cleaned = s.trim();
-          if (!cleaned) continue;
-          try {
-            const id = extractConversationId(cleaned);
-            if (id) {
-              CONVERSATION_INPUT = cleaned;
-              break;
-            }
-          } catch {
-            /* ignore */
-          }
-        }
-      }
-      // Last fallback: any string containing a URL or UUID
-      if (!CONVERSATION_INPUT) {
-        const candidate = allStrings.find(s => {
-          const cleaned = s.trim();
-          return /https?:\/\//i.test(cleaned) || UUID_RE.test(cleaned);
-        });
-        if (candidate) CONVERSATION_INPUT = candidate.trim();
-      }
-      if (CONVERSATION_INPUT) {
+      const candidates = [
+        p.conversation, p.conversationUrl, p.conversation_url,
+        p.url, p.text, p.body
+      ].filter(v => typeof v === "string" && v.trim());
+      if (candidates.length) {
+        CONVERSATION_INPUT = candidates[0].trim();
         process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
       }
-    } catch {
-      // ignore parse errors
-    }
+    } catch {}
   }
 }
 const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
@@ -140,6 +85,27 @@ function extractConversationId(input) {
       if (fromPath) return fromPath.match(UUID_RE)[0];
     } catch {}
   }
+
+  // 3b) Some notification emails wrap the BoomNow link in a tracking URL,
+  // embedding the actual URL as a base64-encoded path segment. Attempt to
+  // decode any base64-looking substrings and recursively extract the UUID.
+  try {
+    const tokens = s.split(/[^A-Za-z0-9+/=]/).filter(tok => tok.length > 16);
+    for (const t of tokens) {
+      // heuristically skip obviously non-base64 tokens
+      if (!/[A-Za-z0-9+/=]{8,}/.test(t)) continue;
+      try {
+        const buf = Buffer.from(t, "base64");
+        const decoded = buf.toString("utf8");
+        if (decoded && decoded.includes("boomnow.com")) {
+          const inner = extractConversationId(decoded);
+          if (inner) return inner;
+        }
+      } catch {
+        // ignore invalid base64
+      }
+    }
+  } catch {}
 
   // 4) last resort: any UUID anywhere in the text
   return direct ? direct[0] : "";
@@ -362,36 +328,13 @@ async function sendEmail(subject, html) {
   if (!id) throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
   if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
 
-  const baseUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
+  const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
   const headers = token ? { authorization: `Bearer ${token}` } : {};
-  // Try a series of candidate URLs to fetch messages. Some installations
-  // expect `/conversations/<id>`, others `/conversations/<id>/messages` or
-  // `/conversations/<id>/thread`. Attempt each variant until one returns
-  // a successful (<400) status. Capture the last failure status for
-  // reporting.
-  const candidates = [];
-  candidates.push(baseUrl);
-  // Only add a trailing variant if it's not already present
-  if (!/\/(messages|thread)(\/)?$/i.test(baseUrl)) {
-    candidates.push(baseUrl.replace(/\/$/, "") + "/messages");
-    candidates.push(baseUrl.replace(/\/$/, "") + "/thread");
-  }
-  let response = null;
-  let lastStatus = 0;
-  for (const url of candidates) {
-    const res = await jf(url, { method: MESSAGES_METHOD, headers });
-    lastStatus = res.status;
-    if (res.status < 400) {
-      response = res;
-      break;
-    }
-  }
-  if (!response) {
-    throw new Error(`Messages fetch failed: ${lastStatus}`);
-  }
+  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
+  if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
 
   // 3) Parse and evaluate
-  const data = await response.json();
+  const data = await res.json();
   const msgs = normalizeMessages(data);
   const result = evaluate(msgs);
   console.log("Second check result:", JSON.stringify(result, null, 2));
