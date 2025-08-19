@@ -34,7 +34,6 @@ const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLower
 // --- Inputs / defaults ---
 let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
 if (!CONVERSATION_INPUT) {
-  // If triggered via repository_dispatch, try to read the payload
   const eventName = process.env.GITHUB_EVENT_NAME;
   const eventPath = process.env.GITHUB_EVENT_PATH;
   if (eventName === "repository_dispatch" && eventPath && fs.existsSync(eventPath)) {
@@ -82,7 +81,7 @@ function expandTrackedUrl(urlStr) {
   try {
     const u = new URL(urlStr);
 
-    // 1) If any path segment looks like base64, try to decode to a URL
+    // 1) Try base64-ish path segments
     const segs = u.pathname.split("/").filter(Boolean);
     for (let i = segs.length - 1; i >= 0; i--) {
       const seg = decodeURIComponent(segs[i]);
@@ -92,7 +91,7 @@ function expandTrackedUrl(urlStr) {
       }
     }
 
-    // 2) Common trackers pass ?url=<base64> (or a direct URL)
+    // 2) Query params containing URL or base64 URL
     for (const [, v] of u.searchParams.entries()) {
       const val = decodeURIComponent(v);
       if (/^https?:\/\//i.test(val)) return val;
@@ -101,10 +100,7 @@ function expandTrackedUrl(urlStr) {
         if (/^https?:\/\//i.test(dec)) return dec;
       }
     }
-  } catch {
-    // fall through – just return what we got
-  }
-
+  } catch {}
   return out;
 }
 
@@ -113,11 +109,11 @@ function extractConversationId(input) {
   const s = (input || "").trim();
   if (!s) return "";
 
-  // 1) exact UUID in the whole string
+  // exact UUID in the whole string
   const direct = s.match(UUID_RE);
   if (direct && direct[0] && s.length === direct[0].length) return direct[0];
 
-  // 2) examine a URL (unwrap trackers first)
+  // examine a URL (unwrap trackers first)
   const rawUrl = firstUrlLike(s);
   const urlStr = expandTrackedUrl(rawUrl);
   if (urlStr) {
@@ -126,8 +122,6 @@ function extractConversationId(input) {
       const parts = u.pathname.split("/").filter(Boolean);
       const fromPath = parts.find(x => UUID_RE.test(x));
       if (fromPath) return fromPath.match(UUID_RE)[0];
-
-      // Also check query parameters just in case
       for (const [, v] of u.searchParams.entries()) {
         const m = String(v).match(UUID_RE);
         if (m) return m[0];
@@ -135,11 +129,11 @@ function extractConversationId(input) {
     } catch {}
   }
 
-  // 3) look for an /api/conversations/<uuid> pattern anywhere
+  // /api/conversations/<uuid>
   const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
   if (fromApi) return fromApi[1];
 
-  // 4) last resort: any UUID anywhere in the text
+  // last resort
   return direct ? direct[0] : "";
 }
 
@@ -148,7 +142,6 @@ function buildConversationLink() {
   const input = (CONVERSATION_INPUT || "").trim();
   const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
 
-  // If there's a URL in the input, unwrap trackers and present the clean URL (trim at uuid)
   if (/^https?:\/\//i.test(input)) {
     try {
       const expanded = expandTrackedUrl(firstUrlLike(input));
@@ -166,7 +159,6 @@ function buildConversationLink() {
     } catch {}
   }
 
-  // Else, compose from the template + id
   if (id && MESSAGES_URL_TMPL) {
     try {
       const urlStr = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
@@ -266,6 +258,7 @@ async function login() {
   return token;
 }
 
+// --- normalize messages from various shapes ---
 function normalizeMessages(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.messages)) return data.messages;
@@ -277,55 +270,103 @@ function normalizeMessages(data) {
   // Fallback search
   const candidates = [];
   (function crawl(v){
-    if (!v || typeof v!=="object") return;
-    if (Array.isArray(v) && v.some(x => x && typeof x==="object" && ("by" in x || "sent_at" in x || "text" in x || "body" in x))) {
-      candidates.push(v); return;
+    if (v == null) return;
+    if (Array.isArray(v)) {
+      // prefer arrays of objects, but accept primitives if nothing else is found
+      if (v.some(x => x && typeof x === "object")) candidates.push(v);
+      return;
     }
-    for (const k of Object.keys(v)) crawl(v[k]);
+    if (typeof v === "object") {
+      for (const k of Object.keys(v)) crawl(v[k]);
+    }
   })(data);
-  if (candidates.length) return candidates[0];
 
+  if (candidates.length) return candidates[0];
   return [];
 }
 
+// --- robust role detection (handles numeric-only messages) ---
 function whoSent(m) {
-  const moduleVal = (m.module || "").toString().toLowerCase();
-  const msgType   = (m.msg_type || "").toString().toLowerCase();
+  if (!m || typeof m !== "object") return "guest";
+
+  const str = (x) => String(x ?? "").toLowerCase();
+
+  // treat explicit notes as internal
+  const moduleVal = str(m.module);
+  const msgType   = str(m.msg_type || m.message_type);
   if (moduleVal === "note" || msgType === "note") return "internal";
 
-  const by = (m.by || m.senderType || m.author?.role || "").toString().toLowerCase();
-  const isAI = !!m.generated_by_ai;
+  // compile role-ish hints
+  const roles = [
+    m.role, m.by, m.senderType, m.sender_type,
+    m.author?.role, m.author_role,
+    m.from_role, m.fromType, m.from_type,
+    m.user_role, m.owner_type, m.type
+  ].map(str);
 
-  if (by === "guest") return "guest";
-  if (by === "host") {
-    if (!isAI) return "agent";
-    const status = (m.ai_status || "").toString().toLowerCase();
-    if (["approved","sent","delivered"].includes(status)) return "agent";
-    return "ai";
+  if (roles.some(r => /(agent|host|staff|operator|admin|support|team)/.test(r))) return "agent";
+  if (roles.some(r => /(guest|customer|visitor|client|user)/.test(r))) return "guest";
+
+  // direction hints
+  const dir = str(m.direction || m.message_direction || m.dir);
+  if (/(outbound|out|sent)/.test(dir)) return "agent";
+  if (/(inbound|in)/.test(dir)) return "guest";
+
+  // boolean/id hints
+  const agentish = [
+    m.is_agent, m.is_staff, m.from_agent, m.sent_by_agent, m.approved_by_agent,
+    m.agent_id, m.staff_id, m.operator_id, m.assignee, m.assigned_to
+  ].some(Boolean);
+  if (agentish) return "agent";
+
+  const guestish = [m.is_guest, m.from_guest, m.guest_id, m.customer_id && !m.agent_id].some(Boolean);
+  if (guestish) return "guest";
+
+  // AI messages: approved/sent counts as agent; otherwise depends on COUNT_AI_SUGGESTION_AS_AGENT
+  const aiStatus = str(m.ai_status || m.aiStatus || m.status);
+  const isAI = !!(m.generated_by_ai || m.ai || m.is_ai);
+  if (isAI) {
+    if (["approved","sent","delivered","published"].includes(aiStatus)) return "agent";
+    return COUNT_AI_AS_AGENT ? "agent" : "ai";
   }
 
-  const dir = (m.direction || "").toString().toLowerCase();
-  if (dir === "inbound") return "guest";
-  if (dir === "outbound") return "agent";
-
-  return "guest"; // conservative default
+  // default conservative
+  return "guest";
 }
 
+// --- parse timestamps from many shapes (string or ms) ---
 function tsOf(m) {
-  const t = m.sent_at || m.createdAt || m.timestamp || m.ts || m.time || null;
-  const d = t ? new Date(t) : null;
-  return d && !isNaN(+d) ? d : null;
+  const cand = [
+    m.sent_at, m.createdAt, m.created_at, m.updatedAt, m.updated_at,
+    m.date, m.datetime, m.timestamp, m.timestamp_ms, m.ts, m.time
+  ].find(v => v !== undefined && v !== null);
+
+  if (cand === undefined || cand === null) return null;
+
+  // number-like? treat as ms if large, else seconds
+  if (typeof cand === "number") {
+    const ms = cand > 1e12 ? cand : cand * 1000;
+    const d = new Date(ms);
+    return isNaN(+d) ? null : d;
+  }
+
+  // string: try Date parsing
+  const d = new Date(String(cand));
+  return isNaN(+d) ? null : d;
 }
 
 function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
-  const list = (messages || []).filter(Boolean).filter(m => {
-    const moduleVal = (m.module || "").toString().toLowerCase();
-    const msgType   = (m.msg_type || "").toString().toLowerCase();
-    return moduleVal !== "note" && msgType !== "note";
-  }).map(x => ({...x, _ts: tsOf(x)}));
+  const list = (messages || [])
+    .filter(Boolean)
+    .filter(m => {
+      const moduleVal = String(m?.module ?? "").toLowerCase();
+      const msgType   = String(m?.msg_type ?? m?.message_type ?? "").toLowerCase();
+      return moduleVal !== "note" && msgType !== "note";
+    })
+    .map(x => ({...x, _ts: tsOf(x)}));
 
   if (!list.length) return { ok: true, reason: "empty" };
-  list.sort((a,b) => (a._ts?.getTime()||0) - (b._ts?.getTime()||0));
+  list.sort((a,b) => (a._ts?.getTime?.()||0) - (b._ts?.getTime?.()||0));
   const last = list[list.length-1];
   const lastSender = whoSent(last);
 
@@ -336,7 +377,7 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     if (role === "ai" && COUNT_AI_AS_AGENT) { lastAgent = list[i]; break; }
   }
 
-  const minsSinceAgent = lastAgent? Math.round((now - lastAgent._ts)/60000) : null;
+  const minsSinceAgent = lastAgent? Math.round((now - (lastAgent._ts || now))/60000) : null;
 
   if (lastSender === "guest" && (lastAgent === null || minsSinceAgent === null || minsSinceAgent >= slaMin)) {
     return { ok: false, reason: "guest_unanswered", minsSinceAgent };
@@ -364,10 +405,7 @@ async function sendEmail(subject, html) {
 
   // 2) Build messages URL from UI URL / API URL / UUID / default
   const id = extractConversationId(CONVERSATION_INPUT) || DEFAULT_CONVO_ID;
-  if (!id) {
-    // This is the line you highlighted: it fails fast when we have no way to target a conversation.
-    throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
-  }
+  if (!id) throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
   if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
 
   const headers = token ? { authorization: `Bearer ${token}` } : {};
