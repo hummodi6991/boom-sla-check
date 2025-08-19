@@ -2,11 +2,8 @@
 name: Boom SLA Check
 
 on:
-  # Triggered by Power Automate: use the same event type string there
   repository_dispatch:
-    types: [boom-sla-trigger]
-
-  # Optional: keep manual button in GitHub
+    types: [boom-sla-trigger]   # Triggered by Power Automate
   workflow_dispatch:
     inputs:
       conversation:
@@ -20,7 +17,7 @@ jobs:
       contents: read
 
     env:
-      # Secrets (credentials)
+      # Secrets
       BOOM_USER:  ${{ secrets.BOOM_USER }}
       BOOM_PASS:  ${{ secrets.BOOM_PASS }}
       SMTP_HOST:  ${{ secrets.SMTP_HOST }}
@@ -28,7 +25,7 @@ jobs:
       SMTP_USER:  ${{ secrets.SMTP_USER }}
       SMTP_PASS:  ${{ secrets.SMTP_PASS }}
 
-      # Non-secrets / repo variables
+      # Repo variables
       ALERT_TO:   ${{ vars.ALERT_TO }}
       ALERT_FROM_NAME: ${{ vars.ALERT_FROM_NAME }}
 
@@ -49,7 +46,7 @@ jobs:
 
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
-      # Accept payload from either repository_dispatch or workflow_dispatch
+      # Accept the conversation from either trigger type
       CONVERSATION_INPUT: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.conversation || github.event.inputs.conversation }}
 
     steps:
@@ -60,9 +57,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
+      # If you don't have package-lock.json, npm ci will fail.
       - name: Install deps
-        run: npm ci --omit=dev
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "Lockfile found -> npm ci"
+            npm ci --omit=dev
+          else
+            echo "No lockfile -> npm install"
+            npm install --omit=dev
+          fi
 
       - name: Run SLA check
         run: node check.mjs
