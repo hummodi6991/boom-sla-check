@@ -1,7 +1,6 @@
 name: Boom SLA (API, REST)
 
 on:
-  # run on a schedule and on manual dispatch with an optional conversation input
   schedule:
     - cron: "*/5 * * * *"     # every 5 minutes
   workflow_dispatch:
@@ -15,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 6
     env:
-      # --- Your existing secrets (unchanged) ---
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -25,29 +23,23 @@ jobs:
       ALERT_TO:  ${{ secrets.ALERT_TO }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
 
-      # --- Login mechanics you provided ---
       LOGIN_URL: "https://app.boomnow.com/api/login"
       LOGIN_METHOD: "POST"
       LOGIN_CT: "application/json"
       LOGIN_EMAIL_FIELD: "email"
       LOGIN_PASSWORD_FIELD: "password"
-      LOGIN_TENANT_FIELD: "tenant_id"        # Boom expects tenant_id (we’ll send null)
-      CSRF_HEADER_NAME: ""                   # not needed
-      CSRF_COOKIE_NAME: ""                   # not needed
+      LOGIN_TENANT_FIELD: "tenant_id"
+      CSRF_HEADER_NAME: ""
+      CSRF_COOKIE_NAME: ""
 
-      # --- Messages (REST) ---
       API_KIND: "rest"
       MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
       MESSAGES_METHOD: "GET"
 
-      # SLA + options
       SLA_MINUTES: "5"
       COUNT_AI_SUGGESTION_AS_AGENT: "false"
 
-      # Manual input (may be empty on schedule)
       CONVERSATION_INPUT: ${{ github.event.inputs.conversation }}
-
-      # Optional repo variable for scheduled runs (Settings → Variables → Repository Variables)
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
     steps:
@@ -58,9 +50,12 @@ jobs:
           node-version: "20"
 
       - name: Install deps
-        run: npm i nodemailer@6
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm i
+          fi
 
       - name: Run SLA checker
-        # run the check script from the boom-sla-check directory
-        working-directory: boom-sla-check
         run: node check.mjs
