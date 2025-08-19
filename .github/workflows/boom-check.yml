@@ -2,8 +2,11 @@
 name: Boom SLA Check
 
 on:
+  # Triggered by Power Automate
   repository_dispatch:
-    types: [boom-sla-trigger]   # Triggered by Power Automate
+    types: [boom-sla-trigger]
+
+  # Optional manual trigger from GitHub UI
   workflow_dispatch:
     inputs:
       conversation:
@@ -46,23 +49,22 @@ jobs:
 
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
-      # Accept the conversation from either trigger type
+      # Accept conversation from either trigger type
       CONVERSATION_INPUT: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.conversation || github.event.inputs.conversation }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # No caching here (avoids lockfile error)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
-      # If you don't have package-lock.json, npm ci will fail.
       - name: Install deps
         run: |
-          if [ -f package-lock.json ]; then
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ] || [ -f yarn.lock ]; then
             echo "Lockfile found -> npm ci"
             npm ci --omit=dev
           else
