@@ -1,76 +1,59 @@
-# .github/workflows/boom-check.yml
-name: Boom SLA Check
-
+name: Boom SLA (API, REST)
 on:
-  # Triggered by Power Automate
-  repository_dispatch:
-    types: [boom-sla-trigger]
-
-  # Optional manual trigger from GitHub UI
+  # Keep the existing 5‑minute schedule so the checker still runs regularly
+  schedule:
+    - cron: "*/5 * * * *"     # every 5 minutes
+  # Allow manual runs from the Actions UI with an optional conversation input
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID is set."
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
         required: false
+  # Accept repository_dispatch events from Power Automate.  Any event_type will be honoured.
+  repository_dispatch:
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
+    timeout-minutes: 6
     env:
-      # Secrets
-      BOOM_USER:  ${{ secrets.BOOM_USER }}
-      BOOM_PASS:  ${{ secrets.BOOM_PASS }}
-      SMTP_HOST:  ${{ secrets.SMTP_HOST }}
-      SMTP_PORT:  ${{ secrets.SMTP_PORT }}
-      SMTP_USER:  ${{ secrets.SMTP_USER }}
-      SMTP_PASS:  ${{ secrets.SMTP_PASS }}
-
-      # Repo variables
-      ALERT_TO:   ${{ vars.ALERT_TO }}
-      ALERT_FROM_NAME: ${{ vars.ALERT_FROM_NAME }}
-
-      LOGIN_URL:  ${{ vars.LOGIN_URL }}
-      LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
-      LOGIN_CT:   ${{ vars.LOGIN_CT }}
-      LOGIN_EMAIL_FIELD: ${{ vars.LOGIN_EMAIL_FIELD }}
-      LOGIN_PASSWORD_FIELD: ${{ vars.LOGIN_PASSWORD_FIELD }}
-      LOGIN_TENANT_FIELD: ${{ vars.LOGIN_TENANT_FIELD }}
-      CSRF_HEADER_NAME: ${{ vars.CSRF_HEADER_NAME }}
-      CSRF_COOKIE_NAME: ${{ vars.CSRF_COOKIE_NAME }}
-
-      API_KIND:   ${{ vars.API_KIND }}
-      MESSAGES_URL: ${{ vars.MESSAGES_URL }}
-      MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
-      SLA_MINUTES: ${{ vars.SLA_MINUTES }}
-      COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
-
+      BOOM_USER: ${{ secrets.BOOM_USER }}
+      BOOM_PASS: ${{ secrets.BOOM_PASS }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      ALERT_TO:  ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      LOGIN_URL: "https://app.boomnow.com/api/login"
+      LOGIN_METHOD: "POST"
+      LOGIN_CT: "application/json"
+      LOGIN_EMAIL_FIELD: "email"
+      LOGIN_PASSWORD_FIELD: "password"
+      LOGIN_TENANT_FIELD: "tenant_id"
+      CSRF_HEADER_NAME: ""
+      CSRF_COOKIE_NAME: ""
+      API_KIND: "rest"
+      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
+      MESSAGES_METHOD: "GET"
+      SLA_MINUTES: "5"
+      COUNT_AI_SUGGESTION_AS_AGENT: "false"
+      # Pull the conversation from either workflow dispatch inputs or repository_dispatch client_payload.
+      # Power Automate's repository dispatch can attach a `conversation` or `conversationUrl` field under client_payload;
+      # if none are present this will evaluate to an empty string and the checker will fall back to the default conversation ID.
+      CONVERSATION_INPUT: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || github.event.client_payload.conversationUrl || github.event.client_payload.conversation_url }}
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
-
-      # Accept conversation from either trigger type
-      CONVERSATION_INPUT: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.conversation || github.event.inputs.conversation }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # No caching here (avoids lockfile error)
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
-
+          node-version: "20"
       - name: Install deps
         run: |
-          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ] || [ -f yarn.lock ]; then
-            echo "Lockfile found -> npm ci"
-            npm ci --omit=dev
+          if [ -f package-lock.json ]; then
+            npm ci
           else
-            echo "No lockfile -> npm install"
-            npm install --omit=dev
+            npm i
           fi
-
-      - name: Run SLA check
+      - name: Run SLA checker
         run: node check.mjs
