@@ -1,10 +1,13 @@
-name: Boom SLA (API, REST) — Manual Only
+name: Boom SLA (API, REST)
 
 on:
+  # run on a schedule and on manual dispatch with an optional conversation input
+  schedule:
+    - cron: "*/5 * * * *"     # every 5 minutes
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID is set."
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
         required: false
 
 jobs:
@@ -12,54 +15,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 6
     env:
-      # -------- Credentials / Auth (secrets & vars) --------
+      # --- Your existing secrets (unchanged) ---
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
-      LOGIN_URL: ${{ vars.LOGIN_URL }}
-      LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
-      LOGIN_CT: ${{ vars.LOGIN_CT }}
-      LOGIN_EMAIL_FIELD: ${{ vars.LOGIN_EMAIL_FIELD }}
-      LOGIN_PASSWORD_FIELD: ${{ vars.LOGIN_PASSWORD_FIELD }}
-     
-
-      # Optional direct bearer auth (skip login if set)
-      API_BEARER: ${{ secrets.API_BEARER }}
-
-      # Optional CSRF
-      CSRF_HEADER_NAME: ${{ vars.CSRF_HEADER_NAME }}
-      CSRF_COOKIE_NAME: ${{ vars.CSRF_COOKIE_NAME }}
-
-      # -------- Messages API --------
-      MESSAGES_URL: ${{ vars.MESSAGES_URL }}
-      MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
-      # Optional extra headers as JSON, e.g. {"x-tenant":"acme"}
-      MESSAGES_HEADERS_JSON: ${{ vars.MESSAGES_HEADERS_JSON }}
-      # Optional path to messages array in JSON (e.g., data.records)
-      MESSAGES_PATH: ${{ vars.MESSAGES_PATH }}
-      # Optional extra timestamp fields (comma-separated)
-      EXTRA_TS_FIELDS: ${{ vars.EXTRA_TS_FIELDS }}
-
-      # -------- SLA & AI handling --------
-      SLA_MINUTES: ${{ vars.SLA_MINUTES }}
-      COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
-
-      # -------- Email (secrets & vars) --------
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
       SMTP_PORT: ${{ secrets.SMTP_PORT }}
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      ALERT_TO: ${{ vars.ALERT_TO }}
-      ALERT_FROM_NAME: ${{ vars.ALERT_FROM_NAME }}
+      ALERT_TO:  ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
 
-      # -------- Links --------
-      UI_URL_TEMPLATE: ${{ vars.UI_URL_TEMPLATE }}
+      # --- Login mechanics you provided ---
+      LOGIN_URL: "https://app.boomnow.com/api/login"
+      LOGIN_METHOD: "POST"
+      LOGIN_CT: "application/json"
+      LOGIN_EMAIL_FIELD: "email"
+      LOGIN_PASSWORD_FIELD: "password"
+      LOGIN_TENANT_FIELD: "tenant_id"        # Boom expects tenant_id (we’ll send null)
+      CSRF_HEADER_NAME: ""                   # not needed
+      CSRF_COOKIE_NAME: ""                   # not needed
 
-      # -------- Inputs --------
+      # --- Messages (REST) ---
+      API_KIND: "rest"
+      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
+      MESSAGES_METHOD: "GET"
+
+      # SLA + options
+      SLA_MINUTES: "5"
+      COUNT_AI_SUGGESTION_AS_AGENT: "false"
+
+      # Manual input (may be empty on schedule)
       CONVERSATION_INPUT: ${{ github.event.inputs.conversation }}
-      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
-      # Optional debug logs: set to "1"
-      DEBUG: ${{ vars.DEBUG }}
+      # Optional repo variable for scheduled runs (Settings → Variables → Repository Variables)
+      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -72,4 +61,6 @@ jobs:
         run: npm i nodemailer@6
 
       - name: Run SLA checker
+        # run the check script from the boom-sla-check directory
+        working-directory: boom-sla-check
         run: node check.mjs
