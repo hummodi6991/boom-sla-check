@@ -86,27 +86,6 @@ function extractConversationId(input) {
     } catch {}
   }
 
-  // 3b) Some notification emails wrap the BoomNow link in a tracking URL,
-  // embedding the actual URL as a base64-encoded path segment. Attempt to
-  // decode any base64-looking substrings and recursively extract the UUID.
-  try {
-    const tokens = s.split(/[^A-Za-z0-9+/=]/).filter(tok => tok.length > 16);
-    for (const t of tokens) {
-      // heuristically skip obviously non-base64 tokens
-      if (!/[A-Za-z0-9+/=]{8,}/.test(t)) continue;
-      try {
-        const buf = Buffer.from(t, "base64");
-        const decoded = buf.toString("utf8");
-        if (decoded && decoded.includes("boomnow.com")) {
-          const inner = extractConversationId(decoded);
-          if (inner) return inner;
-        }
-      } catch {
-        // ignore invalid base64
-      }
-    }
-  } catch {}
-
   // 4) last resort: any UUID anywhere in the text
   return direct ? direct[0] : "";
 }
