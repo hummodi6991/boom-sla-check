@@ -32,6 +32,62 @@ const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLower
 // Inputs / defaults
 const CONVERSATION_INPUT   = env("CONVERSATION_INPUT","");        // UI URL / API URL / UUID
 const DEFAULT_CONVO_ID     = env("DEFAULT_CONVERSATION_ID","");   // repo variable fallback
+// Build a UI link to the conversation.  When a full URL is supplied via
+// CONVERSATION_INPUT the function returns a cleaned version of that URL,
+// stripping any `/api` prefix and trailing segments after the conversation UUID.
+// Otherwise it uses the conversation ID with the MESSAGES_URL_TMPL to derive
+// a sensible link.  If no link can be formed an empty string is returned.
+function buildConversationLink() {
+  const input = (CONVERSATION_INPUT || "").trim();
+  const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
+  // If the input begins with http/https treat it as a URL
+  if (/^https?:\/\//i.test(input)) {
+    try {
+      const u = new URL(input);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
+      if (uuidIndex >= 0) {
+        const slice = parts.slice(0, uuidIndex + 1);
+        // drop leading api if present
+        const filtered = [];
+        for (let i = 0; i < slice.length; i++) {
+          const part = slice[i];
+          if (i === 0 && part.toLowerCase() === "api") continue;
+          filtered.push(part);
+        }
+        u.pathname = "/" + filtered.join("/");
+        return u.toString();
+      }
+      return u.toString();
+    } catch (e) {
+      // ignore parse errors
+    }
+  }
+  // If we have an id and a MESSAGES_URL_TMPL, derive a link
+  if (id && MESSAGES_URL_TMPL) {
+    try {
+      const urlStr = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
+      const u = new URL(urlStr);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
+      if (uuidIndex >= 0) {
+        const slice = parts.slice(0, uuidIndex + 1);
+        const filtered = [];
+        for (let i = 0; i < slice.length; i++) {
+          const part = slice[i];
+          if (i === 0 && part.toLowerCase() === "api") continue;
+          filtered.push(part);
+        }
+        u.pathname = "/" + filtered.join("/");
+        return u.toString();
+      }
+      return u.origin;
+    } catch (e) {
+      // ignore
+    }
+  }
+  return id ? id.toString() : "";
+}
 
 // --- tiny cookie jar ---
 class Jar {
@@ -258,9 +314,13 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
-    await sendEmail(subj, `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>`);
-    console.log("✅ Alert email sent.");
+    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
+    const convoLink = buildConversationLink();
+    const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const linkHtml = convoLink ? `<p>Conversation: <a href="${escapeHtml(convoLink)}">${escapeHtml(convoLink)}</a></p>` : "";
+    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    await sendEmail(subj, bodyHtml);
+    console.log("â Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
