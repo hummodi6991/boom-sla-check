@@ -1,20 +1,22 @@
 name: Boom SLA (API, REST)
-
 on:
+  # Keep the existing 5‑minute schedule so the checker still runs regularly
   schedule:
     - cron: "*/5 * * * *"     # every 5 minutes
+  # Allow manual runs from the Actions UI with an optional conversation input
   workflow_dispatch:
     inputs:
       conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID is set."
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
         required: false
+  # Accept repository_dispatch events from Power Automate.  Any event_type will be honoured.
   repository_dispatch:
 
 jobs:
-  run:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 6
     env:
-      # Secrets for Boom login and SMTP
       BOOM_USER: ${{ secrets.BOOM_USER }}
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
       SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -23,30 +25,24 @@ jobs:
       SMTP_PASS: ${{ secrets.SMTP_PASS }}
       ALERT_TO:  ${{ secrets.ALERT_TO }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
-
-      # Boom auth & API
       LOGIN_URL: "https://app.boomnow.com/api/login"
       LOGIN_METHOD: "POST"
       LOGIN_CT: "application/json"
       LOGIN_EMAIL_FIELD: "email"
       LOGIN_PASSWORD_FIELD: "password"
-      LOGIN_TENANT_FIELD: ""      # set if your tenant login requires it
+      LOGIN_TENANT_FIELD: "tenant_id"
       CSRF_HEADER_NAME: ""
       CSRF_COOKIE_NAME: ""
-
       API_KIND: "rest"
       MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
       MESSAGES_METHOD: "GET"
-
-      # SLA configuration
       SLA_MINUTES: "5"
-      SLA_GRACE_SECONDS: "90"           # <-- new: buffer to avoid jitter false alerts
       COUNT_AI_SUGGESTION_AS_AGENT: "false"
-
-      # Input from dispatch/manual
-      CONVERSATION_INPUT: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || github.event.client_payload.conversationUrl || github.event.client_payload.conversation_url || github.event.client_payload.url || github.event.client_payload.text || github.event.client_payload.body }}
+      # Pull the conversation from either workflow dispatch inputs or repository_dispatch client_payload.
+      # Power Automate's repository dispatch can attach a `conversation` or `conversationUrl` field under client_payload;
+      # if none are present this will evaluate to an empty string and the checker will fall back to the default conversation ID.
+      CONVERSATION_INPUT: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || github.event.client_payload.conversationUrl || github.event.client_payload.conversation_url }}
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
