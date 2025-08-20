@@ -59,17 +59,17 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 /**
  * Attempt to decode a string that may be Base64 encoded. Many email
  * tracking links include the destination URL as the final path segment
- * using URLÃÂ¢ÃÂÃÂsafe Base64 encoding. This helper normalises the input and
+ * using URLÃÂÃÂ¢ÃÂÃÂÃÂÃÂsafe Base64 encoding. This helper normalises the input and
  * pads it to a multiple of 4 before decoding. If the decoded string
- * contains nonÃÂ¢ÃÂÃÂprintable characters or cannot be decoded it returns
+ * contains nonÃÂÃÂ¢ÃÂÃÂÃÂÃÂprintable characters or cannot be decoded it returns
  * null.
  *
  * @param {string} str The candidate string to decode
- * @returns {string|null} Decoded UTFÃÂ¢ÃÂÃÂ8 string or null if decoding fails
+ * @returns {string|null} Decoded UTFÃÂÃÂ¢ÃÂÃÂÃÂÃÂ8 string or null if decoding fails
  */
 function tryDecode(str) {
   if (!str || typeof str !== "string") return null;
-  // Replace URLÃÂ¢ÃÂÃÂsafe characters
+  // Replace URLÃÂÃÂ¢ÃÂÃÂÃÂÃÂsafe characters
   let s = str.replace(/-/g, "+").replace(/_/g, "/");
   // Pad to length divisible by 4
   const pad = s.length % 4;
@@ -400,7 +400,7 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // with a role classification for each message, ignoring items that
   // lack a valid timestamp. Messages marked as "internal" are always
   // skipped. AI suggestions that are not approved (and when
-  // COUNT_AI_AS_AGENT is false) are treated like internal notes â
+  // COUNT_AI_AS_AGENT is false) are treated like internal notes Ã¢ÂÂ
   // they neither start nor end an SLA window.
   const list = (messages || [])
     .filter(Boolean)
@@ -466,6 +466,17 @@ async function sendEmail(subject, html) {
 }
 
 (async () => {
+  // Skip GitHub Actions "schedule" events.  The workflow that invokes this
+  // script on a cron (e.g. every 5 minutes) causes redundant alerts.  By
+  // checking the GITHUB_EVENT_NAME environment variable we can abort
+  // execution early during scheduled runs while still allowing manual
+  // invocations (e.g. repository_dispatch) to proceed.  This prevents
+  // multiple alerts from being generated on a fixed interval.
+  const eventName = process.env.GITHUB_EVENT_NAME || "";
+  if (eventName.toLowerCase() === "schedule") {
+    console.log("Scheduled run detected; skipping check.");
+    return;
+  }
   // 1) Login
   const token = await login();
 
@@ -487,13 +498,21 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `ÃÂ¢ÃÂÃÂ ÃÂ¯ÃÂ¸ÃÂ Boom SLA: guest unanswered ÃÂ¢ÃÂÃÂ¥ ${SLA_MINUTES}m`;
+    // Compose a clean subject/body without garbled UTF-8 sequences.  The
+    // original code contained incorrectly encoded characters (e.g. "ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ ÃÂÃÂ¯ÃÂÃÂ¸ÃÂÃÂ" and
+    // "ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ¥") which manifested as "Ã" symbols in emails.  Use proper
+    // Unicode or ASCII equivalents instead.  We include a warning emoji
+    // (â ï¸) and the greaterâthanâorâequal sign (â¥) directly in the
+    // template literal; Node treats this file as UTFâ8.
+    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
-    const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered ÃÂ¢ÃÂÃÂ¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    // Likewise, use a properly encoded â¥ sign in the body.  HTML
+    // content is otherwise unchanged.
+    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("ÃÂ¢ÃÂÃÂ Alert email sent.");
+    console.log("â Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
