@@ -59,17 +59,17 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 /**
  * Attempt to decode a string that may be Base64 encoded. Many email
  * tracking links include the destination URL as the final path segment
- * using URLâsafe Base64 encoding. This helper normalises the input and
+ * using URLÃ¢ÂÂsafe Base64 encoding. This helper normalises the input and
  * pads it to a multiple of 4 before decoding. If the decoded string
- * contains nonâprintable characters or cannot be decoded it returns
+ * contains nonÃ¢ÂÂprintable characters or cannot be decoded it returns
  * null.
  *
  * @param {string} str The candidate string to decode
- * @returns {string|null} Decoded UTFâ8 string or null if decoding fails
+ * @returns {string|null} Decoded UTFÃ¢ÂÂ8 string or null if decoding fails
  */
 function tryDecode(str) {
   if (!str || typeof str !== "string") return null;
-  // Replace URLâsafe characters
+  // Replace URLÃ¢ÂÂsafe characters
   let s = str.replace(/-/g, "+").replace(/_/g, "/");
   // Pad to length divisible by 4
   const pad = s.length % 4;
@@ -399,13 +399,13 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
+    const subj = `Ã¢ÂÂ Ã¯Â¸Â Boom SLA: guest unanswered Ã¢ÂÂ¥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const bodyHtml = `<p>Guest appears unanswered Ã¢ÂÂ¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("â Alert email sent.");
+    console.log("Ã¢ÂÂ Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
