@@ -1,3 +1,4 @@
+
 name: Boom SLA (API, REST)
 on:
   # Keep the existing 5‑minute schedule so the checker still runs regularly
