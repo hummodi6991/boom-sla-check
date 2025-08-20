@@ -331,9 +331,30 @@ function whoSent(m) {
 }
 
 function tsOf(m) {
-  const t = m.sent_at || m.createdAt || m.timestamp || m.ts || m.time || null;
-  const d = t ? new Date(t) : null;
-  return d && !isNaN(+d) ? d : null;
+  /**
+   * Extract a Date object from a message. Different backends use a variety of
+   * timestamp property names. Attempt them in order of likelihood. If none
+   * match or parsing fails, return null.
+   */
+  const candidates = [
+    m.sent_at,
+    m.sentAt,
+    m.created_at,
+    m.createdAt,
+    m.timestamp,
+    m.ts,
+    m.time,
+    m.date,
+    m.created,
+    m.updated_at,
+    m.updatedAt
+  ];
+  for (const t of candidates) {
+    if (!t) continue;
+    const d = new Date(t);
+    if (!isNaN(+d)) return d;
+  }
+  return null;
 }
 
 /**
@@ -380,16 +401,22 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   for (let i = list.length - 1; i >= 0; i--) {
     const msg = list[i];
     const role = whoSent(msg);
-    if (!msg._ts || isNaN(+msg._ts)) continue;
 
     // Treat approved AI suggestions as agent messages when COUNT_AI_AS_AGENT is true
     if (role === "agent" || (role === "ai" && COUNT_AI_AS_AGENT)) {
       return { ok: true, reason: "no_breach" };
     }
+
     // If the message is from the guest or an AI suggestion that isn't
     // counted as an agent response, evaluate how long it has been waiting.
     if (role === "guest" || role === "ai") {
-      const minsSince = Math.round((now - msg._ts) / 60000);
+      let minsSince;
+      if (msg._ts && !isNaN(+msg._ts)) {
+        minsSince = Math.round((now - msg._ts) / 60000);
+      } else {
+        // Missing or unparseable timestamp; treat as very old to trigger a breach
+        minsSince = Number.POSITIVE_INFINITY;
+      }
       if (minsSince >= slaMin || minsSince < 0 || isNaN(minsSince)) {
         return { ok: false, reason: "guest_unanswered", minsSinceGuest: minsSince };
       }
