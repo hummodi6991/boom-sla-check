@@ -321,9 +321,17 @@ function whoSent(m) {
   // Normalise some common fields
   const moduleVal = (m.module || m.module_type || "").toString().toLowerCase();
   const msgType   = (m.msg_type || m.type || "").toString().toLowerCase();
-  const by        = (m.by || m.senderType || m.author?.role || m.author_role || "").toString().toLowerCase();
+  // Pull the apparent author role from a variety of common fields. The
+  // API uses different property names such as by, senderType, author.role,
+  // author_role or just role. Include role as a last resort to avoid
+  // misclassifying agent messages as guest messages when the only
+  // indicator is a `role` field.
+  const by        = (m.by || m.senderType || m.author?.role || m.author_role || m.role || "").toString().toLowerCase();
   const dir       = (m.direction || m.message_direction || "").toString().toLowerCase();
-  const isAI      = Boolean(m.generated_by_ai || m.ai_generated || m.is_ai_generated);
+  const isAI      = Boolean(
+    m.generated_by_ai || m.ai_generated || m.is_ai_generated ||
+    m.generatedByAI || m.generatedByAi || m.aiGenerated || m.ai_generated_by
+  );
 
   // Identify obvious system/internal notes. If module/type indicates a note
   // *and* there is no clear direction or author, treat as internal.
@@ -387,51 +395,60 @@ function tsOf(m) {
 }
 
 function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
-  // Map all messages to include parsed timestamps. We no longer filter out
-  // note/system messages at this stage because some AI replies are
-  // represented as notes. Instead, downstream logic skips "internal" notes.
+  // Determine whether the latest guest message has gone unanswered for
+  // at least `slaMin` minutes. We build a chronologically sorted list
+  // with a role classification for each message, ignoring items that
+  // lack a valid timestamp. Messages marked as "internal" are always
+  // skipped. AI suggestions that are not approved (and when
+  // COUNT_AI_AS_AGENT is false) are treated like internal notes â
+  // they neither start nor end an SLA window.
   const list = (messages || [])
     .filter(Boolean)
-    .map(x => ({ ...x, _ts: tsOf(x) }))
-    .filter(x => x._ts instanceof Date); // drop items without a valid timestamp
+    .map(m => {
+      const ts = tsOf(m);
+      return ts instanceof Date ? { m, ts, role: whoSent(m) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.ts?.getTime() || 0) - (b.ts?.getTime() || 0));
 
   if (!list.length) return { ok: true, reason: "empty" };
 
-  // Sort by sent time ascending
-  list.sort((a, b) => (a._ts?.getTime() || 0) - (b._ts?.getTime() || 0));
-
-  // Find the most recent non-internal message to establish who spoke last
-  let last = null;
-  for (let i = list.length - 1; i >= 0; i--) {
-    const role = whoSent(list[i]);
-    if (role !== "internal") {
-      last = list[i];
-      break;
+  // Track the timestamp of the most recent guest message that has not
+  // yet been answered by an agent. As we iterate in order, a guest
+  // message starts or resets the SLA countdown. A subsequent agent
+  // message (or an AI message counted as agent) clears the pending
+  // guest message. Unapproved AI suggestions and internal notes are
+  // ignored.
+  let lastGuestTs = null;
+  for (const item of list) {
+    const role = item.role;
+    if (role === "internal") continue;
+    if (role === "ai" && !COUNT_AI_AS_AGENT) {
+      // treat unapproved AI suggestions as noise
+      continue;
+    }
+    if (role === "guest") {
+      // start or reset the SLA window
+      lastGuestTs = item.ts;
+    } else if (role === "agent" || (role === "ai" && COUNT_AI_AS_AGENT)) {
+      // An agent response clears the SLA if it comes after the guest message
+      if (lastGuestTs && item.ts >= lastGuestTs) {
+        lastGuestTs = null;
+      }
     }
   }
-  if (!last) return { ok: true, reason: "no_user_messages" };
-  const lastSender = whoSent(last);
 
-  // Find the most recent agent (or AI treated as agent) message
-  let lastAgent = null;
-  for (let i = list.length - 1; i >= 0; i--) {
-    const role = whoSent(list[i]);
-    if (role === "internal") continue;
-    if (role === "agent") { lastAgent = list[i]; break; }
-    if (role === "ai" && COUNT_AI_AS_AGENT) { lastAgent = list[i]; break; }
+  if (!lastGuestTs) {
+    // No outstanding guest message waiting for reply
+    return { ok: true, reason: "no_breach" };
   }
 
-  const minsSinceAgent = lastAgent ? Math.round((now - lastAgent._ts) / 60000) : null;
-
-  // If the last message is from a guest and there has been no agent/AI reply
-  // within the SLA window, mark as a breach. Otherwise, no breach.
-  if (
-    lastSender === "guest" &&
-    (lastAgent === null || minsSinceAgent === null || minsSinceAgent >= slaMin)
-  ) {
-    return { ok: false, reason: "guest_unanswered", minsSinceAgent };
+  // Compute the minutes since the last unanswered guest message
+  const minsSinceGuest = Math.round((now - lastGuestTs) / 60000);
+  if (minsSinceGuest >= slaMin) {
+    return { ok: false, reason: "guest_unanswered", minsSinceAgent: minsSinceGuest };
   }
-  return { ok: true, reason: "no_breach" };
+  return { ok: true, reason: "within_sla", minsSinceAgent: minsSinceGuest };
 }
 
 async function sendEmail(subject, html) {
