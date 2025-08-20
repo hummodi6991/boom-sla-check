@@ -1,4 +1,3 @@
-// check.mjs
 import nodemailer from "nodemailer";
 import fs from "fs";
 
@@ -25,13 +24,14 @@ const CSRF_HEADER_NAME     = env("CSRF_HEADER_NAME","");
 const CSRF_COOKIE_NAME     = env("CSRF_COOKIE_NAME","");
 
 const API_KIND             = env("API_KIND","rest");
-const MESSAGES_URL_TMPL    = env("MESSAGES_URL"); // e.g. https://app.boomnow.com/api/guest-experience/conversations/{{conversationId}}/messages
+const MESSAGES_URL_TMPL    = env("MESSAGES_URL");
 const MESSAGES_METHOD      = env("MESSAGES_METHOD","GET");
 
 const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
 const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
 
 // --- Inputs / defaults ---
+// Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
 let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
 if (!CONVERSATION_INPUT) {
   const eventName = process.env.GITHUB_EVENT_NAME;
@@ -59,106 +59,56 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 function firstUrlLike(s) {
   const m = String(s||"").match(/https?:\/\/\S+/);
   if (!m) return "";
+  // strip trailing punctuation that often rides along in emails
   return m[0].replace(/[>),.;!]+$/, "");
 }
 
-// --- unwrap tracking links (e.g. Mailjet) that hide a real URL in base64 ---
-function tryB64Decode(raw) {
-  try {
-    let t = raw;
-    t = t.replace(/-/g, "+").replace(/_/g, "/"); // URL-safe -> standard
-    const pad = t.length % 4;
-    if (pad) t = t + "=".repeat(4 - pad);
-    const out = Buffer.from(t, "base64").toString("utf8").trim();
-    return out;
-  } catch { return ""; }
-}
-
-function expandTrackedUrl(urlStr) {
-  if (!urlStr) return "";
-  let out = urlStr;
-
-  try {
-    const u = new URL(urlStr);
-
-    // 1) Try base64-ish path segments
-    const segs = u.pathname.split("/").filter(Boolean);
-    for (let i = segs.length - 1; i >= 0; i--) {
-      const seg = decodeURIComponent(segs[i]);
-      if (/^[A-Za-z0-9+/_=-]{16,}$/.test(seg)) {
-        const dec = tryB64Decode(seg);
-        if (/^https?:\/\//i.test(dec)) return dec;
-      }
-    }
-
-    // 2) Query params containing URL or base64 URL
-    for (const [, v] of u.searchParams.entries()) {
-      const val = decodeURIComponent(v);
-      if (/^https?:\/\//i.test(val)) return val;
-      if (/^[A-Za-z0-9+/_=-]{16,}$/.test(val)) {
-        const dec = tryB64Decode(val);
-        if (/^https?:\/\//i.test(dec)) return dec;
-      }
-    }
-  } catch {}
-  return out;
-}
-
-// Pull a UUID from any acceptable input
 function extractConversationId(input) {
   const s = (input || "").trim();
   if (!s) return "";
 
-  // exact UUID in the whole string
+  // 1) exact UUID
   const direct = s.match(UUID_RE);
   if (direct && direct[0] && s.length === direct[0].length) return direct[0];
 
-  // examine a URL (unwrap trackers first)
-  const rawUrl = firstUrlLike(s);
-  const urlStr = expandTrackedUrl(rawUrl);
+  // 2) if string contains /api/conversations/<uuid> anywhere
+  const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
+  if (fromApi) return fromApi[1];
+
+  // 3) attempt to pull the first URL from the text, then search path segments for UUID
+  const urlStr = firstUrlLike(s);
   if (urlStr) {
     try {
       const u = new URL(urlStr);
       const parts = u.pathname.split("/").filter(Boolean);
       const fromPath = parts.find(x => UUID_RE.test(x));
       if (fromPath) return fromPath.match(UUID_RE)[0];
-      for (const [, v] of u.searchParams.entries()) {
-        const m = String(v).match(UUID_RE);
-        if (m) return m[0];
-      }
     } catch {}
   }
 
-  // /api/conversations/<uuid>
-  const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
-  if (fromApi) return fromApi[1];
-
-  // last resort
+  // 4) last resort: any UUID anywhere in the text
   return direct ? direct[0] : "";
 }
 
-// Build a human UI link for the email body (clean, untracked)
+// Build a human UI link for the email body
 function buildConversationLink() {
   const input = (CONVERSATION_INPUT || "").trim();
   const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
-
+  // If an http(s) URL is present in the input, return the cleaned URL
   if (/^https?:\/\//i.test(input)) {
     try {
-      const expanded = expandTrackedUrl(firstUrlLike(input));
-      const u = new URL(expanded);
+      const u = new URL(firstUrlLike(input));
+      // strip leading /api and anything after the uuid
       const parts = u.pathname.split("/").filter(Boolean);
       const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
       if (uuidIndex >= 0) {
         const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
         u.pathname = "/" + slice.join("/");
-        u.search = "";
-        u.hash = "";
         return u.toString();
       }
       return u.toString();
     } catch {}
   }
-
   if (id && MESSAGES_URL_TMPL) {
     try {
       const urlStr = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
@@ -168,8 +118,6 @@ function buildConversationLink() {
       if (uuidIndex >= 0) {
         const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
         u.pathname = "/" + slice.join("/");
-        u.search = "";
-        u.hash = "";
         return u.toString();
       }
       return u.origin;
@@ -209,7 +157,7 @@ async function jf(url, init = {}) {
   const setc = res.headers.get("set-cookie");
   if (setc) jar.ingest(setc);
 
-  // follow redirects (limited)
+  // follow redirects
   let r = res, hops=0;
   while ([301,302,303,307,308].includes(r.status) && hops<3) {
     const loc = r.headers.get("location");
@@ -258,7 +206,6 @@ async function login() {
   return token;
 }
 
-// --- normalize messages from various shapes ---
 function normalizeMessages(data) {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.messages)) return data.messages;
@@ -270,100 +217,55 @@ function normalizeMessages(data) {
   // Fallback search
   const candidates = [];
   (function crawl(v){
-    if (v == null) return;
-    if (Array.isArray(v)) {
-      if (v.some(x => x && typeof x === "object")) candidates.push(v);
-      return;
+    if (!v || typeof v!=="object") return;
+    if (Array.isArray(v) && v.some(x => x && typeof x==="object" && ("by" in x || "sent_at" in x || "text" in x || "body" in x))) {
+      candidates.push(v); return;
     }
-    if (typeof v === "object") {
-      for (const k of Object.keys(v)) crawl(v[k]);
-    }
+    for (const k of Object.keys(v)) crawl(v[k]);
   })(data);
-
   if (candidates.length) return candidates[0];
+
   return [];
 }
 
-// --- robust role detection (handles numeric-only messages) ---
 function whoSent(m) {
-  if (!m || typeof m !== "object") return "guest";
-
-  const str = (x) => String(x ?? "").toLowerCase();
-
-  // explicit notes as internal
-  const moduleVal = str(m.module);
-  const msgType   = str(m.msg_type || m.message_type);
+  const moduleVal = (m.module || "").toString().toLowerCase();
+  const msgType   = (m.msg_type || "").toString().toLowerCase();
   if (moduleVal === "note" || msgType === "note") return "internal";
 
-  // role-ish hints
-  const roles = [
-    m.role, m.by, m.senderType, m.sender_type,
-    m.author?.role, m.author_role,
-    m.from_role, m.fromType, m.from_type,
-    m.user_role, m.owner_type, m.type
-  ].map(str);
+  const by = (m.by || m.senderType || m.author?.role || "").toString().toLowerCase();
+  const isAI = !!m.generated_by_ai;
 
-  if (roles.some(r => /(agent|host|staff|operator|admin|support|team)/.test(r))) return "agent";
-  if (roles.some(r => /(guest|customer|visitor|client|user)/.test(r))) return "guest";
-
-  // direction hints
-  const dir = str(m.direction || m.message_direction || m.dir);
-  if (/(outbound|out|sent)/.test(dir)) return "agent";
-  if (/(inbound|in)/.test(dir)) return "guest";
-
-  // boolean/id hints
-  const agentish = [
-    m.is_agent, m.is_staff, m.from_agent, m.sent_by_agent, m.approved_by_agent,
-    m.agent_id, m.staff_id, m.operator_id, m.assignee, m.assigned_to
-  ].some(Boolean);
-  if (agentish) return "agent";
-
-  const guestish = [m.is_guest, m.from_guest, m.guest_id, m.customer_id && !m.agent_id].some(Boolean);
-  if (guestish) return "guest";
-
-  // AI messages: approved/sent counts as agent; otherwise depends on COUNT_AI_AS_AGENT
-  const aiStatus = str(m.ai_status || m.aiStatus || m.status);
-  const isAI = !!(m.generated_by_ai || m.ai || m.is_ai);
-  if (isAI) {
-    if (["approved","sent","delivered","published"].includes(aiStatus)) return "agent";
-    return COUNT_AI_AS_AGENT ? "agent" : "ai";
+  if (by === "guest") return "guest";
+  if (by === "host") {
+    if (!isAI) return "agent";
+    const status = (m.ai_status || "").toString().toLowerCase();
+    if (["approved","sent","delivered"].includes(status)) return "agent";
+    return "ai";
   }
 
-  // default conservative
-  return "guest";
+  const dir = (m.direction || "").toString().toLowerCase();
+  if (dir === "inbound") return "guest";
+  if (dir === "outbound") return "agent";
+
+  return "guest"; // conservative default
 }
 
-// --- parse timestamps from many shapes (string or ms) ---
 function tsOf(m) {
-  const cand = [
-    m.sent_at, m.createdAt, m.created_at, m.updatedAt, m.updated_at,
-    m.date, m.datetime, m.timestamp, m.timestamp_ms, m.ts, m.time
-  ].find(v => v !== undefined && v !== null);
-
-  if (cand === undefined || cand === null) return null;
-
-  if (typeof cand === "number") {
-    const ms = cand > 1e12 ? cand : cand * 1000;
-    const d = new Date(ms);
-    return isNaN(+d) ? null : d;
-  }
-
-  const d = new Date(String(cand));
-  return isNaN(+d) ? null : d;
+  const t = m.sent_at || m.createdAt || m.timestamp || m.ts || m.time || null;
+  const d = t ? new Date(t) : null;
+  return d && !isNaN(+d) ? d : null;
 }
 
 function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
-  const list = (messages || [])
-    .filter(Boolean)
-    .filter(m => {
-      const moduleVal = String(m?.module ?? "").toLowerCase();
-      const msgType   = String(m?.msg_type ?? m?.message_type ?? "").toLowerCase();
-      return moduleVal !== "note" && msgType !== "note";
-    })
-    .map(x => ({...x, _ts: tsOf(x)}));
+  const list = (messages || []).filter(Boolean).filter(m => {
+    const moduleVal = (m.module || "").toString().toLowerCase();
+    const msgType   = (m.msg_type || "").toString().toLowerCase();
+    return moduleVal !== "note" && msgType !== "note";
+  }).map(x => ({...x, _ts: tsOf(x)}));
 
   if (!list.length) return { ok: true, reason: "empty" };
-  list.sort((a,b) => (a._ts?.getTime?.()||0) - (b._ts?.getTime?.()||0));
+  list.sort((a,b) => (a._ts?.getTime()||0) - (b._ts?.getTime()||0));
   const last = list[list.length-1];
   const lastSender = whoSent(last);
 
@@ -374,7 +276,7 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     if (role === "ai" && COUNT_AI_AS_AGENT) { lastAgent = list[i]; break; }
   }
 
-  const minsSinceAgent = lastAgent? Math.round((now - (lastAgent._ts || now))/60000) : null;
+  const minsSinceAgent = lastAgent? Math.round((now - lastAgent._ts)/60000) : null;
 
   if (lastSender === "guest" && (lastAgent === null || minsSinceAgent === null || minsSinceAgent >= slaMin)) {
     return { ok: false, reason: "guest_unanswered", minsSinceAgent };
@@ -405,49 +307,10 @@ async function sendEmail(subject, html) {
   if (!id) throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
   if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
 
+  const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
   const headers = token ? { authorization: `Bearer ${token}` } : {};
-
-  // ---- 404 FALLBACK BLOCK (tries multiple Boom API shapes) ----
-  async function fetchMessagesWithFallback(convId) {
-    const tried = [];
-    const primary = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, convId);
-
-    const attempt = async (url) => {
-      tried.push(url);
-      console.log(`[SLA] Trying messages URL: ${url}`);
-      const res = await jf(url, { method: MESSAGES_METHOD, headers });
-      if (res.status === 404) return null; // try next candidate
-      if (res.status >= 400) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`Messages fetch failed: ${res.status} ${body.slice(0,200)}`);
-      }
-      return res;
-    };
-
-    // 1) primary from env
-    let res = await attempt(primary);
-    if (res) return res;
-
-    // 2) derive origin and try common shapes
-    const base = new URL(primary);
-    const origin = base.origin;
-
-    const candidates = [
-      `${origin}/api/conversations/${convId}/messages`,
-      `${origin}/api/guest-experience/conversations/${convId}/messages`,
-      `${origin}/api/guest-experience/messages?conversationId=${convId}`,
-      `${origin}/api/messages?conversationId=${convId}`,
-    ];
-
-    for (const u of candidates) {
-      res = await attempt(u);
-      if (res) return res;
-    }
-
-    throw new Error(`Messages fetch failed: 404. Tried:\n- ${tried.join("\n- ")}`);
-  }
-
-  const res = await fetchMessagesWithFallback(id);
+  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
+  if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
 
   // 3) Parse and evaluate
   const data = await res.json();
@@ -455,54 +318,15 @@ async function sendEmail(subject, html) {
   const result = evaluate(msgs);
   console.log("Second check result:", JSON.stringify(result, null, 2));
 
-  // --- DEBUG: print & save raw message shapes + classifications when enabled ---
-  if (String(process.env.DEBUG_MESSAGES) === "1") {
-    const last = msgs.slice(-10);
-
-    const mask = (s) => String(s ?? "")
-      .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "<email>")
-      .replace(/\b\d{6,}\b/g, "<digits>");
-
-    console.log("[DEBUG] lastN raw messages (masked):");
-    const masked = last.map(m => {
-      const copy = { ...m };
-      if (copy.text) copy.text = mask(copy.text);
-      if (copy.body) copy.body = mask(copy.body);
-      return copy;
-    });
-    console.log(JSON.stringify(masked, null, 2));
-
-    const summary = last.map((m, i) => ({
-      idx: msgs.length - last.length + i,
-      by: m.by ?? m.senderType ?? m.author?.role ?? null,
-      type: m.msg_type ?? m.message_type ?? null,
-      module: m.module ?? null,
-      direction: m.direction ?? m.message_direction ?? null,
-      ai_status: m.ai_status ?? null,
-      text_preview: mask((m.text ?? m.body ?? "").toString()).slice(0, 60),
-      who: whoSent(m),
-      ts: tsOf(m)
-    }));
-    console.log("[DEBUG] classification summary:");
-    console.log(JSON.stringify(summary, null, 2));
-
-    // also write to files so you can download as workflow artifacts if desired
-    try {
-      fs.mkdirSync("out", { recursive: true });
-      fs.writeFileSync("out/messages.json", JSON.stringify(masked, null, 2));
-      fs.writeFileSync("out/classification.json", JSON.stringify(summary, null, 2));
-    } catch {}
-  }
-
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
+    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("✅ Alert email sent.");
+    console.log("â Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
