@@ -56,6 +56,80 @@ const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
 // === Utils ===
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
+/**
+ * Attempt to decode a string that may be Base64 encoded. Many email
+ * tracking links include the destination URL as the final path segment
+ * using URLâsafe Base64 encoding. This helper normalises the input and
+ * pads it to a multiple of 4 before decoding. If the decoded string
+ * contains nonâprintable characters or cannot be decoded it returns
+ * null.
+ *
+ * @param {string} str The candidate string to decode
+ * @returns {string|null} Decoded UTFâ8 string or null if decoding fails
+ */
+function tryDecode(str) {
+  if (!str || typeof str !== "string") return null;
+  // Replace URLâsafe characters
+  let s = str.replace(/-/g, "+").replace(/_/g, "/");
+  // Pad to length divisible by 4
+  const pad = s.length % 4;
+  if (pad === 2) s += "==";
+  else if (pad === 3) s += "=";
+  else if (pad === 1) s += "===";
+  try {
+    const buf = Buffer.from(s, "base64");
+    // Only treat as valid if all characters are printable or the string starts with http
+    const txt = buf.toString("utf8");
+    // simple heuristic: decoded string should contain http or https or at least be ASCII
+    if (/^https?:/i.test(txt) || /^[\x20-\x7E]+$/.test(txt)) {
+      return txt;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Unwrap a tracking URL to reveal the final destination. Some
+ * marketing/tracking services embed the real URL either in query
+ * parameters (e.g. `u`, `url`, `redirect`) or as a Base64 encoded
+ * path segment. If no known patterns are matched, the original URL
+ * string is returned unchanged.
+ *
+ * @param {string} urlStr The URL string to unwrap
+ * @returns {string} The unwrapped URL if found, otherwise the original
+ */
+function unwrapUrl(urlStr) {
+  if (!urlStr) return urlStr;
+  try {
+    const u = new URL(urlStr);
+    // Check common query parameter names for the real URL
+    const paramNames = ["u", "url", "q", "target", "redirect", "link"];
+    for (const key of paramNames) {
+      const val = u.searchParams.get(key);
+      if (val) {
+        // If the value itself is a full URL, return it directly
+        if (/^https?:/i.test(val)) return val;
+        // If it's Base64 encoded, attempt to decode
+        const dec = tryDecode(val);
+        if (dec && /^https?:/i.test(dec)) return dec;
+      }
+    }
+    // If no query parameters reveal a URL, inspect the path segments. Many
+    // tracking services append the Base64 encoded destination as the last
+    // segment of the path. Iterate through the segments and attempt to
+    // decode each one.
+    const segments = u.pathname.split("/").filter(Boolean);
+    for (const seg of segments) {
+      const decoded = tryDecode(seg);
+      if (decoded && /^https?:/i.test(decoded)) {
+        return decoded;
+      }
+    }
+  } catch {}
+  // Fall back to returning the original URL string
+  return urlStr;
+}
+
 function firstUrlLike(s) {
   const m = String(s||"").match(/https?:\/\/\S+/);
   if (!m) return "";
@@ -79,7 +153,9 @@ function extractConversationId(input) {
   const urlStr = firstUrlLike(s);
   if (urlStr) {
     try {
-      const u = new URL(urlStr);
+      // Unwrap potential tracking links that embed the destination URL
+      const actualUrl = unwrapUrl(urlStr);
+      const u = new URL(actualUrl);
       const parts = u.pathname.split("/").filter(Boolean);
       const fromPath = parts.find(x => UUID_RE.test(x));
       if (fromPath) return fromPath.match(UUID_RE)[0];
@@ -97,7 +173,10 @@ function buildConversationLink() {
   // If an http(s) URL is present in the input, return the cleaned URL
   if (/^https?:\/\//i.test(input)) {
     try {
-      const u = new URL(firstUrlLike(input));
+      const rawUrl = firstUrlLike(input);
+      // Unwrap any tracking/redirect link to obtain the real destination URL
+      const actualUrl = unwrapUrl(rawUrl);
+      const u = new URL(actualUrl);
       // strip leading /api and anything after the uuid
       const parts = u.pathname.split("/").filter(Boolean);
       const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
