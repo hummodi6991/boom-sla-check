@@ -356,22 +356,51 @@ function whoSent(m) {
     // Many AI messages are authored by the host but flagged as AI-generated.
     if (isAI) {
       // Normalise the AI status across different possible property names
-      const aiStatus = (m.ai_status || m.aiStatus || m.ai_message_status || m.status || m.state || "").toString().toLowerCase();
-      // Consider a confirmed AI suggestion as an agent message. The list of
-      // keywords is intentionally broad to catch variations (approved,
-      // confirmed, sent, delivered, published, released). If COUNT_AI_AS_AGENT
-      // is enabled, any AI-generated message should be treated as an agent
-      // message regardless of its status.
+      // Determine whether an AI suggestion has been approved/posted to the guest.
+      // Many different APIs expose this state using a variety of field names
+      // (e.g. ai_status, aiStatus, ai_message_status, status, state, approved,
+      // isApproved, approvedByAgent, etc.).  We normalise the status text and
+      // perform both keyword and field-based checks.  If COUNT_AI_AS_AGENT is
+      // enabled then any AI-generated message counts as an agent reply.
+      const aiStatusRaw = (m.ai_status || m.aiStatus || m.ai_message_status || m.status || m.state || "");
+      const aiStatus    = aiStatusRaw.toString().toLowerCase();
+      // Explicit boolean or flag fields indicating approval.  These vary by
+      // platform; check a handful of common names.  If any evaluate to true
+      // (non-null/non-undefined and not false/zero) we treat the AI message
+      // as approved.
+      const approvalFlags = [
+        m.approved,
+        m.isApproved,
+        m.is_approved,
+        m.approvedByAgent,
+        m.approved_by_agent,
+        m.accepted,
+        m.isAccepted,
+        m.is_accepted
+      ];
+      const hasApprovalFlag = approvalFlags.some(val => Boolean(val));
+      // Keyword search on the status string.  Expand the keywords list to
+      // include additional synonyms (accepted, done, sent_to_guest, posted,
+      // complete, finished) to capture more workflows.
       const approvedKeywords = [
         "approved",
+        "approved_by_agent",
+        "accepted",
         "confirmed",
         "sent",
+        "sent_to_guest",
+        "sent to guest",
         "delivered",
         "published",
-        "released"
+        "released",
+        "posted",
+        "posted to guest",
+        "complete",
+        "completed",
+        "done"
       ];
       const isApproved = approvedKeywords.some(k => aiStatus.includes(k));
-      if (isApproved || COUNT_AI_AS_AGENT) return "agent";
+      if (hasApprovalFlag || isApproved || COUNT_AI_AS_AGENT) return "agent";
       return "ai";
     }
     // Non-AI messages from the host are considered agent replies
@@ -443,12 +472,21 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     return { ok: true, reason: "no_breach" };
   }
 
-  // Compute the minutes since the last unanswered guest message
-  const minsSinceGuest = Math.round((now - lastGuestTs) / 60000);
-  if (minsSinceGuest >= slaMin) {
-    return { ok: false, reason: "guest_unanswered", minsSinceAgent: minsSinceGuest };
+  // Compute the minutes since the last unanswered guest message.  Use a
+  // continuous value rather than rounding to the nearest minute.  The
+  // previous implementation used Math.round, which could prematurely
+  // increment values (e.g. 4.5 minutes would be rounded up to 5).  To
+  // avoid false positives we rely on a floor comparison: the SLA is
+  // considered breached only once the full number of minutes has elapsed.
+  const diffMs    = now - lastGuestTs;
+  const diffMins  = diffMs / 60000;
+  const minsSinceGuest = Math.floor(diffMins);
+  if (diffMins >= slaMin) {
+    // Include both the floored minutes and the exact fractional minutes for
+    // downstream consumers, but base the breach on the raw diff.
+    return { ok: false, reason: "guest_unanswered", minsSinceAgent: minsSinceGuest, exactMinutes: diffMins };
   }
-  return { ok: true, reason: "within_sla", minsSinceAgent: minsSinceGuest };
+  return { ok: true, reason: "within_sla", minsSinceAgent: minsSinceGuest, exactMinutes: diffMins };
 }
 
 async function sendEmail(subject, html) {
