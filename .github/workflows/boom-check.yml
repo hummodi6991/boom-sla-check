@@ -1,65 +1,59 @@
-name: Boom SLA Check
-
+name: Boom SLA (API, REST)
 on:
-  # Triggered by Power Automate via Repository Dispatch
+  # Keep the existing 5‑minute schedule so the checker still runs regularly
+  schedule:
+    - cron: "*/5 * * * *"     # every 5 minutes
+  # Allow manual runs from the Actions UI with an optional conversation input
+  workflow_dispatch:
+    inputs:
+      conversation:
+        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
+        required: false
+  # Accept repository_dispatch events from Power Automate.  Any event_type will be honoured.
   repository_dispatch:
-    types: [boom-sla-check]
-  # Optional manual run for testing
-  workflow_dispatch: {}
-
-permissions:
-  contents: read
-
-env:
-  # === Tuning switches ===
-  # Count AI suggestions as agent replies? "false" | "approved" | "true"
-  COUNT_AI_SUGGESTION_AS_AGENT: "approved"  # <-- FIX: count only agent-approved AI
-  # SLA window in minutes
-  SLA_MINUTES: "${{ vars.SLA_MINUTES || 5 }}"
-  # Set DEBUG=1 in repository Variables to get console tables
-  DEBUG: "${{ vars.DEBUG }}"
-
-  # === Email ===
-  ALERT_TO: "${{ vars.ALERT_TO }}"
-  ALERT_FROM: "${{ vars.ALERT_FROM }}"
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      BOOM_USER: ${{ secrets.BOOM_USER }}
+      BOOM_PASS: ${{ secrets.BOOM_PASS }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASS: ${{ secrets.SMTP_PASS }}
+      ALERT_TO:  ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      LOGIN_URL: "https://app.boomnow.com/api/login"
+      LOGIN_METHOD: "POST"
+      LOGIN_CT: "application/json"
+      LOGIN_EMAIL_FIELD: "email"
+      LOGIN_PASSWORD_FIELD: "password"
+      LOGIN_TENANT_FIELD: "tenant_id"
+      CSRF_HEADER_NAME: ""
+      CSRF_COOKIE_NAME: ""
+      API_KIND: "rest"
+      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
+      MESSAGES_METHOD: "GET"
+      SLA_MINUTES: "5"
+      COUNT_AI_SUGGESTION_AS_AGENT: "false"
+      # Pull the conversation from either workflow dispatch inputs or repository_dispatch client_payload.
+      # Power Automate's repository dispatch can attach a `conversation` or `conversationUrl` field under client_payload;
+      # if none are present this will evaluate to an empty string and the checker will fall back to the default conversation ID.
+      CONVERSATION_INPUT: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || github.event.client_payload.conversationUrl || github.event.client_payload.conversation_url }}
+      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
+      - name: Install deps
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm i
+          fi
       - name: Run SLA checker
-        id: check
         run: node check.mjs
-        env:
-          # Pass the event payload path automatically provided by Actions
-          GITHUB_EVENT_PATH: ${{ github.event_path }}
-          # Optional: allow fallback URL if you want to test without repository_dispatch
-          CONVERSATION_URL: "${{ vars.CONVERSATION_URL }}"
-          # SMTP from repo/org secrets
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-
-      - name: Send alert email (only on breach)
-        if: steps.check.outputs.breach == 'true'
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: ${{ secrets.SMTP_HOST }}
-          server_port: ${{ secrets.SMTP_PORT }}
-          username: ${{ secrets.SMTP_USERNAME }}
-          password: ${{ secrets.SMTP_PASSWORD }}
-          secure: true
-          subject: ${{ steps.check.outputs.email_subject }}
-          to: ${{ env.ALERT_TO }}
-          from: ${{ env.ALERT_FROM }}
-          content_type: text/plain; charset=utf-8
-          body: ${{ steps.check.outputs.email_body }}
