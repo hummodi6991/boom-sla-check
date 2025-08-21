@@ -5,11 +5,11 @@ export const CARD = "div.v-card.v-sheet.theme--light.elevation-0";
 // Inside a real card, the bubble text area:
 export const MSG_BOX = ".msg-box";
 
-// Timestamp line inside a real card:
+// Timestamp line inside a real card (two variants seen):
 export const TIME_ROW = ".d-flex.justify-end.align-center.text-caption.grey--text.mt-1, .d-flex.align-center.text-caption.grey--text.mt-1";
 
-// AI suggestion container we MUST ignore:
-export const AI_COMPONENT = ".ai-component";
+// AI suggestion containers we MUST ignore (expanded list):
+export const AI_COMPONENT = ".ai-component, .ai-suggestion, .assistant-draft, [data-role='ai-suggestion']";
 
 // Heuristic to detect agent-side (right) vs guest-side (left):
 export const IS_AGENT_SIDE = (classList) =>
@@ -18,7 +18,7 @@ export const IS_AGENT_SIDE = (classList) =>
 export const IS_GUEST_SIDE = (classList) =>
   classList?.includes("ml-4");
 
-// Login page selectors:
+// Login page selectors (if you use UI scraping elsewhere):
 export const EMAIL_INPUT = "input[type='email']";
 export const PASS_INPUT  = "input[type='password']";
 export const LOGIN_BTN   = "button:has-text('Login'), button[type='submit']";
