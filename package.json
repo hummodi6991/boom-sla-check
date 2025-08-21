@@ -2,8 +2,8 @@
   "name": "boom-sla-check",
   "version": "1.0.0",
   "type": "module",
-  "private": true,
-  "dependencies": {
-    "nodemailer": "^6.9.13"
+  "description": "Checks Boom conversations for SLA breaches and emails alerts.",
+  "scripts": {
+    "check": "node check.mjs"
   }
 }
