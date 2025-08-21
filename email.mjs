@@ -1,10 +1,5 @@
 import nodemailer from "nodemailer";
 
-/**
- * Sends an alert email using SMTP creds from env:
- * - SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS
- * - ALERT_TO, ALERT_FROM_NAME (optional)
- */
 export async function sendAlert({ subject, html, text }) {
   const host = process.env.SMTP_HOST;
   const port = Number(process.env.SMTP_PORT || 587);
@@ -19,9 +14,7 @@ export async function sendAlert({ subject, html, text }) {
   }
 
   const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465, // true for 465, false for 587/25
+    host, port, secure: port === 465,
     auth: { user, pass }
   });
 
@@ -29,8 +22,8 @@ export async function sendAlert({ subject, html, text }) {
     from: `"${fromName}" <${user}>`,
     to,
     subject,
-    text: text || "",
-    html: html || ""
+    text,
+    html
   };
 
   await transporter.sendMail(message);
