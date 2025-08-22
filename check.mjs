@@ -32,13 +32,19 @@ const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLower
 
 // --- Inputs / defaults ---
 // Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
-let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
+let CONVERSATION_INPUT = env("CONVERSATION_INPUT", "");
 if (!CONVERSATION_INPUT) {
-  const eventName = process.env.GITHUB_EVENT_NAME;
-  const eventPath = process.env.GITHUB_EVENT_PATH;
+  const eventName = process.env.GITHUB_EVENT_NAME || "";
+  const eventPath = process.env.GITHUB_EVENT_PATH || "";
   if (eventName === "repository_dispatch" && eventPath && fs.existsSync(eventPath)) {
+    let data = null;
     try {
-      const data = JSON.parse(fs.readFileSync(eventPath, "utf8"));
+      const raw = fs.readFileSync(eventPath, "utf8");
+      data = JSON.parse(raw);
+    } catch (e) {
+      console.warn("Failed to parse repository_dispatch payload:", e.message);
+    }
+    if (data) {
       const p = data.client_payload || {};
       const candidates = [
         p.conversation, p.conversationUrl, p.conversation_url,
@@ -48,7 +54,7 @@ if (!CONVERSATION_INPUT) {
         CONVERSATION_INPUT = candidates[0].trim();
         process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
       }
-    } catch {}
+    }
   }
 }
 const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
