@@ -1,260 +1,522 @@
-// FULL FILE: check.mjs
-// SLA checker with strict timing and human-reply gating.
-// Drop-in replacement for the previous version. Keeps env names the same.
-//
-// Node 18+ (built-in fetch). If using older Node, polyfill fetch or use axios.
-//
-// ───────────────────────────────────────────────────────────────────────────────
-
+import nodemailer from "nodemailer";
 import fs from "fs";
-import { sendAlert } from "./email.mjs";
 
-// ----------------------
-// Env helpers & settings
-// ----------------------
-const env = (k, d = "") => (process.env[k] ?? d).toString().trim();
+const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 
-// Credentials / SMTP (same names as before)
+// --- Secrets (from GitHub) ---
 const BOOM_USER  = env("BOOM_USER");
 const BOOM_PASS  = env("BOOM_PASS");
+const SMTP_HOST  = env("SMTP_HOST");
+const SMTP_PORT  = parseInt(env("SMTP_PORT","587"),10);
+const SMTP_USER  = env("SMTP_USER");
+const SMTP_PASS  = env("SMTP_PASS");
 const ALERT_TO   = env("ALERT_TO");
-const FROM_NAME  = env("ALERT_FROM_NAME", "Boom SLA Bot");
+const FROM_NAME  = env("ALERT_FROM_NAME","Boom SLA Bot");
 
-// API config (same names as before)
-const API_KIND             = env("API_KIND", "rest");           // 'rest' or 'scrape'
+// --- App mechanics ---
 const LOGIN_URL            = env("LOGIN_URL");
-const LOGIN_METHOD         = env("LOGIN_METHOD", "POST");
-const LOGIN_CT             = env("LOGIN_CT", "application/json");
-const LOGIN_EMAIL_FIELD    = env("LOGIN_EMAIL_FIELD", "email");
-const LOGIN_PASSWORD_FIELD = env("LOGIN_PASSWORD_FIELD", "password");
-const LOGIN_TENANT_FIELD   = env("LOGIN_TENANT_FIELD", "");      // optional
-const CSRF_HEADER_NAME     = env("CSRF_HEADER_NAME", "");
-const CSRF_COOKIE_NAME     = env("CSRF_COOKIE_NAME", "");
+const LOGIN_METHOD         = env("LOGIN_METHOD","POST");
+const LOGIN_CT             = env("LOGIN_CT","application/json");
+const LOGIN_EMAIL_FIELD    = env("LOGIN_EMAIL_FIELD","email");
+const LOGIN_PASSWORD_FIELD = env("LOGIN_PASSWORD_FIELD","password");
+const LOGIN_TENANT_FIELD   = env("LOGIN_TENANT_FIELD","");  // optional
+const CSRF_HEADER_NAME     = env("CSRF_HEADER_NAME","");
+const CSRF_COOKIE_NAME     = env("CSRF_COOKIE_NAME","");
 
-const MESSAGES_URL_TMPL    = env("MESSAGES_URL");               // may contain :conversationId
-const MESSAGES_METHOD      = env("MESSAGES_METHOD", "GET");
+const API_KIND             = env("API_KIND","rest");
+const MESSAGES_URL_TMPL    = env("MESSAGES_URL");
+const MESSAGES_METHOD      = env("MESSAGES_METHOD","GET");
 
-const SLA_MINUTES          = parseInt(env("SLA_MINUTES", "5"), 10);
-const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT", "false").toLowerCase() === "true";
-const BREACH_GRACE_SECONDS = parseInt(env("BREACH_GRACE_SECONDS", "60"), 10); // optional grace
+const SLA_MINUTES          = parseInt(env("SLA_MINUTES","5"),10);
+const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLowerCase()==="true";
 
-// Inputs
-const CONVERSATION_INPUT   = env("CONVERSATION_INPUT");         // ID or URL
-const CONVERSATION_URL     = env("CONVERSATION_URL", "");       // explicit URL (optional)
-const DEBUG                = env("DEBUG", "1") === "1";
-const DEBUG_MESSAGES       = env("DEBUG_MESSAGES", "0") === "1";
-
-// ---------------
-// Small utilities
-// ---------------
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-const debug = (...args) => { if (DEBUG) console.log("[DEBUG]", ...args); };
-
-// Used to pick a timestamp consistently from each message.
-// We favor UI-like fields first so the SLA aligns with what humans see.
-const pickTs = (m) => {
-  const cands = [
-    m.createdAt, m.created_at,
-    m.timestamp, m.ts, m.time,
-    m.sent_at, m.sentAt,
-    m.date, m.datetime,
-  ].filter(Boolean);
-  const vals = cands.map((v) => new Date(v).getTime()).filter(Number.isFinite);
-  return vals.length ? Math.max(...vals) : 0;
-};
-
-// True only for real human agent messages (AI suggestions ignored unless explicitly allowed).
-const isHumanAgent = (m) => {
-  // Allow an override via env if someone wants to count AI suggestions.
-  if (COUNT_AI_AS_AGENT) {
-    const role = (m.role || m.sender_type || m.author?.type || "").toLowerCase();
-    return ["agent", "human", "staff", "support"].includes(role) || m.is_agent === true || m.direction === "out";
+// --- Inputs / defaults ---
+// Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
+let CONVERSATION_INPUT = env("CONVERSATION_INPUT","");
+if (!CONVERSATION_INPUT) {
+  const eventName = process.env.GITHUB_EVENT_NAME;
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  if (eventName === "repository_dispatch" && eventPath && fs.existsSync(eventPath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(eventPath, "utf8"));
+      const p = data.client_payload || {};
+      const candidates = [
+        p.conversation, p.conversationUrl, p.conversation_url,
+        p.url, p.text, p.body
+      ].filter(v => typeof v === "string" && v.trim());
+      if (candidates.length) {
+        CONVERSATION_INPUT = candidates[0].trim();
+        process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
+      }
+    } catch {}
   }
-  const role = (m.role || m.sender_type || m.author?.type || "").toLowerCase();
-  const looksAgent = ["agent", "human", "staff", "support"].includes(role) || m.is_agent === true || m.direction === "out";
-  const looksAi =
-    m.is_ai === true || m.ai === true || m.is_suggestion === true ||
-    m.cardType === "agent" || m.meta?.is_ai_suggestion === true;
-  return looksAgent && !looksAi;
-};
+}
+const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
 
-const isGuest = (m) => {
-  const role = (m.role || m.sender_type || m.author?.type || "").toLowerCase();
-  return m.is_guest === true || m.direction === "in" ||
-         ["guest","user","customer","visitor","contact"].includes(role);
-};
+// === Utils ===
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
-// ------------------
-// Login / API client
-// ------------------
-async function loginIfNeeded() {
-  if (!LOGIN_URL) return { headers: {} }; // assume public/read-only API
-  const body = {};
-  body[LOGIN_EMAIL_FIELD] = BOOM_USER;
-  body[LOGIN_PASSWORD_FIELD] = BOOM_PASS;
-  if (LOGIN_TENANT_FIELD) body[LOGIN_TENANT_FIELD] = env("TENANT", "");
-
-  const res = await fetch(LOGIN_URL, {
-    method: LOGIN_METHOD,
-    headers: { "content-type": LOGIN_CT },
-    body: LOGIN_METHOD.toUpperCase() === "GET" ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) {
-    throw new Error(`Login failed: ${res.status} ${res.statusText}`);
-  }
-  const setCookie = res.headers.get("set-cookie") || "";
-  const cookies = setCookie.split(/, (?=[^;]+?=)/g).map(s => s.split(";")[0]).join("; ");
-  const headers = cookies ? { cookie: cookies } : {};
-
-  // Optional CSRF
-  if (CSRF_COOKIE_NAME && CSRF_HEADER_NAME) {
-    const match = (setCookie || "").match(new RegExp(`${CSRF_COOKIE_NAME}=([^;]+)`));
-    if (match) headers[CSRF_HEADER_NAME] = match[1];
-  }
-  return { headers };
+/**
+ * Attempt to decode a string that may be Base64 encoded. Many email
+ * tracking links include the destination URL as the final path segment
+ * using URLÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂsafe Base64 encoding. This helper normalises the input and
+ * pads it to a multiple of 4 before decoding. If the decoded string
+ * contains nonÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂprintable characters or cannot be decoded it returns
+ * null.
+ *
+ * @param {string} str The candidate string to decode
+ * @returns {string|null} Decoded UTFÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ8 string or null if decoding fails
+ */
+function tryDecode(str) {
+  if (!str || typeof str !== "string") return null;
+  // Replace URLÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂsafe characters
+  let s = str.replace(/-/g, "+").replace(/_/g, "/");
+  // Pad to length divisible by 4
+  const pad = s.length % 4;
+  if (pad === 2) s += "==";
+  else if (pad === 3) s += "=";
+  else if (pad === 1) s += "===";
+  try {
+    const buf = Buffer.from(s, "base64");
+    // Only treat as valid if all characters are printable or the string starts with http
+    const txt = buf.toString("utf8");
+    // simple heuristic: decoded string should contain http or https or at least be ASCII
+    if (/^https?:/i.test(txt) || /^[\x20-\x7E]+$/.test(txt)) {
+      return txt;
+    }
+  } catch {}
+  return null;
 }
 
-function buildMessagesUrl(conversationId) {
-  if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL is not set.");
-  return MESSAGES_URL_TMPL
-    .replace(":conversationId", conversationId)
-    .replace("{conversationId}", conversationId);
+/**
+ * Unwrap a tracking URL to reveal the final destination. Some
+ * marketing/tracking services embed the real URL either in query
+ * parameters (e.g. `u`, `url`, `redirect`) or as a Base64 encoded
+ * path segment. If no known patterns are matched, the original URL
+ * string is returned unchanged.
+ *
+ * @param {string} urlStr The URL string to unwrap
+ * @returns {string} The unwrapped URL if found, otherwise the original
+ */
+function unwrapUrl(urlStr) {
+  if (!urlStr) return urlStr;
+  try {
+    const u = new URL(urlStr);
+    // Check common query parameter names for the real URL
+    const paramNames = ["u", "url", "q", "target", "redirect", "link"];
+    for (const key of paramNames) {
+      const val = u.searchParams.get(key);
+      if (val) {
+        // If the value itself is a full URL, return it directly
+        if (/^https?:/i.test(val)) return val;
+        // If it's Base64 encoded, attempt to decode
+        const dec = tryDecode(val);
+        if (dec && /^https?:/i.test(dec)) return dec;
+      }
+    }
+    // If no query parameters reveal a URL, inspect the path segments. Many
+    // tracking services append the Base64 encoded destination as the last
+    // segment of the path. Iterate through the segments and attempt to
+    // decode each one.
+    const segments = u.pathname.split("/").filter(Boolean);
+    for (const seg of segments) {
+      const decoded = tryDecode(seg);
+      if (decoded && /^https?:/i.test(decoded)) {
+        return decoded;
+      }
+    }
+  } catch {}
+  // Fall back to returning the original URL string
+  return urlStr;
 }
 
-async function fetchMessages(conversationId) {
-  const { headers } = await loginIfNeeded();
-  const url = buildMessagesUrl(conversationId);
-  const res = await fetch(url, { method: MESSAGES_METHOD, headers });
-  if (!res.ok) throw new Error(`Failed to fetch messages: ${res.status} ${res.statusText}`);
-  const data = await res.json();
-  // Accept either array or { messages: [...] }
-  const messages = Array.isArray(data) ? data : (data.messages || data.data || []);
-  if (DEBUG_MESSAGES) {
-    fs.writeFileSync("messages.debug.json", JSON.stringify(messages, null, 2));
+function firstUrlLike(s) {
+  const m = String(s||"").match(/https?:\/\/\S+/);
+  if (!m) return "";
+  // strip trailing punctuation that often rides along in emails
+  return m[0].replace(/[>),.;!]+$/, "");
+}
+
+function extractConversationId(input) {
+  const s = (input || "").trim();
+  if (!s) return "";
+
+  // 1) exact UUID
+  const direct = s.match(UUID_RE);
+  if (direct && direct[0] && s.length === direct[0].length) return direct[0];
+
+  // 2) if string contains /api/conversations/<uuid> anywhere
+  const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
+  if (fromApi) return fromApi[1];
+
+  // 3) attempt to pull the first URL from the text, then search path segments for UUID
+  const urlStr = firstUrlLike(s);
+  if (urlStr) {
+    try {
+      // Unwrap potential tracking links that embed the destination URL
+      const actualUrl = unwrapUrl(urlStr);
+      const u = new URL(actualUrl);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const fromPath = parts.find(x => UUID_RE.test(x));
+      if (fromPath) return fromPath.match(UUID_RE)[0];
+    } catch {}
   }
-  return messages;
+
+  // 4) last resort: any UUID anywhere in the text
+  return direct ? direct[0] : "";
 }
 
-// -------------
-// Input parsing
-// -------------
-function parseConversationInput() {
-  // Accept explicit CONVERSATION_URL or raw ID via CONVERSATION_INPUT
-  if (CONVERSATION_URL) return { conversationId: env("CONVERSATION_ID", ""), conversationUrl: CONVERSATION_URL };
-  const raw = CONVERSATION_INPUT;
-  if (!raw) return { conversationId: "", conversationUrl: "" };
-  // If it looks like a URL, pass it back; otherwise treat as ID.
-  if (/^https?:\/\//i.test(raw)) return { conversationId: "", conversationUrl: raw };
-  return { conversationId: raw, conversationUrl: "" };
-}
-
-// --------------------
-// SLA breach evaluator
-// --------------------
-async function evaluate() {
-  const { conversationId, conversationUrl } = parseConversationInput();
-  const targetId = conversationId || env("DEFAULT_CONVERSATION_ID", "");
-
-  // If only a URL is provided, try to extract an id at the end like /conversations/:id
-  let id = targetId;
-  if (!id && conversationUrl) {
-    const m = conversationUrl.match(/\b(conversation|conversations)\/(\w[\w-]*)/i);
-    if (m) id = m[2];
+// Build a human UI link for the email body
+function buildConversationLink() {
+  const input = (CONVERSATION_INPUT || "").trim();
+  const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
+  // If an http(s) URL is present in the input, return the cleaned URL
+  if (/^https?:\/\//i.test(input)) {
+    try {
+      const rawUrl = firstUrlLike(input);
+      // Unwrap any tracking/redirect link to obtain the real destination URL
+      const actualUrl = unwrapUrl(rawUrl);
+      const u = new URL(actualUrl);
+      // strip leading /api and anything after the uuid
+      const parts = u.pathname.split("/").filter(Boolean);
+      const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
+      if (uuidIndex >= 0) {
+        const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
+        u.pathname = "/" + slice.join("/");
+        return u.toString();
+      }
+      return u.toString();
+    } catch {}
   }
-  if (!id) throw new Error("No conversation id/URL provided. Set CONVERSATION_INPUT or DEFAULT_CONVERSATION_ID.");
+  if (id && MESSAGES_URL_TMPL) {
+    try {
+      const urlStr = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
+      const u = new URL(urlStr);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
+      if (uuidIndex >= 0) {
+        const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
+        u.pathname = "/" + slice.join("/");
+        return u.toString();
+      }
+      return u.origin;
+    } catch {}
+  }
+  return id ? id.toString() : "";
+}
 
-  debug("Checking conversation:", { id, conversationUrl });
+// --- tiny cookie jar & fetch helper ---
+class Jar {
+  constructor(){ this.map = new Map(); }
+  ingest(setCookie) {
+    if(!setCookie) return;
+    const lines = Array.isArray(setCookie) ? setCookie : [setCookie];
+    for (const ln of lines) {
+      const m = String(ln).match(/^([^=]+)=([^;]+)/);
+      if (m) this.map.set(m[1].trim(), m[2]);
+    }
+  }
+  get(name){ return this.map.get(name) || ""; }
+  header(){ return [...this.map.entries()].map(([k,v])=>`${k}=${v}`).join("; "); }
+}
+const jar = new Jar();
 
-  const messages = await fetchMessages(id);
+async function jf(url, init = {}) {
+  const headers = new Headers(init.headers || {});
+  headers.set("accept", "application/json, text/plain, */*");
+  const ck = jar.header();
+  if (ck) headers.set("cookie", ck);
 
-  // Compute lastGuestTs and lastAgentTs
-  const guestTs = messages.filter(isGuest).map(pickTs).filter(Boolean);
-  const agentTs = messages.filter(isHumanAgent).map(pickTs).filter(Boolean);
+  if (CSRF_HEADER_NAME && CSRF_COOKIE_NAME && !headers.has(CSRF_HEADER_NAME)) {
+    const val = jar.get(CSRF_COOKIE_NAME);
+    if (val) headers.set(CSRF_HEADER_NAME, decodeURIComponent(val));
+  }
 
-  const lastGuestTs = guestTs.length ? Math.max(...guestTs) : 0;
-  const lastAgentTs = agentTs.length ? Math.max(...agentTs) : 0;
+  const res = await fetch(url, { ...init, headers, redirect: "manual" });
+  const setc = res.headers.get("set-cookie");
+  if (setc) jar.ingest(setc);
 
-  debug("Timestamps:", { lastGuestTs, lastAgentTs, now: Date.now() });
+  // follow redirects
+  let r = res, hops=0;
+  while ([301,302,303,307,308].includes(r.status) && hops<3) {
+    const loc = r.headers.get("location");
+    if (!loc) break;
+    r = await fetch(new URL(loc, url), { headers, redirect: "manual" });
+    const setc2 = r.headers.get("set-cookie");
+    if (setc2) jar.ingest(setc2);
+    hops++;
+  }
+  return r;
+}
+
+function formEncode(obj) {
+  return Object.entries(obj).map(([k,v]) =>
+    `${encodeURIComponent(k)}=${encodeURIComponent(v ?? "")}`).join("&");
+}
+
+async function login() {
+  if (!LOGIN_URL || !BOOM_USER || !BOOM_PASS) {
+    throw new Error("LOGIN_URL or BOOM_USER/BOOM_PASS missing");
+  }
+  const bodyObj = {
+    [LOGIN_EMAIL_FIELD]: BOOM_USER,
+    [LOGIN_PASSWORD_FIELD]: BOOM_PASS,
+  };
+  if (LOGIN_TENANT_FIELD) bodyObj[LOGIN_TENANT_FIELD] = null;
+
+  const headers = {};
+  let body;
+  if (LOGIN_CT.includes("json")) {
+    headers["content-type"] = "application/json";
+    body = JSON.stringify(bodyObj);
+  } else {
+    headers["content-type"] = "application/x-www-form-urlencoded";
+    body = formEncode(bodyObj);
+  }
+
+  const res = await jf(LOGIN_URL, { method: LOGIN_METHOD, headers, body });
+  if (res.status >= 400) throw new Error(`Login failed: ${res.status}`);
+
+  let token = null;
+  try {
+    const j = await res.clone().json();
+    token = j?.token || j?.accessToken || j?.data?.accessToken || null;
+  } catch {}
+  return token;
+}
+
+function normalizeMessages(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.messages)) return data.messages;
+  if (Array.isArray(data?.thread))   return data.thread;
+  if (Array.isArray(data?.items))    return data.items;
+  if (Array.isArray(data?.conversation?.messages)) return data.conversation.messages;
+  if (Array.isArray(data?.data?.conversation?.messages)) return data.data.conversation.messages;
+
+  // Fallback search
+  const candidates = [];
+  (function crawl(v){
+    if (!v || typeof v!=="object") return;
+    if (Array.isArray(v) && v.some(x => x && typeof x==="object" && ("by" in x || "sent_at" in x || "text" in x || "body" in x))) {
+      candidates.push(v); return;
+    }
+    for (const k of Object.keys(v)) crawl(v[k]);
+  })(data);
+  if (candidates.length) return candidates[0];
+
+  return [];
+}
+
+/**
+ * Classify the sender of a message. The logic attempts to determine
+ * whether a given message originated from a guest, an agent (host),
+ * the AI system or is internal/system-only. Messages generated by the AI
+ * that have been approved/sent/delivered are treated as agent messages
+ * so that a confirmed AI reply counts as an answered guest message.
+ *
+ * @param {object} m The message object from the API
+ * @returns {"guest"|"agent"|"ai"|"internal"} The inferred sender role
+ */
+function whoSent(m) {
+  // Normalise some common fields
+  const moduleVal = (m.module || m.module_type || "").toString().toLowerCase();
+  const msgType   = (m.msg_type || m.type || "").toString().toLowerCase();
+  // Pull the apparent author role from a variety of common fields. The
+  // API uses different property names such as by, senderType, author.role,
+  // author_role or just role. Include role as a last resort to avoid
+  // misclassifying agent messages as guest messages when the only
+  // indicator is a `role` field.
+  const by        = (m.by || m.senderType || m.author?.role || m.author_role || m.role || "").toString().toLowerCase();
+  const dir       = (m.direction || m.message_direction || "").toString().toLowerCase();
+  const isAI      = Boolean(
+    m.generated_by_ai || m.ai_generated || m.is_ai_generated ||
+    m.generatedByAI || m.generatedByAi || m.aiGenerated || m.ai_generated_by
+  );
+
+  // Identify obvious system/internal notes. If module/type indicates a note
+  // *and* there is no clear direction or author, treat as internal.
+  // These system items include policy changes, fun level changes, etc.
+  if ((moduleVal === "note" || msgType === "note") && !by && !dir) {
+    return "internal";
+  }
+  // Additional safeguard: explicit system/automation roles
+  if (["system","automation","policy","workflow"].includes(by)) {
+    return "internal";
+  }
+
+  // Guest messages explicitly marked
+  if (by === "guest" || by === "customer" || by === "user") {
+    return "guest";
+  }
+
+  // Messages from the host/agent. In some datasets the role may be
+  // recorded as 'host', 'agent', 'owner' or similar. Treat any non-guest
+  // sender as agent by default.
+  if (by) {
+    // Many AI messages are authored by the host but flagged as AI-generated.
+    if (isAI) {
+      // Normalise the AI status across different possible property names
+      const aiStatus = (m.ai_status || m.aiStatus || m.ai_message_status || m.status || m.state || "").toString().toLowerCase();
+      // Consider a confirmed AI suggestion as an agent message. The list of
+      // keywords is intentionally broad to catch variations (approved,
+      // confirmed, sent, delivered, published, released). If COUNT_AI_AS_AGENT
+      // is enabled, any AI-generated message should be treated as an agent
+      // message regardless of its status.
+      const approvedKeywords = [
+        "approved",
+        "confirmed",
+        "sent",
+        "delivered",
+        "published",
+        "released"
+      ];
+      const isApproved = approvedKeywords.some(k => aiStatus.includes(k));
+      if (isApproved || COUNT_AI_AS_AGENT) return "agent";
+      return "ai";
+    }
+    // Non-AI messages from the host are considered agent replies
+    return "agent";
+  }
+
+  // Fallback to direction heuristics. Messages inbound to the system are
+  // considered guest messages; outbound messages are agent replies.
+  if (dir === "inbound") return "guest";
+  if (dir === "outbound") return "agent";
+
+  // As a conservative default, treat unknown messages as guest messages to
+  // avoid inadvertently suppressing SLA alerts.
+  return "guest";
+}
+
+function tsOf(m) {
+  const t = m.sent_at || m.createdAt || m.timestamp || m.ts || m.time || null;
+  const d = t ? new Date(t) : null;
+  return d && !isNaN(+d) ? d : null;
+}
+
+function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
+  // Determine whether the latest guest message has gone unanswered for
+  // at least `slaMin` minutes. We build a chronologically sorted list
+  // with a role classification for each message, ignoring items that
+  // lack a valid timestamp. Messages marked as "internal" are always
+  // skipped. AI suggestions that are not approved (and when
+  // COUNT_AI_AS_AGENT is false) are treated like internal notes ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ
+  // they neither start nor end an SLA window.
+  const list = (messages || [])
+    .filter(Boolean)
+    .map(m => {
+      const ts = tsOf(m);
+      return ts instanceof Date ? { m, ts, role: whoSent(m) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.ts?.getTime() || 0) - (b.ts?.getTime() || 0));
+
+  if (!list.length) return { ok: true, reason: "empty" };
+
+  // Track the timestamp of the most recent guest message that has not
+  // yet been answered by an agent. As we iterate in order, a guest
+  // message starts or resets the SLA countdown. A subsequent agent
+  // message (or an AI message counted as agent) clears the pending
+  // guest message. Unapproved AI suggestions and internal notes are
+  // ignored.
+  let lastGuestTs = null;
+  for (const item of list) {
+    const role = item.role;
+    if (role === "internal") continue;
+    if (role === "ai" && !COUNT_AI_AS_AGENT) {
+      // treat unapproved AI suggestions as noise
+      continue;
+    }
+    if (role === "guest") {
+      // start or reset the SLA window
+      lastGuestTs = item.ts;
+    } else if (role === "agent" || (role === "ai" && COUNT_AI_AS_AGENT)) {
+      // An agent response clears the SLA if it comes after the guest message
+      if (lastGuestTs && item.ts >= lastGuestTs) {
+        lastGuestTs = null;
+      }
+    }
+  }
 
   if (!lastGuestTs) {
-    return { ok: true, reason: "no_guest_message" };
+    // No outstanding guest message waiting for reply
+    return { ok: true, reason: "no_breach" };
   }
 
-  // ✅ Short-circuit if a human answered after the last guest message.
-  if (lastAgentTs && lastAgentTs > lastGuestTs) {
-    return { ok: true, reason: "answered_within_sla", lastGuestTs, lastAgentTs };
+  // Compute the minutes since the last unanswered guest message
+  const minsSinceGuest = Math.floor((now - lastGuestTs) / 60000);
+  if (minsSinceGuest >= slaMin) {
+    return { ok: false, reason: "guest_unanswered", minsSinceAgent: minsSinceGuest };
   }
-
-  // Strict minute math: FLOOR (no early flip).
-  const minsSinceGuest = Math.floor((Date.now() - lastGuestTs) / 60_000);
-  if (minsSinceGuest < SLA_MINUTES) {
-    return { ok: true, reason: "still_within_sla", minsSinceGuest, lastGuestTs };
-  }
-
-  // Optional one-shot grace recheck to avoid boundary races/API lag.
-  if (BREACH_GRACE_SECONDS > 0) {
-    await sleep(BREACH_GRACE_SECONDS * 1000);
-    const refreshed = await fetchMessages(id);
-    const refreshedAgentTs = refreshed.filter(isHumanAgent).map(pickTs).reduce((a, b) => Math.max(a, b), 0);
-    if (refreshedAgentTs && refreshedAgentTs > lastGuestTs) {
-      return { ok: true, reason: "answered_during_grace", lastGuestTs, lastAgentTs: refreshedAgentTs };
-    }
-  }
-
-  // 🚨 Breach.
-  return { ok: false, reason: "guest_unanswered", minsSinceGuest, lastGuestTs, lastAgentTs, conversationUrl };
+  return { ok: true, reason: "within_sla", minsSinceAgent: minsSinceGuest };
 }
 
-// -------------
-// Email message
-// -------------
-function formatTime(ts) {
-  if (!ts) return "N/A";
-  const d = new Date(ts);
-  return `${d.toLocaleString()}`;
+async function sendEmail(subject, html) {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !ALERT_TO) {
+    console.log("Alert needed, but SMTP/env not fully set.");
+    return;
+  }
+  const tr = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASS }
+  });
+  await tr.sendMail({ from: `"${FROM_NAME}" <${SMTP_USER}>`, to: ALERT_TO, subject, html });
 }
 
-async function main() {
-  const result = await evaluate();
-  const convoLink = CONVERSATION_URL || env("CONVERSATION_URL", "");
+(async () => {
+  // Skip GitHub Actions "schedule" events.  The workflow that invokes this
+  // script on a cron (e.g. every 5 minutes) causes redundant alerts.  By
+  // checking the GITHUB_EVENT_NAME environment variable we can abort
+  // execution early during scheduled runs while still allowing manual
+  // invocations (e.g. repository_dispatch) to proceed.  This prevents
+  // multiple alerts from being generated on a fixed interval.
+  const eventName = process.env.GITHUB_EVENT_NAME || "";
+  if (eventName.toLowerCase() === "schedule") {
+    console.log("Scheduled run detected; skipping check.");
+    return;
+  }
+  // 1) Login
+  const token = await login();
 
-  if (!result.ok) {
-    const subject = `⚠️ SLA breach ≥ ${SLA_MINUTES} min`;
-    const html = `\
-<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>
-${convoLink ? `<p>Conversation: <a href="${convoLink}">${convoLink}</a></p>` : ""}
-<ul>
-  <li><b>Last guest:</b> ${formatTime(result.lastGuestTs)}</li>
-  <li><b>Last agent:</b> ${formatTime(result.lastAgentTs)}</li>
-  <li><b>Now:</b> ${formatTime(Date.now())}</li>
-</ul>`;
-    const text = `Guest appears unanswered >= ${SLA_MINUTES} minutes.
-${convoLink ? `Conversation: ${convoLink}` : ""}
-Last guest: ${formatTime(result.lastGuestTs)}
-Last agent: ${formatTime(result.lastAgentTs)}
-Now:        ${formatTime(Date.now())}`;
+  // 2) Build messages URL from UI URL / API URL / UUID / default
+  const id = extractConversationId(CONVERSATION_INPUT) || DEFAULT_CONVO_ID;
+  if (!id) throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
+  if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
 
-    if (ALERT_TO) {
-      const { sent, reason } = await sendAlert({ subject, html, text });
-      if (!sent) {
-        console.log("Alert needed but not sent:", reason);
-      } else {
-        console.log("✅ Alert email sent.");
-      }
-    } else {
-      console.log("⚠️ Breach detected, but ALERT_TO is not set. Skipping email.");
-    }
+  const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
+  const headers = token ? { authorization: `Bearer ${token}` } : {};
+  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
+  if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
+
+  // 3) Parse and evaluate
+  const data = await res.json();
+  const msgs = normalizeMessages(data);
+  const result = evaluate(msgs);
+  console.log("Second check result:", JSON.stringify(result, null, 2));
+
+  // 4) Alert if needed
+  if (!result.ok && result.reason === "guest_unanswered") {
+    // Compose a clean subject/body without garbled UTF-8 sequences.  The
+    // original code contained incorrectly encoded characters (e.g. "ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¯ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¸ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ" and
+    // "ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¥") which manifested as "ÃÂÃÂ" symbols in emails.  Use proper
+    // Unicode or ASCII equivalents instead.  We include a warning emoji
+    // (ÃÂ¢ÃÂÃÂ ÃÂ¯ÃÂ¸ÃÂ) and the greaterÃÂ¢ÃÂÃÂthanÃÂ¢ÃÂÃÂorÃÂ¢ÃÂÃÂequal sign (ÃÂ¢ÃÂÃÂ¥) directly in the
+    // template literal; Node treats this file as UTFÃÂ¢ÃÂÃÂ8.
+    const subj = `ÃÂ¢ÃÂÃÂ ÃÂ¯ÃÂ¸ÃÂ Boom SLA: guest unanswered ÃÂ¢ÃÂÃÂ¥ ${SLA_MINUTES}m`;
+    const convoLink = buildConversationLink();
+    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
+    // Likewise, use a properly encoded ÃÂ¢ÃÂÃÂ¥ sign in the body.  HTML
+    // content is otherwise unchanged.
+    const bodyHtml = `<p>Guest appears unanswered ÃÂ¢ÃÂÃÂ¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    await sendEmail(subj, bodyHtml);
+    console.log("ÃÂ¢ÃÂÃÂ Alert email sent.");
   } else {
-    console.log("No alert:", result.reason);
+    console.log("No alert sent.");
   }
-
-  if (DEBUG) {
-    fs.writeFileSync("result.debug.json", JSON.stringify(result, null, 2));
-  }
-}
-
-main().catch((e) => {
+})().catch(e => {
   console.error(e);
   process.exit(1);
 });
