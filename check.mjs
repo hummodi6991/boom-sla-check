@@ -444,7 +444,7 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   }
 
   // Compute the minutes since the last unanswered guest message
-  const minsSinceGuest = Math.round((now - lastGuestTs) / 60000);
+  const minsSinceGuest = Math.floor((now - lastGuestTs) / 60000);
   if (minsSinceGuest >= slaMin) {
     return { ok: false, reason: "guest_unanswered", minsSinceAgent: minsSinceGuest };
   }
