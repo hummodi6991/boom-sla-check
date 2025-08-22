@@ -59,17 +59,17 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 /**
  * Attempt to decode a string that may be Base64 encoded. Many email
  * tracking links include the destination URL as the final path segment
- * using URLÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂsafe Base64 encoding. This helper normalises the input and
- * pads it to a multiple of 4 before decoding. If the decoded string
- * contains nonÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂprintable characters or cannot be decoded it returns
- * null.
+ * using URL-safe Base64 encoding. This helper normalises the input
+ * and pads it to a multiple of 4 before decoding. If the decoded
+ * string contains non-printable characters or cannot be decoded, it
+ * returns null.
  *
  * @param {string} str The candidate string to decode
- * @returns {string|null} Decoded UTFÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ8 string or null if decoding fails
+ * @returns {string|null} Decoded UTF-8 string or null if decoding fails
  */
 function tryDecode(str) {
   if (!str || typeof str !== "string") return null;
-  // Replace URLÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂsafe characters
+  // Replace URL-safe characters
   let s = str.replace(/-/g, "+").replace(/_/g, "/");
   // Pad to length divisible by 4
   const pad = s.length % 4;
@@ -400,8 +400,8 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // with a role classification for each message, ignoring items that
   // lack a valid timestamp. Messages marked as "internal" are always
   // skipped. AI suggestions that are not approved (and when
-  // COUNT_AI_AS_AGENT is false) are treated like internal notes ÃÂÃÂ¢ÃÂÃÂÃÂÃÂ
-  // they neither start nor end an SLA window.
+  // COUNT_AI_AS_AGENT is false) are treated like internal notes - they
+  // neither start nor end an SLA window.
   const list = (messages || [])
     .filter(Boolean)
     .map(m => {
