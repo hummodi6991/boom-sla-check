@@ -504,15 +504,15 @@ async function sendEmail(subject, html) {
     // Unicode or ASCII equivalents instead.  We include a warning emoji
     // (Ã¢ÂÂ Ã¯Â¸Â) and the greaterÃ¢ÂÂthanÃ¢ÂÂorÃ¢ÂÂequal sign (Ã¢ÂÂ¥) directly in the
     // template literal; Node treats this file as UTFÃ¢ÂÂ8.
-    const subj = `Ã¢ÂÂ Ã¯Â¸Â Boom SLA: guest unanswered Ã¢ÂÂ¥ ${SLA_MINUTES}m`;
+    const subj = `â ï¸ Boom SLA: guest unanswered â¥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
     // Likewise, use a properly encoded Ã¢ÂÂ¥ sign in the body.  HTML
     // content is otherwise unchanged.
-    const bodyHtml = `<p>Guest appears unanswered Ã¢ÂÂ¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const bodyHtml = `<p>Guest appears unanswered â¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("Ã¢ÂÂ Alert email sent.");
+    console.log("â Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
