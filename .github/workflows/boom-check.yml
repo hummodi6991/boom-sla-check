@@ -2,9 +2,6 @@
 
 name: Boom SLA (API, REST)
 on:
-  # Keep the existing 5‑minute schedule so the checker still runs regularly
-  schedule:
-    - cron: "*/5 * * * *"     # every 5 minutes
   # Allow manual runs from the Actions UI with an optional conversation input
   workflow_dispatch:
     inputs:
