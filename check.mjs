@@ -498,21 +498,14 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    // Compose a clean subject/body without garbled UTF-8 sequences.  The
-    // original code contained incorrectly encoded characters (e.g. "ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¯ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¸ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ" and
-    // "ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¥") which manifested as "ÃÂÃÂ" symbols in emails.  Use proper
-    // Unicode or ASCII equivalents instead.  We include a warning emoji
-    // (ÃÂ¢ÃÂÃÂ ÃÂ¯ÃÂ¸ÃÂ) and the greaterÃÂ¢ÃÂÃÂthanÃÂ¢ÃÂÃÂorÃÂ¢ÃÂÃÂequal sign (ÃÂ¢ÃÂÃÂ¥) directly in the
-    // template literal; Node treats this file as UTFÃÂ¢ÃÂÃÂ8.
-    const subj = `ÃÂ¢ÃÂÃÂ ÃÂ¯ÃÂ¸ÃÂ Boom SLA: guest unanswered ÃÂ¢ÃÂÃÂ¥ ${SLA_MINUTES}m`;
+    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    // Likewise, use a properly encoded ÃÂ¢ÃÂÃÂ¥ sign in the body.  HTML
-    // content is otherwise unchanged.
-    const bodyHtml = `<p>Guest appears unanswered ÃÂ¢ÃÂÃÂ¥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
-    console.log("ÃÂ¢ÃÂÃÂ Alert email sent.");
+    console.log("⚠️ Alert email sent.");
+ Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
