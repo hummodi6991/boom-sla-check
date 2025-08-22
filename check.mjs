@@ -505,7 +505,6 @@ async function sendEmail(subject, html) {
     const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     await sendEmail(subj, bodyHtml);
     console.log("⚠️ Alert email sent.");
- Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
