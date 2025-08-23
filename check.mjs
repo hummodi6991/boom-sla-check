@@ -449,9 +449,14 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     return { ok: true, reason: "no_breach" };
   }
 
-  // Compute the minutes since the last unanswered guest message
-  const minsSinceGuest = Math.floor((now - lastGuestTs) / 60000);
-  if (minsSinceGuest >= slaMin) {
+  // Compute the time since the last unanswered guest message using
+  // millisecond precision to avoid early firing caused by rounding.
+  // The alert should trigger only when the full SLA interval has
+  // elapsed.  We still expose a minutes count (rounded down) in the
+  // result for logging purposes.
+  const diffMs = now - lastGuestTs;
+  const minsSinceGuest = Math.floor(diffMs / 60000);
+  if (diffMs >= slaMin * 60000) {
     return { ok: false, reason: "guest_unanswered", minsSinceAgent: minsSinceGuest };
   }
   return { ok: true, reason: "within_sla", minsSinceAgent: minsSinceGuest };
