@@ -376,7 +376,15 @@ function whoSent(m) {
         "published",
         "released"
       ];
-      const isApproved = approvedKeywords.some(k => aiStatus.includes(k));
+      // Some APIs provide a boolean flag instead of a status string. Treat
+      // any of these flags as an approved AI message. This helps avoid false
+      // SLA alerts when an AI suggestion was actually sent to the guest.
+      const approvedFlag = Boolean(
+        m.ai_approved || m.aiApproved || m.is_ai_approved || m.isAiApproved ||
+        m.approved || m.is_approved || m.isApproved ||
+        m.ai_confirmed || m.aiConfirmed
+      );
+      const isApproved = approvedFlag || approvedKeywords.some(k => aiStatus.includes(k));
       if (isApproved || COUNT_AI_AS_AGENT) return "agent";
       return "ai";
     }
