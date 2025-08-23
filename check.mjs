@@ -354,41 +354,43 @@ function whoSent(m) {
   if (by === "guest" || by === "customer" || by === "user") {
     return "guest";
   }
+  // AI-generated messages need special handling to ensure that unapproved
+  // suggestions do not count as agent replies. Evaluate approval status
+  // regardless of whether a sender role was provided.
+  if (isAI) {
+    const aiStatus = (m.ai_status || m.aiStatus || m.ai_message_status || m.status || m.state || "").toString().toLowerCase();
+    const approvedKeywords = [
+      "approved",
+      "confirmed",
+      "sent",
+      "delivered",
+      "published",
+      "released"
+    ];
+    const unapprovedKeywords = [
+      "suggest",
+      "draft",
+      "pending",
+      "proposed",
+      "generated"
+    ];
+    const approvedFlag = Boolean(
+      m.ai_approved || m.aiApproved || m.is_ai_approved || m.isAiApproved ||
+      m.approved || m.is_approved || m.isApproved ||
+      m.ai_confirmed || m.aiConfirmed
+    );
+    const isApproved = approvedFlag || approvedKeywords.some(k => aiStatus.includes(k));
+    const isUnapproved = unapprovedKeywords.some(k => aiStatus.includes(k));
+    if (isApproved || COUNT_AI_AS_AGENT) return "agent";
+    if (isUnapproved) return "ai";
+    // If the approval state is unclear, treat as an AI suggestion.
+    return "ai";
+  }
 
   // Messages from the host/agent. In some datasets the role may be
   // recorded as 'host', 'agent', 'owner' or similar. Treat any non-guest
   // sender as agent by default.
   if (by) {
-    // Many AI messages are authored by the host but flagged as AI-generated.
-    if (isAI) {
-      // Normalise the AI status across different possible property names
-      const aiStatus = (m.ai_status || m.aiStatus || m.ai_message_status || m.status || m.state || "").toString().toLowerCase();
-      // Consider a confirmed AI suggestion as an agent message. The list of
-      // keywords is intentionally broad to catch variations (approved,
-      // confirmed, sent, delivered, published, released). If COUNT_AI_AS_AGENT
-      // is enabled, any AI-generated message should be treated as an agent
-      // message regardless of its status.
-      const approvedKeywords = [
-        "approved",
-        "confirmed",
-        "sent",
-        "delivered",
-        "published",
-        "released"
-      ];
-      // Some APIs provide a boolean flag instead of a status string. Treat
-      // any of these flags as an approved AI message. This helps avoid false
-      // SLA alerts when an AI suggestion was actually sent to the guest.
-      const approvedFlag = Boolean(
-        m.ai_approved || m.aiApproved || m.is_ai_approved || m.isAiApproved ||
-        m.approved || m.is_approved || m.isApproved ||
-        m.ai_confirmed || m.aiConfirmed
-      );
-      const isApproved = approvedFlag || approvedKeywords.some(k => aiStatus.includes(k));
-      if (isApproved || COUNT_AI_AS_AGENT) return "agent";
-      return "ai";
-    }
-    // Non-AI messages from the host are considered agent replies
     return "agent";
   }
 
