@@ -395,7 +395,15 @@ function whoSent(m) {
 }
 
 function tsOf(m) {
-  const t = m.sent_at || m.createdAt || m.timestamp || m.ts || m.time || null;
+  const t =
+    m.sent_at ||
+    m.sentAt ||
+    m.created_at ||
+    m.createdAt ||
+    m.timestamp ||
+    m.ts ||
+    m.time ||
+    null;
   const d = t ? new Date(t) : null;
   return d && !isNaN(+d) ? d : null;
 }
