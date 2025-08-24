@@ -363,6 +363,18 @@ function classifyMessage(m) {
   );
   const aiStatus  = isAI ? aiMessageStatus(m) : "none";
 
+  // Messages explicitly sent via the "AI CS" channel should count as agent
+  // responses regardless of other heuristics.  Different APIs may expose the
+  // channel information under varying field names and delimiters, so normalise
+  // by stripping non-alphanumeric characters before comparison.
+  const channelRaw = (
+    m.channel || m.channel_type || m.via_channel || m.viaChannel || ""
+  ).toString().toLowerCase();
+  const channel = channelRaw.replace(/[^a-z0-9]/g, "");
+  if (channel === "aics") {
+    return { role: "agent", aiStatus };
+  }
+
   // Identify obvious system/internal notes. If module/type indicates a note
   // *and* there is no clear direction or author, treat as internal.
   // These system items include policy changes, fun level changes, etc.
