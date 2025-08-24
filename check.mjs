@@ -472,12 +472,12 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // The alert should trigger only when the full SLA interval has
   // elapsed.  We still expose a minutes count (rounded down) in the
   // result for logging purposes.
-  const diffMs = now - lastGuestTs;
-  const minsSinceGuest = Math.floor(diffMs / 60000);
-  if (diffMs >= slaMin * 60000) {
-    return { ok: false, reason: "guest_unanswered", minsSinceAgent: minsSinceGuest };
+  const diffMs = now.getTime() - lastGuestTs.getTime();
+  const completedMins = Math.floor(diffMs / 60000);
+  if (diffMs < slaMin * 60000) {
+    return { ok: true, reason: "within_sla", minsSinceAgent: completedMins };
   }
-  return { ok: true, reason: "within_sla", minsSinceAgent: minsSinceGuest };
+  return { ok: false, reason: "guest_unanswered", minsSinceAgent: completedMins };
 }
 
 async function sendEmail(subject, html) {
