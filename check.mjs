@@ -379,10 +379,11 @@ function classifyMessage(m) {
     return { role: "guest", aiStatus };
   }
   // AI-generated messages need special handling to ensure that unapproved
-  // suggestions do not count as agent replies. Evaluate approval status
-  // regardless of whether a sender role was provided.
+  // suggestions do not count as agent replies. If the message has an
+  // explicit sender or is clearly outbound it should still count as an
+  // agent response even when no approval metadata is present.
   if (isAI) {
-    if (aiStatus === "approved" || COUNT_AI_AS_AGENT) {
+    if (aiStatus === "approved" || by || dir === "outbound" || COUNT_AI_AS_AGENT) {
       return { role: "agent", aiStatus };
     }
     return { role: "ai", aiStatus };
