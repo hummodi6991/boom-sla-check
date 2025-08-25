@@ -367,10 +367,22 @@ function classifyMessage(m) {
   // responses regardless of other heuristics.  Different APIs may expose the
   // channel information under varying field names and delimiters, so normalise
   // by stripping non-alphanumeric characters before comparison.
-  const channelRaw = (
-    m.channel || m.channel_type || m.via_channel || m.viaChannel || ""
-  ).toString().toLowerCase();
-  const channel = channelRaw.replace(/[^a-z0-9]/g, "");
+  const channelCandidates = [
+    m.channel,
+    m.channel_type,
+    m.channelType,
+    m.channel_name,
+    m.channelName,
+    m.via_channel,
+    m.viaChannel,
+    m.via?.channel,
+    m.via?.type,
+    m.channel?.name,
+    m.channel?.type,
+  ];
+  const channelRaw =
+    channelCandidates.find((v) => typeof v === "string" && v) || "";
+  const channel = channelRaw.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (channel === "aics") {
     return { role: "agent", aiStatus };
   }
