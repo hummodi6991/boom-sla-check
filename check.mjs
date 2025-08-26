@@ -387,11 +387,42 @@ function classifyMessage(m) {
     return { role: "agent", aiStatus };
   }
 
-  // Identify obvious system/internal notes. If module/type indicates a note
-  // *and* there is no clear direction or author, treat as internal.
-  // These system items include policy changes, fun level changes, etc.
-  if ((moduleVal === "note" || msgType === "note") && !by && !dir) {
-    return { role: "internal", aiStatus };
+  // Identify system/internal notes or status-change events when there is no
+  // apparent author or direction. Items such as policy or fun level changes
+  // should not start an SLA window even if the API doesn't explicitly mark
+  // them as notes.
+  if (!by && !dir) {
+    const sysKeywords = [
+      "note",
+      "policy",
+      "workflow",
+      "status",
+      "level",
+      "change",
+      "changed",
+      "update",
+      "updated",
+      "automation",
+      "system",
+      "assignment",
+      "fun",
+    ];
+    // Include message body/content in the keyword scan as some APIs only
+    // expose system events like "Fun level changed" in the text itself.
+    const body = (
+      m.body ||
+      m.body_text ||
+      m.text ||
+      m.message ||
+      m.content ||
+      ""
+    )
+      .toString()
+      .toLowerCase();
+    const combo = `${moduleVal} ${msgType} ${body}`;
+    if (sysKeywords.some((k) => combo.includes(k))) {
+      return { role: "internal", aiStatus };
+    }
   }
   // Additional safeguard: explicit system/automation roles
   if (["system","automation","policy","workflow"].includes(by)) {
