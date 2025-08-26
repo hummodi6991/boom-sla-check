@@ -47,12 +47,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: 'npm'
       - name: Install deps
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci --prefer-offline --no-audit
           else
-            npm i
+            npm i --prefer-offline --no-audit
           fi
       - name: Run SLA checker
         run: node check.mjs
