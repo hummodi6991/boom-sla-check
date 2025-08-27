@@ -351,11 +351,24 @@ function classifyMessage(m) {
   const moduleVal = (m.module || m.module_type || "").toString().toLowerCase();
   const msgType   = (m.msg_type || m.type || "").toString().toLowerCase();
   // Pull the apparent author role from a variety of common fields. The
-  // API uses different property names such as by, senderType, author.role,
-  // author_role or just role. Include role as a last resort to avoid
-  // misclassifying agent messages as guest messages when the only
-  // indicator is a `role` field.
-  const by        = (m.by || m.senderType || m.author?.role || m.author_role || m.role || "").toString().toLowerCase();
+  // API uses different property names such as by, senderType, sender.role,
+  // author.role, author_role or just role. Include role as a last resort to
+  // avoid misclassifying agent messages as guest messages when the only
+  // indicator is a `role` field. Some datasets nest the role under a
+  // `sender` object, so check those variants as well.
+  const by = (
+    m.by ||
+    m.senderType ||
+    m.sender_type ||
+    m.sender?.role ||
+    m.sender?.type ||
+    m.author?.role ||
+    m.author_role ||
+    m.role ||
+    ""
+  )
+    .toString()
+    .toLowerCase();
   const dir       = (m.direction || m.message_direction || "").toString().toLowerCase();
   const isAI      = Boolean(
     m.generated_by_ai || m.ai_generated || m.is_ai_generated ||
