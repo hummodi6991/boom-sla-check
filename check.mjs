@@ -401,10 +401,12 @@ function classifyMessage(m) {
   }
 
   // Identify system/internal notes or status-change events when there is no
-  // apparent author or direction. Items such as policy or fun level changes
-  // should not start an SLA window even if the API doesn't explicitly mark
-  // them as notes.
-  if (!by && !dir) {
+  // apparent author. Items such as policy or fun level changes should not
+  // start an SLA window even if the API marks them with a direction. To avoid
+  // misclassifying regular guest messages that happen to include common terms
+  // like "change" or "update", require that at least two system keywords are
+  // present across the module, type or body fields.
+  if (!by) {
     const sysKeywords = [
       "note",
       "policy",
@@ -433,7 +435,8 @@ function classifyMessage(m) {
       .toString()
       .toLowerCase();
     const combo = `${moduleVal} ${msgType} ${body}`;
-    if (sysKeywords.some((k) => combo.includes(k))) {
+    const matches = sysKeywords.filter((k) => combo.includes(k));
+    if (matches.length >= 2) {
       return { role: "internal", aiStatus };
     }
   }
