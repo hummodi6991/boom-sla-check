@@ -350,6 +350,16 @@ function classifyMessage(m) {
   // Normalise some common fields
   const moduleVal = (m.module || m.module_type || "").toString().toLowerCase();
   const msgType   = (m.msg_type || m.type || "").toString().toLowerCase();
+  const body = (
+    m.body ||
+    m.body_text ||
+    m.text ||
+    m.message ||
+    m.content ||
+    ""
+  )
+    .toString()
+    .toLowerCase();
   // Pull the apparent author role from a variety of common fields. The
   // API uses different property names such as by, senderType, sender.role,
   // author.role, author_role or just role. Include role as a last resort to
@@ -400,45 +410,32 @@ function classifyMessage(m) {
     return { role: "agent", aiStatus };
   }
 
-  // Identify system/internal notes or status-change events when there is no
-  // apparent author. Items such as policy or fun level changes should not
-  // start an SLA window even if the API marks them with a direction. To avoid
-  // misclassifying regular guest messages that happen to include common terms
-  // like "change" or "update", require that at least two system keywords are
-  // present across the module, type or body fields.
-  if (!by) {
-    const sysKeywords = [
-      "note",
-      "policy",
-      "workflow",
-      "status",
-      "level",
-      "change",
-      "changed",
-      "update",
-      "updated",
-      "automation",
-      "system",
-      "assignment",
-      "fun",
-    ];
-    // Include message body/content in the keyword scan as some APIs only
-    // expose system events like "Fun level changed" in the text itself.
-    const body = (
-      m.body ||
-      m.body_text ||
-      m.text ||
-      m.message ||
-      m.content ||
-      ""
-    )
-      .toString()
-      .toLowerCase();
-    const combo = `${moduleVal} ${msgType} ${body}`;
-    const matches = sysKeywords.filter((k) => combo.includes(k));
-    if (matches.length >= 2) {
-      return { role: "internal", aiStatus };
-    }
+  // Identify system/internal notes or status-change events. Items such as
+  // policy or fun level changes should not start an SLA window even if the API
+  // marks them with an author or direction. To avoid misclassifying regular
+  // guest messages that happen to include common terms like "change" or
+  // "update", require that at least two system keywords are present across the
+  // module, type or body fields. Messages explicitly marked as guest/customer
+  // are excluded from this heuristic.
+  const sysKeywords = [
+    "note",
+    "policy",
+    "workflow",
+    "status",
+    "level",
+    "change",
+    "changed",
+    "update",
+    "updated",
+    "automation",
+    "system",
+    "assignment",
+    "fun",
+  ];
+  const combo = `${moduleVal} ${msgType} ${body}`;
+  const matches = sysKeywords.filter((k) => combo.includes(k));
+  if (matches.length >= 2 && !["guest", "customer", "user"].includes(by)) {
+    return { role: "internal", aiStatus };
   }
   // Additional safeguard: explicit system/automation roles
   if (["system","automation","policy","workflow"].includes(by)) {
