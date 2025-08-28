@@ -42,6 +42,8 @@ jobs:
       # if none are present this will evaluate to an empty string and the checker will fall back to the default conversation ID.
       CONVERSATION_INPUT: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || github.event.client_payload.conversationUrl || github.event.client_payload.conversation_url }}
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
+      # Forward the raw Boom notification for scripts that parse additional context
+      BOOM_NOTIFICATION: ${{ toJSON(github.event.client_payload.notification || github.event.client_payload.boom_notification || '') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
