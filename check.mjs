@@ -31,19 +31,31 @@ let CONVERSATION_INPUT = env("CONVERSATION_INPUT", "");
 if (!CONVERSATION_INPUT) {
   const notifRaw = env("BOOM_NOTIFICATION", "");
   if (notifRaw) {
+    let parsed = null;
     try {
-      const n = JSON.parse(notifRaw);
-      const candidates = [
-        n.conversationId, n.conversation_id,
-        n.conversationUrl, n.conversation_url,
-        n.url, n.text, n.body
-      ].filter(v => typeof v === "string" && v.trim());
-      if (candidates.length) {
-        CONVERSATION_INPUT = candidates[0].trim();
-        process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
-      }
+      parsed = JSON.parse(notifRaw);
     } catch (e) {
       console.warn("Failed to parse BOOM_NOTIFICATION:", e.message);
+    }
+    const candidates = [];
+    if (parsed && typeof parsed === "object") {
+      candidates.push(
+        parsed.conversationId,
+        parsed.conversation_id,
+        parsed.conversationUrl,
+        parsed.conversation_url,
+        parsed.url,
+        parsed.text,
+        parsed.body,
+        parsed.message
+      );
+    } else {
+      candidates.push(notifRaw);
+    }
+    const conv = candidates.find(v => typeof v === "string" && v.trim());
+    if (conv) {
+      CONVERSATION_INPUT = conv.trim();
+      process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
     }
   }
 }
