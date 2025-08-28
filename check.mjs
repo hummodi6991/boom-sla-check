@@ -1,15 +1,12 @@
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
+import { sendAlert } from "./email.mjs";
 
 const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 
 // --- Secrets (from GitHub) ---
 const BOOM_USER  = env("BOOM_USER");
 const BOOM_PASS  = env("BOOM_PASS");
-const PUSH_URL   = env("PUSH_URL");
-const PUSH_TOKEN = env("PUSH_TOKEN");
-const PUSH_TO    = env("PUSH_TO");
-const FROM_NAME  = env("ALERT_FROM_NAME","Boom SLA Bot");
 
 // --- App mechanics ---
 const LOGIN_URL            = env("LOGIN_URL");
@@ -31,6 +28,25 @@ const COUNT_AI_AS_AGENT    = env("COUNT_AI_SUGGESTION_AS_AGENT","false").toLower
 // --- Inputs / defaults ---
 // Prefer env; if missing and this is a repository_dispatch run, parse the GitHub event JSON.
 let CONVERSATION_INPUT = env("CONVERSATION_INPUT", "");
+if (!CONVERSATION_INPUT) {
+  const notifRaw = env("BOOM_NOTIFICATION", "");
+  if (notifRaw) {
+    try {
+      const n = JSON.parse(notifRaw);
+      const candidates = [
+        n.conversationId, n.conversation_id,
+        n.conversationUrl, n.conversation_url,
+        n.url, n.text, n.body
+      ].filter(v => typeof v === "string" && v.trim());
+      if (candidates.length) {
+        CONVERSATION_INPUT = candidates[0].trim();
+        process.env.CONVERSATION_INPUT = CONVERSATION_INPUT;
+      }
+    } catch (e) {
+      console.warn("Failed to parse BOOM_NOTIFICATION:", e.message);
+    }
+  }
+}
 if (!CONVERSATION_INPUT) {
   const eventName = process.env.GITHUB_EVENT_NAME || "";
   const eventPath = process.env.GITHUB_EVENT_PATH || "";
@@ -603,28 +619,6 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   return { ok: false, reason: "guest_unanswered", minsSinceAgent: completedMins };
 }
 
-async function sendPhoneNotification(title, body) {
-  if (!PUSH_URL || !PUSH_TOKEN || !PUSH_TO) {
-    console.log("Alert needed, but phone notification env not fully set.");
-    return;
-  }
-  try {
-    const res = await fetch(PUSH_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${PUSH_TOKEN}`,
-      },
-      body: JSON.stringify({ to: PUSH_TO, title, body, from: FROM_NAME }),
-    });
-    if (!res.ok) {
-      console.warn("Notification API responded", res.status);
-    }
-  } catch (e) {
-    console.warn("Failed to send notification:", e.message);
-  }
-}
-
 (async () => {
   // Skip GitHub Actions "schedule" events.  The workflow that invokes this
   // script on a cron (e.g. every 5 minutes) causes redundant alerts.  By
@@ -661,8 +655,11 @@ async function sendPhoneNotification(title, body) {
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
     const msg = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.` + (convoLink ? ` Conversation: ${convoLink}` : "");
-    await sendPhoneNotification(subj, msg);
-    console.log("⚠️ Alert notification sent.");
+    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
+    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
+    await sendAlert({ subject: subj, text: msg, html: bodyHtml });
+    console.log("⚠️ Alert email sent.");
   } else {
     console.log("No alert sent.");
   }
