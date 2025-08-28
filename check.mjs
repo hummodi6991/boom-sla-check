@@ -519,6 +519,8 @@ const CLOSING_PHRASES = [
   "take care",
   "later",
   "laterz",
+  "مع السلامة",
+  "وداعا",
 ];
 
 const CLOSING_RE = /(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!.\s]*$/;
