@@ -1,4 +1,3 @@
-import nodemailer from "nodemailer";
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
 
@@ -7,11 +6,9 @@ const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 // --- Secrets (from GitHub) ---
 const BOOM_USER  = env("BOOM_USER");
 const BOOM_PASS  = env("BOOM_PASS");
-const SMTP_HOST  = env("SMTP_HOST");
-const SMTP_PORT  = parseInt(env("SMTP_PORT","587"),10);
-const SMTP_USER  = env("SMTP_USER");
-const SMTP_PASS  = env("SMTP_PASS");
-const ALERT_TO   = env("ALERT_TO");
+const PUSH_URL   = env("PUSH_URL");
+const PUSH_TOKEN = env("PUSH_TOKEN");
+const PUSH_TO    = env("PUSH_TO");
 const FROM_NAME  = env("ALERT_FROM_NAME","Boom SLA Bot");
 
 // --- App mechanics ---
@@ -608,23 +605,24 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   return { ok: false, reason: "guest_unanswered", minsSinceAgent: completedMins };
 }
 
-async function sendEmail(subject, html) {
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !ALERT_TO) {
-    console.log("Alert needed, but SMTP/env not fully set.");
+async function sendPhoneNotification(title, body) {
+  if (!PUSH_URL || !PUSH_TOKEN || !PUSH_TO) {
+    console.log("Alert needed, but push/env not fully set.");
     return;
   }
-  const tr = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_PORT === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-  });
-  await tr.sendMail({
-    from: `"${FROM_NAME}" <${SMTP_USER}>`,
-    to: ALERT_TO,
-    subject,
-    html,
-  });
+  try {
+    const res = await fetch(PUSH_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${PUSH_TOKEN}`,
+      },
+      body: JSON.stringify({ to: PUSH_TO, title, body, from: FROM_NAME }),
+    });
+    console.log("Push API responded", res.status);
+  } catch (err) {
+    console.error("Failed to send notification:", err.message);
+  }
 }
 
 (async () => {
@@ -660,13 +658,12 @@ async function sendEmail(subject, html) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
+    const title = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const convoLink = buildConversationLink();
-    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
-    await sendEmail(subj, bodyHtml);
-    console.log("⚠️ Alert email sent.");
+    let body = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.`;
+    if (convoLink) body += `\n${convoLink}`;
+    await sendPhoneNotification(title, body);
+    console.log("⚠️ Alert notification sent.");
   } else {
     console.log("No alert sent.");
   }
