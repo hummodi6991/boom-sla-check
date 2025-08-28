@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import fs from "fs";
+import translate from "@vitalets/google-translate-api";
 
 const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 
@@ -488,7 +489,59 @@ function tsOf(m) {
   return d && !isNaN(+d) ? d : null;
 }
 
-function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
+function messageBody(m) {
+  return (
+    m.body ||
+    m.body_text ||
+    m.text ||
+    m.message ||
+    m.content ||
+    ""
+  ).toString();
+}
+
+const CLOSING_PHRASES = [
+  "bye",
+  "goodbye",
+  "see you",
+  "see ya",
+  "cya",
+  "talk to you later",
+  "talk soon",
+  "thanks, bye",
+  "thanks bye",
+  "thank you, bye",
+  "thank you bye",
+  "that's all",
+  "no more questions",
+  "no further questions",
+  "cheers",
+  "take care",
+  "later",
+  "laterz",
+];
+
+const CLOSING_RE = /(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!.\s]*$/;
+
+async function isClosingStatement(m) {
+  const txt = messageBody(m).toLowerCase();
+  if (!txt.trim()) return false;
+  if (CLOSING_PHRASES.some((p) => txt.includes(p))) return true;
+  if (CLOSING_RE.test(txt)) return true;
+
+  // Translate to English to catch closings in other languages.
+  try {
+    const res = await translate(txt, { to: "en" });
+    const translated = (res?.text || "").toLowerCase();
+    if (CLOSING_PHRASES.some((p) => translated.includes(p))) return true;
+    if (CLOSING_RE.test(translated)) return true;
+  } catch (err) {
+    console.warn("Translation failed:", err.message);
+  }
+  return false;
+}
+
+async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // Determine whether the latest guest message has gone unanswered for
   // at least `slaMin` minutes. We build a chronologically sorted list
   // with a role and AI status classification for each message, ignoring
@@ -522,6 +575,9 @@ function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
       continue;
     }
     if (role === "guest") {
+      if (await isClosingStatement(item.m)) {
+        continue;
+      }
       // start or reset the SLA window
       lastGuestTs = item.ts;
     } else if (role === "agent" || (role === "ai" && COUNT_AI_AS_AGENT)) {
@@ -559,9 +615,14 @@ async function sendEmail(subject, html) {
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
-    auth: { user: SMTP_USER, pass: SMTP_PASS }
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
-  await tr.sendMail({ from: `"${FROM_NAME}" <${SMTP_USER}>`, to: ALERT_TO, subject, html });
+  await tr.sendMail({
+    from: `"${FROM_NAME}" <${SMTP_USER}>`,
+    to: ALERT_TO,
+    subject,
+    html,
+  });
 }
 
 (async () => {
@@ -592,7 +653,7 @@ async function sendEmail(subject, html) {
   // 3) Parse and evaluate
   const data = await res.json();
   const msgs = normalizeMessages(data);
-  const result = evaluate(msgs);
+  const result = await evaluate(msgs);
   console.log("Second check result:", JSON.stringify(result, null, 2));
 
   // 4) Alert if needed
