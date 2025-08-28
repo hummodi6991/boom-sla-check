@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@vitalets/google-translate-api": "^8.0.0"
+    "@vitalets/google-translate-api": "^8.0.0",
+    "nodemailer": "^6.9.13"
   }
 }
