@@ -507,6 +507,8 @@ const CLOSING_PHRASES = [
   "talk soon",
   "thanks, bye",
   "thanks bye",
+  "bye bye",
+  "thanks again",
   "thank you, bye",
   "thank you bye",
   "that's all",
@@ -520,7 +522,7 @@ const CLOSING_PHRASES = [
   "وداعا",
 ];
 
-const CLOSING_RE = /(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!.\s]*$/;
+const CLOSING_RE = /(thanks[^a-z0-9]{0,5})?(bye|bye bye|goodbye|take care|cya|see\s+ya|later|cheers)[!.\s]*$/;
 
 async function isClosingStatement(m) {
   const txt = messageBody(m).toLowerCase();
