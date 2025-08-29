@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - 'azure/boom-notify/**'
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -22,22 +23,57 @@ jobs:
         run: |
           cd azure/boom-notify
           zip -r ../functionapp.zip host.json boom-notify package.json package-lock.json
-          ls -la ../functionapp.zip
+          ls -lh ../functionapp.zip
 
       - name: ZipDeploy to Kudu (publish profile)
         env:
           PUBLISH_PROFILE: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
         run: |
           set -euo pipefail
-          USER=$(echo "$PUBLISH_PROFILE" | sed -n 's/.*publishMethod="ZipDeploy".*userName="\([^"\]*\)".*/\1/p' | head -n1)
-          PWD=$(echo "$PUBLISH_PROFILE" | sed -n 's/.*publishMethod="ZipDeploy".*userPWD="\([^"\]*\)".*/\1/p' | head -n1)
-          SCM=$(echo "$PUBLISH_PROFILE" | sed -n 's#.*publishMethod="ZipDeploy".*publishUrl="\([^"\]*\)".*#\1#p' | head -n1)
+
+          # Parse publish profile (ZipDeploy entry) robustly with Python
+          readarray -t CREDS < <(python3 - <<'PY'
+import os, xml.etree.ElementTree as ET
+xml = os.environ['PUBLISH_PROFILE']
+root = ET.fromstring(xml)
+for pp in root.findall('.//publishProfile'):
+    if pp.get('publishMethod') == 'ZipDeploy':
+        print(pp.get('userName') or "")
+        print(pp.get('userPWD') or "")
+        print(pp.get('publishUrl') or "")
+        break
+PY
+          )
+
+          USER="${CREDS[0]//[$'\r\n']/}"
+          PWD="${CREDS[1]//[$'\r\n']/}"
+          SCM="${CREDS[2]//[$'\r\n']/}"
+
           if [ -z "$USER" ] || [ -z "$PWD" ] || [ -z "$SCM" ]; then
-            echo "Publish profile secret missing or invalid."
+            echo "Failed to parse AZURE_FUNC_PUBLISH_PROFILE secret (ZipDeploy entry missing)."
             exit 1
           fi
-          curl -fsSL -u "$USER:$PWD" \
-            -H "Content-Type: application/zip" \
-            --data-binary @azure/functionapp.zip \
-            "$SCM/api/zipdeploy"
 
+          # Mask secrets
+          echo "::add-mask::$USER"
+          echo "::add-mask::$PWD"
+          echo "Kudu endpoint: $SCM"
+
+          # Upload with HTTP/1.1, no Expect: 100-continue, retries, and generous timeout
+          curl --fail --show-error --silent \
+               --http1.1 \
+               -H "Content-Type: application/zip" \
+               -H "Expect:" \
+               --retry 5 --retry-delay 2 --retry-connrefused \
+               --max-time 600 \
+               -u "$USER:$PWD" \
+               --data-binary @azure/functionapp.zip \
+               "$SCM/api/zipdeploy?isAsync=true"
+
+          echo "Uploaded. Polling deployment status..."
+          for i in {1..40}; do
+            sleep 3
+            STATUS_JSON="$(curl -sS -u "$USER:$PWD" "$SCM/api/deployments/latest")" || true
+            command -v jq >/dev/null 2>&1 && echo "$STATUS_JSON" | jq -r '.status, .progress, .complete' || echo "$STATUS_JSON"
+            echo "---"
+          done
