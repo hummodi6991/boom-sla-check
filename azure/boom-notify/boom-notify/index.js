@@ -65,9 +65,9 @@ export default async function (context, req) {
     const { conversationId, conversationUrl, event, message } = normalizePayload(body);
 
     // Validate required env vars
-    const owner = process.env.GITHUB_OWNER;
-    const repo  = process.env.GITHUB_REPO;
-    const token = process.env.GITHUB_TOKEN;
+    const owner = process.env.GITHUB_OWNER || process.env.GH_OWNER;
+    const repo  = process.env.GITHUB_REPO  || process.env.GH_REPO;
+    const token = process.env.GITHUB_TOKEN || process.env.GH_PAT;
 
     if (!owner || !repo || !token) {
       context.log.error("Missing one of GITHUB_OWNER/GITHUB_REPO/GITHUB_TOKEN");
