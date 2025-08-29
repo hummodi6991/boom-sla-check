@@ -14,11 +14,30 @@ jobs:
         with:
           node-version: '20'
 
-      - run: npm ci
+      - name: Install deps (function dir)
+        run: npm ci
         working-directory: azure/boom-notify
-      - name: Deploy to Azure Functions (publish profile)
-        uses: Azure/functions-action@v1
-        with:
-          app-name: boom-webhook-func
-          package: azure/boom-notify
-          publish-profile: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
+
+      - name: Package function (zip)
+        run: |
+          cd azure/boom-notify
+          zip -r ../functionapp.zip host.json boom-notify package.json package-lock.json
+          ls -la ../functionapp.zip
+
+      - name: ZipDeploy to Kudu (publish profile)
+        env:
+          PUBLISH_PROFILE: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
+        run: |
+          set -euo pipefail
+          USER=$(echo "$PUBLISH_PROFILE" | sed -n 's/.*publishMethod="ZipDeploy".*userName="\([^"\]*\)".*/\1/p' | head -n1)
+          PWD=$(echo "$PUBLISH_PROFILE" | sed -n 's/.*publishMethod="ZipDeploy".*userPWD="\([^"\]*\)".*/\1/p' | head -n1)
+          SCM=$(echo "$PUBLISH_PROFILE" | sed -n 's#.*publishMethod="ZipDeploy".*publishUrl="\([^"\]*\)".*#\1#p' | head -n1)
+          if [ -z "$USER" ] || [ -z "$PWD" ] || [ -z "$SCM" ]; then
+            echo "Publish profile secret missing or invalid."
+            exit 1
+          fi
+          curl -fsSL -u "$USER:$PWD" \
+            -H "Content-Type: application/zip" \
+            --data-binary @azure/functionapp.zip \
+            "$SCM/api/zipdeploy"
+
