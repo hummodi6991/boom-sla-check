@@ -57,7 +57,14 @@ jobs:
           KUDU_SCM:  ${{ env.KUDU_SCM }}
         run: |
           set -euo pipefail
+          # Normalize endpoint (add https:// if missing, drop trailing slash)
+          if [[ "${KUDU_SCM}" != http*://* ]]; then
+            KUDU_SCM="https://${KUDU_SCM}"
+          fi
+          KUDU_SCM="${KUDU_SCM%/}"
           echo "Kudu endpoint: $KUDU_SCM"
+
+          # Robust upload
           curl --fail --show-error --silent \
                --http1.1 \
                -H "Content-Type: application/zip" \
