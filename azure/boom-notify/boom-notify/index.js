@@ -53,7 +53,9 @@ export default async function (context, req) {
     // Optional shared-secret header check (set SHARED_SECRET in App Settings)
     const sharedSecret = process.env.SHARED_SECRET || "";
     if (sharedSecret) {
-      const incoming = req.headers["x-shared-secret"] || req.headers["X-Shared-Secret".toLowerCase()];
+      // Node normalises request header names to lowercase, so a single lookup
+      // covers any client-provided casing of `X-Shared-Secret`.
+      const incoming = req.headers["x-shared-secret"];
       if (incoming !== sharedSecret) {
         context.log.warn("Shared secret mismatch");
         context.res = { status: 401, body: "Unauthorized" };
