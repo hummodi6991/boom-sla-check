@@ -1,0 +1,12 @@
+name: on-boom-push
+on:
+  repository_dispatch:
+    types: [boom_push]
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show payload
+        run: |
+          echo "conversationUrl=${{ github.event.client_payload.conversationUrl }}"
+          echo "payload-bytes=$(echo '${{ toJson(github.event.client_payload) }}' | wc -c)"
