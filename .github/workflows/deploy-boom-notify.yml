@@ -16,8 +16,8 @@ jobs:
           node-version: '20'
 
       - name: Install deps (function dir)
-        run: npm ci
         working-directory: azure/boom-notify
+        run: npm ci
 
       - name: Package function (zip)
         run: |
@@ -25,55 +25,54 @@ jobs:
           zip -r ../functionapp.zip host.json boom-notify package.json package-lock.json
           ls -lh ../functionapp.zip
 
-      - name: ZipDeploy to Kudu (publish profile)
+      - name: Parse publish profile (ZipDeploy)
         env:
           PUBLISH_PROFILE: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
         run: |
+          python3 - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          xml = os.environ['PUBLISH_PROFILE']
+          root = ET.fromstring(xml)
+          user = pwd = scm = ""
+          for pp in root.findall('.//publishProfile'):
+              if pp.get('publishMethod') == 'ZipDeploy':
+                  user = (pp.get('userName') or "").strip()
+                  pwd  = (pp.get('userPWD') or "").strip()
+                  scm  = (pp.get('publishUrl') or "").strip()
+                  break
+          if not (user and pwd and scm):
+              raise SystemExit("ZipDeploy entry not found or incomplete in publish profile")
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f"KUDU_USER={user}\n")
+              f.write(f"KUDU_PWD={pwd}\n")
+              f.write(f"KUDU_SCM={scm}\n")
+          PY
+          echo "::add-mask::$KUDU_USER" || true
+          echo "::add-mask::$KUDU_PWD"  || true
+
+      - name: ZipDeploy to Kudu
+        env:
+          KUDU_USER: ${{ env.KUDU_USER }}
+          KUDU_PWD:  ${{ env.KUDU_PWD }}
+          KUDU_SCM:  ${{ env.KUDU_SCM }}
+        run: |
           set -euo pipefail
-
-          # Parse publish profile (ZipDeploy entry) robustly with Python
-          readarray -t CREDS < <(python3 - <<'PY'
-import os, xml.etree.ElementTree as ET
-xml = os.environ['PUBLISH_PROFILE']
-root = ET.fromstring(xml)
-for pp in root.findall('.//publishProfile'):
-    if pp.get('publishMethod') == 'ZipDeploy':
-        print(pp.get('userName') or "")
-        print(pp.get('userPWD') or "")
-        print(pp.get('publishUrl') or "")
-        break
-PY
-          )
-
-          USER="${CREDS[0]//[$'\r\n']/}"
-          PWD="${CREDS[1]//[$'\r\n']/}"
-          SCM="${CREDS[2]//[$'\r\n']/}"
-
-          if [ -z "$USER" ] || [ -z "$PWD" ] || [ -z "$SCM" ]; then
-            echo "Failed to parse AZURE_FUNC_PUBLISH_PROFILE secret (ZipDeploy entry missing)."
-            exit 1
-          fi
-
-          # Mask secrets
-          echo "::add-mask::$USER"
-          echo "::add-mask::$PWD"
-          echo "Kudu endpoint: $SCM"
-
-          # Upload with HTTP/1.1, no Expect: 100-continue, retries, and generous timeout
+          echo "Kudu endpoint: $KUDU_SCM"
           curl --fail --show-error --silent \
                --http1.1 \
                -H "Content-Type: application/zip" \
                -H "Expect:" \
                --retry 5 --retry-delay 2 --retry-connrefused \
                --max-time 600 \
-               -u "$USER:$PWD" \
+               -u "$KUDU_USER:$KUDU_PWD" \
                --data-binary @azure/functionapp.zip \
-               "$SCM/api/zipdeploy?isAsync=true"
+               "$KUDU_SCM/api/zipdeploy?isAsync=true"
 
           echo "Uploaded. Polling deployment status..."
-          for i in {1..40}; do
+          for i in $(seq 1 40); do
             sleep 3
-            STATUS_JSON="$(curl -sS -u "$USER:$PWD" "$SCM/api/deployments/latest")" || true
-            command -v jq >/dev/null 2>&1 && echo "$STATUS_JSON" | jq -r '.status, .progress, .complete' || echo "$STATUS_JSON"
+            STATUS_JSON="$(curl -sS -u "$KUDU_USER:$KUDU_PWD" "$KUDU_SCM/api/deployments/latest")" || true
+            (command -v jq >/dev/null 2>&1 && echo "$STATUS_JSON" | jq -r '.status, .progress, .complete') || echo "$STATUS_JSON"
             echo "---"
           done
+
