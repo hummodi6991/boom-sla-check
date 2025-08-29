@@ -17,9 +17,14 @@ jobs:
       - run: npm ci
         working-directory: azure/boom-notify
 
+      - name: Create deployment package
+        run: |
+          zip -r boom-notify.zip .
+        working-directory: azure/boom-notify
+
       - name: Deploy to Azure Functions (publish profile)
         uses: Azure/functions-action@v1
         with:
           app-name: boom-webhook-func
-          package: azure/boom-notify
+          package: azure/boom-notify/boom-notify.zip
           publish-profile: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
