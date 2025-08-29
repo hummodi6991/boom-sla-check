@@ -2,7 +2,7 @@ name: Deploy boom-notify
 on:
   push:
     paths:
-      - 'azure/boom-notify/**'    # deploy only when function code changes
+      - 'azure/boom-notify/**'
 
 jobs:
   deploy:
@@ -17,16 +17,9 @@ jobs:
       - run: npm ci
         working-directory: azure/boom-notify
 
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_D5E5135392134ED1A9927822570BD29F }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_5D5E7F2E72BA4E30956E33DDC9D5E77D }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_FA7A33950D014B08BB8C75B154934E16 }}
-
-      - name: Deploy to Azure Functions
+      - name: Deploy to Azure Functions (publish profile)
         uses: Azure/functions-action@v1
         with:
           app-name: boom-webhook-func
-          slot-name: 'Production'
           package: azure/boom-notify
+          publish-profile: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
