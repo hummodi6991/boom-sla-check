@@ -59,3 +59,19 @@ jobs:
           fi
       - name: Run SLA checker
         run: node check.mjs
+      - name: Send alert to Azure Function
+        env:
+          FN_BASE: ${{ secrets.AZURE_FN_BASE }}
+          FN_CODE: ${{ secrets.AZURE_FN_CODE }}
+          SHARED_SECRET: ${{ secrets.SHARED_SECRET }}
+        run: |
+          curl -sS -X POST "$FN_BASE/api/boom-notify?code=$FN_CODE" \
+            -H "Content-Type: application/json" \
+            -H "X-Shared-Secret: $SHARED_SECRET" \
+            -d @- <<'JSON'
+            {
+              "event": "message_created",
+              "conversationUrl": "https://app.boomnow.com/conversations/123",
+              "message": { "id": "gh-actions-test", "text": "hello from GitHub Actions" }
+            }
+JSON
