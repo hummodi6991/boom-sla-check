@@ -1,28 +1,46 @@
-name: on-boom-push
+name: Wire GitHub Actions to call Azure Function
+
 on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: 'Raw JSON payload to send to the Azure Function'
+        required: false
+        default: >-
+          {"event":"message_created","conversationUrl":"https://app.boomnow.com/conversations/123","message":{"id":"abc","text":"hello"}}
   repository_dispatch:
-    types: [boom_push]
+    types: [boom_event]
+
 jobs:
-  debug:
+  forward-to-azure:
     runs-on: ubuntu-latest
+    env:
+      FUNC_BASE: ${{ secrets.AZURE_FUNCTION_HOST }}   # e.g. boom-webhook-func-xxxx.azurewebsites.net
+      FUNC_NAME: boom-notify
+      FUNC_CODE: ${{ secrets.AZURE_FUNCTION_CODE }}   # the ?code= value
+      SHARED_SECRET: ${{ secrets.BOOM_SHARED_SECRET }} # matches app setting SHARED_SECRET
+      IN_PAYLOAD: ${{ github.event.inputs.payload }}
+      RD_PAYLOAD: ${{ toJson(github.event.client_payload) }}
     steps:
-      - name: Show payload
+      - name: Build request body
         run: |
-          echo "conversationUrl=${{ github.event.client_payload.conversationUrl }}"
-          echo "payload-bytes=$(echo '${{ toJson(github.event.client_payload) }}' | wc -c)"
-      - name: Send alert to Azure Function
-        env:
-          FN_BASE: ${{ secrets.AZURE_FN_BASE }}
-          FN_CODE: ${{ secrets.AZURE_FN_CODE }}
-          SHARED_SECRET: ${{ secrets.SHARED_SECRET }}
+          set -euo pipefail
+          if [ -n "${IN_PAYLOAD}" ]; then
+            printf '%s' "${IN_PAYLOAD}" > body.json
+          elif [ -n "${RD_PAYLOAD}" ] && [ "${RD_PAYLOAD}" != "null" ]; then
+            printf '%s' "${RD_PAYLOAD}" > body.json
+          else
+            printf '%s' '{"event":"ping"}' > body.json
+          fi
+          jq . body.json || true
+
+      - name: Post to Azure Function
         run: |
-          curl -sS -X POST "$FN_BASE/api/boom-notify?code=$FN_CODE" \
+          set -euo pipefail
+          URL="https://${FUNC_BASE}/api/${FUNC_NAME}?code=${FUNC_CODE}"
+          echo "POST $URL"
+          curl -sS -X POST "$URL" \
             -H "Content-Type: application/json" \
-            -H "X-Shared-Secret: $SHARED_SECRET" \
-            -d @- <<'JSON'
-            {
-              "event": "message_created",
-              "conversationUrl": "https://app.boomnow.com/conversations/123",
-              "message": { "id": "gh-actions-test", "text": "hello from GitHub Actions" }
-            }
-JSON
+            -H "X-Shared-Secret: ${SHARED_SECRET}" \
+            --data-binary @body.json
+
