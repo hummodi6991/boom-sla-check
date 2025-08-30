@@ -19,6 +19,8 @@ jobs:
       LOGIN_METHOD:               ${{ vars.LOGIN_METHOD }}
       MESSAGES_URL:               ${{ vars.MESSAGES_URL }}
       MESSAGES_METHOD:            ${{ vars.MESSAGES_METHOD }}
+      CONVERSATIONS_URL:          ${{ vars.CONVERSATIONS_URL }}
+      CONVERSATIONS_METHOD:       ${{ vars.CONVERSATIONS_METHOD }}
       SLA_MINUTES:                ${{ vars.SLA_MINUTES }}
       DEBUG:                      ${{ vars.DEBUG }}
       DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
@@ -53,4 +55,4 @@ jobs:
 
       - name: Run SLA checker
         working-directory: .
-        run: node ./check.mjs
+        run: node ./cron.mjs

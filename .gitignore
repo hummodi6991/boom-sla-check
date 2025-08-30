@@ -1,6 +1,2 @@
 node_modules/
 
-
-*.PublishSettings
-.local.settings.json
-azure/boom-notify/node_modules/
