@@ -17,13 +17,16 @@ jobs:
 
       - name: Install deps (function dir)
         working-directory: azure/boom-notify
-        run: npm ci
+        run: |
+          npm install --omit=dev
+          npm prune --omit=dev
 
       - name: Package function (zip)
         working-directory: azure/boom-notify
         run: |
           rm -f ../functionapp.zip
-          zip -r ../functionapp.zip host.json package.json boom-notify
+          # include node_modules so the app runs without remote build
+          zip -r ../functionapp.zip host.json package.json node_modules boom-notify
           ls -lh ../functionapp.zip
 
       - name: Install xmllint
@@ -47,10 +50,11 @@ jobs:
           echo "pass=$PASS"   >> $GITHUB_OUTPUT
 
       - name: ZipDeploy to Kudu (publish profile)
+        working-directory: azure/boom-notify
         shell: bash
         run: |
           curl -sS -u "${{ steps.parse.outputs.user }}:${{ steps.parse.outputs.pass }}" \
             -X POST \
             -H "Content-Type: application/zip" \
-            --data-binary @"azure/functionapp.zip" \
+            --data-binary @"../functionapp.zip" \
             "https://${{ steps.parse.outputs.scm }}/api/zipdeploy" | jq .
