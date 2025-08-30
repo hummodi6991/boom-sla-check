@@ -1,0 +1,48 @@
+name: Boom SLA check (cron)
+
+on:
+  schedule:
+    - cron: "*/1 * * * *"   # every minute
+  workflow_dispatch: {}      # allow manual runs
+
+concurrency:
+  group: boom-sla-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # non-secret repo variables (already set in your repo)
+      LOGIN_URL:                  ${{ vars.LOGIN_URL }}
+      LOGIN_METHOD:               ${{ vars.LOGIN_METHOD }}
+      MESSAGES_URL:               ${{ vars.MESSAGES_URL }}
+      MESSAGES_METHOD:            ${{ vars.MESSAGES_METHOD }}
+      SLA_MINUTES:                ${{ vars.SLA_MINUTES }}
+      DEBUG:                      ${{ vars.DEBUG }}
+      DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
+      COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
+
+      # secrets (already in your repo)
+      BOOM_USER:   ${{ secrets.BOOM_USER }}
+      BOOM_PASS:   ${{ secrets.BOOM_PASS }}
+      SMTP_HOST:   ${{ secrets.SMTP_HOST }}
+      SMTP_PORT:   ${{ secrets.SMTP_PORT }}
+      SMTP_USER:   ${{ secrets.SMTP_USER }}
+      SMTP_PASS:   ${{ secrets.SMTP_PASS }}
+      ALERT_TO:    ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run SLA checker
+        run: node check.mjs
