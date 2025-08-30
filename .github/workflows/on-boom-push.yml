@@ -1,46 +1,30 @@
 name: Wire GitHub Actions to call Azure Function
 
 on:
-  workflow_dispatch:
-    inputs:
-      payload:
-        description: 'Raw JSON payload to send to the Azure Function'
-        required: false
-        default: >-
-          {"event":"message_created","conversationUrl":"https://app.boomnow.com/conversations/123","message":{"id":"abc","text":"hello"}}
   repository_dispatch:
-    types: [boom_event]
+    types: [boom_message]
 
 jobs:
-  forward-to-azure:
+  forward-to-azure-fn:
     runs-on: ubuntu-latest
-    env:
-      FUNC_BASE: ${{ secrets.AZURE_FUNCTION_HOST }}   # e.g. boom-webhook-func-xxxx.azurewebsites.net
-      FUNC_NAME: boom-notify
-      FUNC_CODE: ${{ secrets.AZURE_FUNCTION_CODE }}   # the ?code= value
-      SHARED_SECRET: ${{ secrets.BOOM_SHARED_SECRET }} # matches app setting SHARED_SECRET
-      IN_PAYLOAD: ${{ github.event.inputs.payload }}
-      RD_PAYLOAD: ${{ toJson(github.event.client_payload) }}
     steps:
-      - name: Build request body
+      - name: Prepare payload
         run: |
-          set -euo pipefail
-          if [ -n "${IN_PAYLOAD}" ]; then
-            printf '%s' "${IN_PAYLOAD}" > body.json
-          elif [ -n "${RD_PAYLOAD}" ] && [ "${RD_PAYLOAD}" != "null" ]; then
-            printf '%s' "${RD_PAYLOAD}" > body.json
-          else
-            printf '%s' '{"event":"ping"}' > body.json
-          fi
-          jq . body.json || true
+          echo '${{ toJson(github.event.client_payload) }}' > payload.json
+          ls -lh payload.json && head -c 200 payload.json || true
 
-      - name: Post to Azure Function
+      - name: Call Azure Function
+        env:
+          FN_BASE: ${{ secrets.AZURE_FN_BASE }}
+          FN_CODE: ${{ secrets.AZURE_FN_CODE }}
+          SHARED_SECRET: ${{ secrets.SHARED_SECRET }}
         run: |
           set -euo pipefail
-          URL="https://${FUNC_BASE}/api/${FUNC_NAME}?code=${FUNC_CODE}"
-          echo "POST $URL"
-          curl -sS -X POST "$URL" \
+          FN_URL="${FN_BASE%/}/api/boom-notify?code=${FN_CODE}"
+          echo "POST -> ${FN_URL//*code=/}***"
+          curl -sS -X POST "$FN_URL" \
             -H "Content-Type: application/json" \
             -H "X-Shared-Secret: ${SHARED_SECRET}" \
-            --data-binary @body.json
-
+            --data-binary @payload.json \
+            -o /tmp/resp.json -w "\nHTTP %{http_code}\n"
+          echo "Response:" && cat /tmp/resp.json || true

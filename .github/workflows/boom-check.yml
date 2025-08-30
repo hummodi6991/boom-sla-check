@@ -1,26 +1,47 @@
-name: Boom check (cron → Azure Function)
+name: Boom SLA check
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # every 10 minutes
+    - cron: "*/5 * * * *"   # every 5 minutes
   workflow_dispatch: {}
 
+concurrency:
+  group: boom-sla-check
+  cancel-in-progress: false
+
 jobs:
-  ping:
+  check:
     runs-on: ubuntu-latest
     env:
-      FUNC_BASE: ${{ secrets.AZURE_FUNCTION_HOST }}
-      FUNC_NAME: boom-notify
-      FUNC_CODE: ${{ secrets.AZURE_FUNCTION_CODE }}
-      SHARED_SECRET: ${{ secrets.BOOM_SHARED_SECRET }}
-    steps:
-      - name: Call check
-        run: |
-          set -euo pipefail
-          URL="https://${FUNC_BASE}/api/${FUNC_NAME}?code=${FUNC_CODE}"
-          BODY='{"event":"scheduled_check"}'
-          curl -sS -X POST "$URL" \
-            -H "Content-Type: application/json" \
-            -H "X-Shared-Secret: ${SHARED_SECRET}" \
-            -d "$BODY"
+      # non-secret repo variables
+      LOGIN_URL:        ${{ vars.LOGIN_URL }}
+      LOGIN_METHOD:     ${{ vars.LOGIN_METHOD }}
+      MESSAGES_URL:     ${{ vars.MESSAGES_URL }}
+      MESSAGES_METHOD:  ${{ vars.MESSAGES_METHOD }}
+      SLA_MINUTES:      ${{ vars.SLA_MINUTES }}
+      DEBUG:            ${{ vars.DEBUG }}
+      DEBUG_MESSAGES:   ${{ vars.DEBUG_MESSAGES }}
+      COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
 
+      # secrets
+      BOOM_USER:        ${{ secrets.BOOM_USER }}
+      BOOM_PASS:        ${{ secrets.BOOM_PASS }}
+      ALERT_TO:         ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME:  ${{ secrets.ALERT_FROM_NAME }}
+      SMTP_HOST:        ${{ secrets.SMTP_HOST }}
+      SMTP_PORT:        ${{ secrets.SMTP_PORT }}
+      SMTP_USER:        ${{ secrets.SMTP_USER }}
+      SMTP_PASS:        ${{ secrets.SMTP_PASS }}
+      AGENT_SIDE:       ${{ secrets.AGENT_SIDE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm ci || npm i
+
+      - name: Run SLA check
+        run: node check.mjs
