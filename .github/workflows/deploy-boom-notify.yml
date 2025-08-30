@@ -26,16 +26,31 @@ jobs:
           zip -r ../functionapp.zip host.json package.json boom-notify
           ls -lh ../functionapp.zip
 
-      - name: ZipDeploy to Kudu (publish profile)
+      - name: Install xmllint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxml2-utils
+
+      - name: Parse publish profile (ZipDeploy)
+        id: parse
+        shell: bash
         env:
           PUBLISH_PROFILE: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
         run: |
-          set -euo pipefail
-          PP_PATH=$(mktemp)
-          echo "${PUBLISH_PROFILE}" > "$PP_PATH"
-          USER=$(xmllint --xpath "string(//publishProfile/@userName)" "$PP_PATH")
-          PASS=$(xmllint --xpath "string(//publishProfile/@userPWD)" "$PP_PATH")
-          URL=$(xmllint  --xpath "string(//publishProfile/@publishUrl)" "$PP_PATH")
-          rm -f "$PP_PATH"
-          echo "Kudu endpoint: $URL"
-          curl -sS -u "$USER:$PASS" -X POST "https://$URL/api/zipdeploy" --data-binary "@azure/functionapp.zip" | jq .
+          PP_FILE=$(mktemp)
+          echo "$PUBLISH_PROFILE" > "$PP_FILE"
+          SCM_URL=$(xmllint --xpath "string(//publishProfile[@publishMethod='ZipDeploy']/@publishUrl)" "$PP_FILE")
+          USER=$(xmllint    --xpath "string(//publishProfile[@publishMethod='ZipDeploy']/@userName)"   "$PP_FILE")
+          PASS=$(xmllint    --xpath "string(//publishProfile[@publishMethod='ZipDeploy']/@userPWD)"    "$PP_FILE")
+          echo "scm=$SCM_URL" >> $GITHUB_OUTPUT
+          echo "user=$USER"   >> $GITHUB_OUTPUT
+          echo "pass=$PASS"   >> $GITHUB_OUTPUT
+
+      - name: ZipDeploy to Kudu (publish profile)
+        shell: bash
+        run: |
+          curl -sS -u "${{ steps.parse.outputs.user }}:${{ steps.parse.outputs.pass }}" \
+            -X POST \
+            -H "Content-Type: application/zip" \
+            --data-binary @"azure/functionapp.zip" \
+            "https://${{ steps.parse.outputs.scm }}/api/zipdeploy" | jq .
