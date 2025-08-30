@@ -28,5 +28,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm ci
-      - run: node check.mjs
+      - name: Install deps
+        working-directory: .
+        run: |
+          ls -la
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-fund --no-audit
+          fi
+      - name: Run SLA checker
+        working-directory: .
+        run: node ./check.mjs
