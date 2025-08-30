@@ -20,12 +20,13 @@ jobs:
         run: npm ci
 
       - name: Package function (zip)
+        working-directory: azure/boom-notify
         run: |
-          cd azure/boom-notify
-          zip -r ../functionapp.zip host.json boom-notify package.json package-lock.json
-          ls -lh ../functionapp.zip
+          zip -r functionapp.zip host.json boom-notify package.json package-lock.json
+          ls -lh functionapp.zip
 
       - name: Parse publish profile (ZipDeploy)
+        working-directory: azure/boom-notify
         env:
           PUBLISH_PROFILE: ${{ secrets.AZURE_FUNC_PUBLISH_PROFILE }}
         run: |
@@ -51,6 +52,7 @@ jobs:
           echo "::add-mask::$KUDU_PWD"  || true
 
       - name: ZipDeploy to Kudu
+        working-directory: azure/boom-notify
         env:
           KUDU_USER: ${{ env.KUDU_USER }}
           KUDU_PWD:  ${{ env.KUDU_PWD }}
@@ -72,7 +74,7 @@ jobs:
                --retry 5 --retry-delay 2 --retry-connrefused \
                --max-time 600 \
                -u "$KUDU_USER:$KUDU_PWD" \
-               --data-binary @azure/functionapp.zip \
+               --data-binary @functionapp.zip \
                "$KUDU_SCM/api/zipdeploy?isAsync=true"
 
           echo "Uploaded. Polling deployment status..."
