@@ -1,77 +1,26 @@
+name: Boom check (cron → Azure Function)
 
-
-name: Boom SLA (API, REST)
 on:
-  # Allow manual runs from the Actions UI with an optional conversation input
-  workflow_dispatch:
-    inputs:
-      conversation:
-        description: "Conversation (UI URL / API URL / UUID). Optional if DEFAULT_CONVERSATION_ID repo variable is set."
-        required: false
-  # Accept repository_dispatch events from Power Automate.  Any event_type will be honoured.
-  repository_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes
+  workflow_dispatch: {}
 
 jobs:
-  check:
+  ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
     env:
-      BOOM_USER: ${{ secrets.BOOM_USER }}
-      BOOM_PASS: ${{ secrets.BOOM_PASS }}
-      SMTP_HOST: ${{ secrets.SMTP_HOST }}
-      SMTP_PORT: ${{ secrets.SMTP_PORT }}
-      SMTP_USER: ${{ secrets.SMTP_USER }}
-      SMTP_PASS: ${{ secrets.SMTP_PASS }}
-      ALERT_TO:  ${{ secrets.ALERT_TO }}
-      ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
-      LOGIN_URL: "https://app.boomnow.com/api/login"
-      LOGIN_METHOD: "POST"
-      LOGIN_CT: "application/json"
-      LOGIN_EMAIL_FIELD: "email"
-      LOGIN_PASSWORD_FIELD: "password"
-      LOGIN_TENANT_FIELD: "tenant_id"
-      CSRF_HEADER_NAME: ""
-      CSRF_COOKIE_NAME: ""
-      API_KIND: "rest"
-      MESSAGES_URL: "https://app.boomnow.com/api/conversations/{{conversationId}}"
-      MESSAGES_METHOD: "GET"
-      SLA_MINUTES: "5"
-      COUNT_AI_SUGGESTION_AS_AGENT: "false"
-      # Pull the conversation from either workflow dispatch inputs or repository_dispatch client_payload.
-      # Power Automate's repository dispatch can attach a `conversation` or `conversationUrl` field under client_payload;
-      # if none are present this will evaluate to an empty string and the checker will fall back to the default conversation ID.
-      CONVERSATION_INPUT: ${{ github.event.inputs.conversation || github.event.client_payload.conversation || github.event.client_payload.conversationUrl || github.event.client_payload.conversation_url }}
-      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
-      # Forward the raw Boom notification for scripts that parse additional context
-      BOOM_NOTIFICATION: ${{ toJSON(github.event.client_payload.notification || github.event.client_payload.boom_notification || '') }}
+      FUNC_BASE: ${{ secrets.AZURE_FUNCTION_HOST }}
+      FUNC_NAME: boom-notify
+      FUNC_CODE: ${{ secrets.AZURE_FUNCTION_CODE }}
+      SHARED_SECRET: ${{ secrets.BOOM_SHARED_SECRET }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: 'npm'
-      - name: Install deps
+      - name: Call check
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci --prefer-offline --no-audit
-          else
-            npm i --prefer-offline --no-audit
-          fi
-      - name: Run SLA checker
-        run: node check.mjs
-      - name: Send alert to Azure Function
-        env:
-          FN_BASE: ${{ secrets.AZURE_FN_BASE }}
-          FN_CODE: ${{ secrets.AZURE_FN_CODE }}
-          SHARED_SECRET: ${{ secrets.SHARED_SECRET }}
-        run: |
-          curl -sS -X POST "$FN_BASE/api/boom-notify?code=$FN_CODE" \
+          set -euo pipefail
+          URL="https://${FUNC_BASE}/api/${FUNC_NAME}?code=${FUNC_CODE}"
+          BODY='{"event":"scheduled_check"}'
+          curl -sS -X POST "$URL" \
             -H "Content-Type: application/json" \
-            -H "X-Shared-Secret: $SHARED_SECRET" \
-            -d @- <<'JSON'
-            {
-              "event": "message_created",
-              "conversationUrl": "https://app.boomnow.com/conversations/123",
-              "message": { "id": "gh-actions-test", "text": "hello from GitHub Actions" }
-            }
-JSON
+            -H "X-Shared-Secret: ${SHARED_SECRET}" \
+            -d "$BODY"
+
