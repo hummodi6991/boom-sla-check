@@ -42,7 +42,15 @@ jobs:
           node-version: 20
 
       - name: Install deps
-        run: npm ci
+        working-directory: .
+        run: |
+          ls -la
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-fund --no-audit
+          fi
 
       - name: Run SLA checker
-        run: node check.mjs
+        working-directory: .
+        run: node ./check.mjs
