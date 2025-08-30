@@ -1,30 +1,71 @@
-name: Wire GitHub Actions to call Azure Function
+name: Boom push → 5-min SLA timer
 
 on:
+  # Fired by your integrations when a new guest message arrives
   repository_dispatch:
     types: [boom_message]
+  # Optional: allow manual testing from the Actions UI
+  workflow_dispatch:
+
+# If more messages come for the same conversation, cancel the older timer
+concurrency:
+  group: sla-${{ github.event.client_payload.conversationUrl || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
-  forward-to-azure-fn:
+  notify-and-timer:
     runs-on: ubuntu-latest
-    steps:
-      - name: Prepare payload
-        run: |
-          echo '${{ toJson(github.event.client_payload) }}' > payload.json
-          ls -lh payload.json && head -c 200 payload.json || true
+    timeout-minutes: 15
+    env:
+      # Azure Function (use your existing secret names)
+      FUNC_BASE: ${{ secrets.AZURE_FN_BASE }}
+      FUNC_CODE: ${{ secrets.AZURE_FN_CODE }}
+      SHARED_SECRET: ${{ secrets.SHARED_SECRET }}
 
-      - name: Call Azure Function
-        env:
-          FN_BASE: ${{ secrets.AZURE_FN_BASE }}
-          FN_CODE: ${{ secrets.AZURE_FN_CODE }}
-          SHARED_SECRET: ${{ secrets.SHARED_SECRET }}
+      # Repo variables (already configured)
+      LOGIN_URL:       ${{ vars.LOGIN_URL }}
+      LOGIN_METHOD:    ${{ vars.LOGIN_METHOD }}
+      MESSAGES_URL:    ${{ vars.MESSAGES_URL }}
+      MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
+      SLA_MINUTES:     ${{ vars.SLA_MINUTES }}
+      DEBUG:           ${{ vars.DEBUG }}
+      DEBUG_MESSAGES:  ${{ vars.DEBUG_MESSAGES }}
+
+      # Email + Boom creds (secrets already configured)
+      SMTP_HOST:        ${{ secrets.SMTP_HOST }}
+      SMTP_PORT:        ${{ secrets.SMTP_PORT }}
+      SMTP_USER:        ${{ secrets.SMTP_USER }}
+      SMTP_PASS:        ${{ secrets.SMTP_PASS }}
+      ALERT_TO:         ${{ secrets.ALERT_TO }}
+      ALERT_FROM_NAME:  ${{ secrets.ALERT_FROM_NAME }}
+      BOOM_USER:        ${{ secrets.BOOM_USER }}
+      BOOM_PASS:        ${{ secrets.BOOM_PASS }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Forward event to Azure Function (boom-notify)
         run: |
-          set -euo pipefail
-          FN_URL="${FN_BASE%/}/api/boom-notify?code=${FN_CODE}"
-          echo "POST -> ${FN_URL//*code=/}***"
-          curl -sS -X POST "$FN_URL" \
+          ev=$(jq -c '.client_payload // {}' "$GITHUB_EVENT_PATH")
+          curl -fsSL -X POST \
             -H "Content-Type: application/json" \
             -H "X-Shared-Secret: ${SHARED_SECRET}" \
-            --data-binary @payload.json \
-            -o /tmp/resp.json -w "\nHTTP %{http_code}\n"
-          echo "Response:" && cat /tmp/resp.json || true
+            "${FUNC_BASE%/}/api/boom-notify?code=${FUNC_CODE}" \
+            -d "$ev"
+
+      - name: Wait for SLA window
+        run: |
+          mins=${SLA_MINUTES:-5}
+          echo "Sleeping for ${mins} minutes before SLA check…"
+          sleep $(( mins * 60 ))
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run SLA checker
+        run: node check.mjs
