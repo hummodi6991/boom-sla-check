@@ -102,25 +102,41 @@ async function login() {
 }
 
 // --- Conversation listing and checking ---
-function extractId(obj) {
-  return (
-    obj?.conversationId || obj?.conversation_id || obj?.id || obj?.uuid || null
-  );
-}
+async function listConversations(fetchFn) {
+  function env(name, d = '') { return process.env[name] ?? d; }
+  function inferConversationsUrl() {
+    const m = env('MESSAGES_URL', '');
+    if (!m) return '';
+    // turn .../conversations/{{conversationId}}/messages[...] into .../conversations?limit=50&sort=updatedAt&order=desc
+    return m.replace(/\/conversations\/\{\{?conversationId\}?\}\/messages.*$/i,
+                     '/conversations?limit=50&sort=updatedAt&order=desc');
+  }
 
-async function listConversations() {
-  const url = env('CONVERSATIONS_URL');
+  const url = env('CONVERSATIONS_URL') || inferConversationsUrl();
+  if (!url) throw new Error('CONVERSATIONS_URL not set and could not infer from MESSAGES_URL');
+
   const method = env('CONVERSATIONS_METHOD', 'GET');
-  if (!url) throw new Error('CONVERSATIONS_URL not set');
-  const token = await login();
-  const headers = token ? { authorization: `Bearer ${token}` } : {};
-  const res = await jf(url, { method, headers });
-  if (res.status >= 400) throw new Error(`Conversation list failed: ${res.status}`);
-  const data = await res.json();
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.conversations)) return data.conversations;
-  if (Array.isArray(data?.items)) return data.items;
-  return [];
+  const res = await fetchFn(url, { method, headers: { accept: 'application/json' } });
+  const ctype = String(res.headers?.get?.('content-type') || '').toLowerCase();
+  const text = await res.text();
+  if (!ctype.includes('application/json')) {
+    throw new Error(`CONVERSATIONS_URL returned non-JSON (${ctype || 'unknown'}). First bytes: ` + text.slice(0,160));
+  }
+
+  let data;
+  try { data = JSON.parse(text); } catch (e) {
+    throw new Error('Failed to parse JSON from CONVERSATIONS_URL: ' + e.message);
+  }
+
+  // Accept a few shapes:
+  let list = Array.isArray(data) ? data
+           : Array.isArray(data.conversations) ? data.conversations
+           : Array.isArray(data.items) ? data.items
+           : [];
+
+  const ids = [...new Set(list.map(x => x?.conversationId || x?.id || x?.uuid).filter(Boolean))];
+  if (!ids.length) throw new Error('No conversation ids found in CONVERSATIONS response.');
+  return ids;
 }
 
 async function runCheck(id) {
@@ -138,10 +154,9 @@ async function runCheck(id) {
 
 (async () => {
   try {
-    const convs = await listConversations();
-    for (const c of convs) {
-      const id = extractId(c);
-      if (!id) continue;
+    await login();
+    const ids = await listConversations(jf);
+    for (const id of ids) {
       await runCheck(id);
     }
   } catch (e) {
