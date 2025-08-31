@@ -74,7 +74,10 @@ async function listConversations() {
                Array.isArray(data.results) ? data.results : [];
 
   const ids = [...new Set(list.map(x => x?.conversationId || x?.id || x?.uuid).filter(Boolean))];
-  if (!ids.length) throw new Error('No conversation ids found in conversations response.');
+  if (!ids.length) {
+    console.warn('No conversation ids found in conversations response; nothing to check.');
+    return [];
+  }
   return ids;
 }
 
