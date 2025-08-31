@@ -22,6 +22,7 @@ jobs:
       MESSAGES_METHOD:            ${{ vars.MESSAGES_METHOD }}
       CONVERSATIONS_URL:          ${{ vars.CONVERSATIONS_URL }}
       CONVERSATIONS_METHOD:       ${{ vars.CONVERSATIONS_METHOD }}
+      CONVERSATIONS_BODY:          ${{ vars.CONVERSATIONS_BODY }}
       SLA_MINUTES:                ${{ vars.SLA_MINUTES }}
       DEBUG:                      ${{ vars.DEBUG }}
       DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
