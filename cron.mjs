@@ -47,6 +47,7 @@ async function listConversations() {
   const inferFromMessages = ()=>{
     const m = env('MESSAGES_URL','');
     if(!m) return '';
+    // heuristic: turn .../conversations/{{conversationId}}/messages into a list view
     return m.replace(/\/conversations\/\{\{?conversationId\}?\}\/messages.*$/i,
                      '/conversations?limit=50&sort=updatedAt&order=desc');
   };
@@ -54,15 +55,28 @@ async function listConversations() {
   const url = env('CONVERSATIONS_URL') || inferFromMessages();
   if(!url) throw new Error('CONVERSATIONS_URL not set and could not infer from MESSAGES_URL');
   const method = env('CONVERSATIONS_METHOD','GET').toUpperCase();
+  const bodyRaw = env('CONVERSATIONS_BODY','').trim();
+  const hasBody = !!bodyRaw && method !== 'GET';
 
   const authFetch = buildAuthFetch?.() || fetch;
-  const res = await authFetch(url,{ method, headers:{accept:'application/json'} });
+  const res = await authFetch(url,{
+    method,
+    headers:{
+      'accept':'application/json',
+      'content-type': hasBody ? 'application/json' : undefined,
+      'x-requested-with':'XMLHttpRequest'
+    },
+    body: hasBody ? bodyRaw : undefined
+  });
   const status = res.status;
   const ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
   const text  = await res.text();
 
   if (!ctype.includes('application/json')) {
     throw new Error(`CONVERSATIONS_URL returned non-JSON (${ctype||'unknown'}), status ${status}. First bytes: ${text.slice(0,160)}`);
+  }
+  if (status >= 400) {
+    throw new Error(`CONVERSATIONS_URL error ${status}. Body: ${text.slice(0,300)}`);
   }
 
   let data;
