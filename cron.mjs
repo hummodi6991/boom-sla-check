@@ -2,140 +2,78 @@ import { spawn } from 'child_process';
 
 const env = (k, d = "") => (process.env[k] ?? d).toString().trim();
 
-// --- Boom login helpers (copied from check.mjs) ---
-class Jar {
-  constructor() {
-    this.map = new Map();
-  }
-  ingest(setCookie) {
-    if (!setCookie) return;
-    const lines = Array.isArray(setCookie) ? setCookie : [setCookie];
-    for (const ln of lines) {
-      const m = String(ln).match(/^([^=]+)=([^;]+)/);
-      if (m) this.map.set(m[1].trim(), m[2]);
+// --- Auto-login fetch wrapper ---
+async function login(fetchFn) {
+  const url = process.env.LOGIN_URL || '';
+  const method = (process.env.LOGIN_METHOD || 'POST').toUpperCase();
+  const user = process.env.BOOM_USER || '';
+  const pass = process.env.BOOM_PASS || '';
+  if (!url || !user || !pass) throw new Error('Missing LOGIN_URL/BOOM_USER/BOOM_PASS');
+
+  const body = JSON.stringify({ email: user, password: pass });
+  const res = await fetchFn(url, {
+    method,
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body
+  });
+  // capture cookies
+  const setCookie = res.headers?.getSetCookie?.() || res.headers?.raw?.()['set-cookie'] || [];
+  const cookies = Array.isArray(setCookie) ? setCookie.map(s => s.split(';',1)[0]).join('; ') : '';
+  if (res.status >= 400) throw new Error('Login failed: ' + res.status + ' ' + res.statusText);
+  return { cookies };
+}
+
+function buildAuthFetch() {
+  let cookies = '';
+  const baseFetch = globalThis.fetch;
+
+  return async (url, init={}) => {
+    const headers = Object.fromEntries(Object.entries(init.headers||{}));
+    if (cookies) headers['cookie'] = cookies;
+    headers['accept'] = headers['accept'] || 'application/json';
+
+    let res = await baseFetch(url, { ...init, headers });
+    const ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
+
+    // If we got HTML (likely a login page), try to login once and retry
+    if (ctype.includes('text/html')) {
+      const auth = await login((u,i)=>baseFetch(u,{...i, headers:{...(i?.headers||{}), accept:'application/json'}}));
+      if (auth.cookies) cookies = auth.cookies;
+      const hdrs2 = { ...headers, cookie: cookies };
+      res = await baseFetch(url, { ...init, headers: hdrs2 });
     }
-  }
-  get(name) {
-    return this.map.get(name) || "";
-  }
-  header() {
-    return [...this.map.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
-  }
-}
-const jar = new Jar();
-
-function formEncode(obj) {
-  return Object.entries(obj)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v ?? "")}`)
-    .join('&');
-}
-
-async function jf(url, init = {}) {
-  const headers = new Headers(init.headers || {});
-  headers.set('accept', 'application/json, text/plain, */*');
-  const ck = jar.header();
-  if (ck) headers.set('cookie', ck);
-
-  const csrfHeader = env('CSRF_HEADER_NAME');
-  const csrfCookie = env('CSRF_COOKIE_NAME');
-  if (csrfHeader && csrfCookie && !headers.has(csrfHeader)) {
-    const val = jar.get(csrfCookie);
-    if (val) headers.set(csrfHeader, decodeURIComponent(val));
-  }
-
-  const res = await fetch(url, { ...init, headers, redirect: 'manual' });
-  const setc = res.headers.get('set-cookie');
-  if (setc) jar.ingest(setc);
-
-  // follow redirects
-  let r = res, hops = 0;
-  while ([301,302,303,307,308].includes(r.status) && hops < 3) {
-    const loc = r.headers.get('location');
-    if (!loc) break;
-    r = await fetch(new URL(loc, url), { headers, redirect: 'manual' });
-    const setc2 = r.headers.get('set-cookie');
-    if (setc2) jar.ingest(setc2);
-    hops++;
-  }
-  return r;
-}
-
-async function login() {
-  const BOOM_USER  = env('BOOM_USER');
-  const BOOM_PASS  = env('BOOM_PASS');
-  const LOGIN_URL  = env('LOGIN_URL');
-  const LOGIN_METHOD = env('LOGIN_METHOD', 'POST');
-  const LOGIN_CT   = env('LOGIN_CT', 'application/json');
-  const LOGIN_EMAIL_FIELD    = env('LOGIN_EMAIL_FIELD', 'email');
-  const LOGIN_PASSWORD_FIELD = env('LOGIN_PASSWORD_FIELD', 'password');
-  const LOGIN_TENANT_FIELD   = env('LOGIN_TENANT_FIELD', '');
-
-  if (!LOGIN_URL || !BOOM_USER || !BOOM_PASS) {
-    throw new Error('LOGIN_URL or BOOM_USER/BOOM_PASS missing');
-  }
-
-  const bodyObj = {
-    [LOGIN_EMAIL_FIELD]: BOOM_USER,
-    [LOGIN_PASSWORD_FIELD]: BOOM_PASS,
+    return res;
   };
-  if (LOGIN_TENANT_FIELD) bodyObj[LOGIN_TENANT_FIELD] = null;
-
-  const headers = {};
-  let body;
-  if (LOGIN_CT.includes('json')) {
-    headers['content-type'] = 'application/json';
-    body = JSON.stringify(bodyObj);
-  } else {
-    headers['content-type'] = 'application/x-www-form-urlencoded';
-    body = formEncode(bodyObj);
-  }
-
-  const res = await jf(LOGIN_URL, { method: LOGIN_METHOD, headers, body });
-  if (res.status >= 400) throw new Error(`Login failed: ${res.status}`);
-
-  let token = null;
-  try {
-    const j = await res.clone().json();
-    token = j?.token || j?.accessToken || j?.data?.accessToken || null;
-  } catch {}
-  return token;
 }
 
 // --- Conversation listing and checking ---
-async function listConversations(fetchFn) {
-  function env(name, d = '') { return process.env[name] ?? d; }
+async function listConversations() {
   function inferConversationsUrl() {
-    const m = env('MESSAGES_URL', '');
+    const m = env('MESSAGES_URL','');
     if (!m) return '';
-    // turn .../conversations/{{conversationId}}/messages[...] into .../conversations?limit=50&sort=updatedAt&order=desc
     return m.replace(/\/conversations\/\{\{?conversationId\}?\}\/messages.*$/i,
                      '/conversations?limit=50&sort=updatedAt&order=desc');
   }
-
   const url = env('CONVERSATIONS_URL') || inferConversationsUrl();
   if (!url) throw new Error('CONVERSATIONS_URL not set and could not infer from MESSAGES_URL');
 
-  const method = env('CONVERSATIONS_METHOD', 'GET');
-  const res = await fetchFn(url, { method, headers: { accept: 'application/json' } });
-  const ctype = String(res.headers?.get?.('content-type') || '').toLowerCase();
+  const method = env('CONVERSATIONS_METHOD','GET');
+  const authFetch = buildAuthFetch();
+  const res = await authFetch(url, { method, headers: { accept:'application/json' } });
+  const ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
   const text = await res.text();
+
   if (!ctype.includes('application/json')) {
-    throw new Error(`CONVERSATIONS_URL returned non-JSON (${ctype || 'unknown'}). First bytes: ` + text.slice(0,160));
+    throw new Error(`CONVERSATIONS_URL returned non-JSON (${ctype||'unknown'}). First bytes: ${text.slice(0,160)}`);
   }
+  let data; try { data = JSON.parse(text); } catch(e){ throw new Error('Bad JSON from conversations: '+e.message); }
 
-  let data;
-  try { data = JSON.parse(text); } catch (e) {
-    throw new Error('Failed to parse JSON from CONVERSATIONS_URL: ' + e.message);
-  }
-
-  // Accept a few shapes:
-  let list = Array.isArray(data) ? data
-           : Array.isArray(data.conversations) ? data.conversations
-           : Array.isArray(data.items) ? data.items
-           : [];
-
+  const list = Array.isArray(data) ? data
+             : Array.isArray(data.conversations) ? data.conversations
+             : Array.isArray(data.items) ? data.items
+             : [];
   const ids = [...new Set(list.map(x => x?.conversationId || x?.id || x?.uuid).filter(Boolean))];
-  if (!ids.length) throw new Error('No conversation ids found in CONVERSATIONS response.');
+  if (!ids.length) throw new Error('No conversation ids found in conversations response.');
   return ids;
 }
 
@@ -154,8 +92,7 @@ async function runCheck(id) {
 
 (async () => {
   try {
-    await login();
-    const ids = await listConversations(jf);
+    const ids = await listConversations();
     for (const id of ids) {
       await runCheck(id);
     }
@@ -164,4 +101,3 @@ async function runCheck(id) {
     process.exit(1);
   }
 })();
-
