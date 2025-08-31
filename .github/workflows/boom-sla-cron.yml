@@ -2,7 +2,7 @@ name: Boom SLA check (cron)
 
 on:
   schedule:
-    - cron: "*/1 * * * *"   # every minute
+    - cron: "*/5 * * * *"   # every 5 minutes
   workflow_dispatch: {}      # allow manual runs
 
 concurrency:
@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
+      FORCE_RUN: 1
       # non-secret repo variables (already set in your repo)
       LOGIN_URL:                  ${{ vars.LOGIN_URL }}
       LOGIN_METHOD:               ${{ vars.LOGIN_METHOD }}

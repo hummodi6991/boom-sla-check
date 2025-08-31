@@ -1,3 +1,4 @@
+const FORCE_RUN = process.env.FORCE_RUN === "1";
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
 import { sendAlert } from "./email.mjs";
@@ -639,7 +640,7 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // invocations (e.g. repository_dispatch) to proceed.  This prevents
   // multiple alerts from being generated on a fixed interval.
   const eventName = process.env.GITHUB_EVENT_NAME || "";
-  if (eventName.toLowerCase() === "schedule") {
+  if (!FORCE_RUN && eventName.toLowerCase() === "schedule") {
     console.log("Scheduled run detected; skipping check.");
     return;
   }
