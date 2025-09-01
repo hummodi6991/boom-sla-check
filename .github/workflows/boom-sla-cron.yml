@@ -1,8 +1,8 @@
 name: Boom SLA check (cron)
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes
+  # schedule:
+  #   - cron: "*/5 * * * *"   # every 5 minutes
   workflow_dispatch: {}      # allow manual runs
 
 concurrency:
