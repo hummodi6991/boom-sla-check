@@ -2,6 +2,8 @@ import { spawn } from 'child_process';
 
 // small helper to read envs consistently
 const env = (k, d = '') => (process.env[k] ?? d).toString().trim();
+const DEBUG = env('DEBUG','').length > 0;
+const parseJSON = (s, fb={}) => { try { return JSON.parse(s); } catch { return fb; } };
 
 async function loginAndGetCookies(baseFetch){
   const url=env('LOGIN_URL');
@@ -44,6 +46,11 @@ function buildAuthFetch(){
   const baseFetch = globalThis.fetch;
   let cookies = '';
   let bearer  = '';
+  const staticHeaderName  = env('CONVERSATIONS_AUTH_HEADER_NAME');   // e.g. "Authorization" or "Api-Key"
+  const staticHeaderValue = env('CONVERSATIONS_AUTH_VALUE');         // e.g. "Token abc" or just the key
+  const extraHeaders = parseJSON(env('CONVERSATIONS_EXTRA_HEADERS','{}')); // e.g. {"X-Org":"acme"}
+  const csrfCookieName = env('CSRF_COOKIE_NAME');                    // e.g. "csrfToken"
+  const csrfHeaderName = env('CSRF_HEADER_NAME');                    // e.g. "X-CSRF-Token"
 
   return async (url, init={})=>{
     const headers = { accept:'application/json', ...(init.headers||{}) };
@@ -52,10 +59,17 @@ function buildAuthFetch(){
     if (!bearer) {
       try { bearer = await loginForToken(baseFetch); } catch {}
     }
-    if (bearer) headers.authorization = `Bearer ${bearer}`;
+    if (bearer) headers.Authorization = `Bearer ${bearer}`;
 
     // 2) Also carry cookies if we have them
     if (cookies) headers.cookie = cookies;
+    if (staticHeaderName && staticHeaderValue) headers[staticHeaderName] = staticHeaderValue;
+    Object.assign(headers, extraHeaders);
+
+    if (csrfCookieName && csrfHeaderName && cookies) {
+      const part = cookies.split('; ').find(c => c.startsWith(csrfCookieName + '='));
+      if (part) headers[csrfHeaderName] = decodeURIComponent(part.split('=')[1] || '');
+    }
 
     let res = await baseFetch(url,{...init, headers});
     let ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
@@ -66,8 +80,12 @@ function buildAuthFetch(){
         if (!cookies) cookies = await loginAndGetCookies(baseFetch);
         const hdr = {...headers, cookie:cookies};
         // If bearer didn’t work, drop it on retry to avoid confusing some gateways
-        if (res.status === 401) delete hdr.authorization;
+        if (res.status === 401) delete hdr.Authorization;
         res = await baseFetch(url,{...init, headers:hdr});
+        if (DEBUG) {
+          console.log('[auth] retried with cookie session',
+            { hadBearer: !!bearer, staticHeader: !!staticHeaderName, status: res.status });
+        }
       } catch(e){
         throw new Error('Auth retry failed: '+e.message);
       }
@@ -86,6 +104,16 @@ async function listConversations() {
                      '/conversations?limit=50&sort=updatedAt&order=desc');
   };
 
+  // 0) Hard override: comma-separated IDs to avoid listing restrictions
+  const idsCsv = env('CONVERSATION_IDS','');
+  if (idsCsv) {
+    const ids = idsCsv.split(',').map(s=>s.trim()).filter(Boolean);
+    if (ids.length) {
+      if (DEBUG) console.log('[list] using CONVERSATION_IDS override', ids);
+      return ids;
+    }
+  }
+
   const url = env('CONVERSATIONS_URL') || inferFromMessages();
   if(!url) throw new Error('CONVERSATIONS_URL not set and could not infer from MESSAGES_URL');
   const method = env('CONVERSATIONS_METHOD','GET').toUpperCase();
@@ -102,6 +130,7 @@ async function listConversations() {
     },
     body: hasBody ? bodyRaw : undefined
   });
+  if (DEBUG) console.log('[list] status', res.status);
   const status = res.status;
   const ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
   const text  = await res.text();
@@ -133,6 +162,8 @@ async function listConversations() {
 
   const deepIds = new Set();
   const wanted = new Set(['conversationid','id','uuid']);
+  const idFieldEnv = env('CONVERSATION_ID_FIELD','');
+  if (idFieldEnv) wanted.add(idFieldEnv.toLowerCase());
 
   const walk = (x) => {
     if (!x || typeof x !== 'object') return;
