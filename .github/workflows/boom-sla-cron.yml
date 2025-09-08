@@ -24,7 +24,7 @@ jobs:
       CONVERSATIONS_METHOD:       ${{ vars.CONVERSATIONS_METHOD }}
       CONVERSATIONS_BODY:          ${{ vars.CONVERSATIONS_BODY }}
       SLA_MINUTES:                ${{ vars.SLA_MINUTES }}
-      DEBUG:                      ${{ vars.DEBUG }}
+      DEBUG:                      ${{ vars.DEBUG || '0' }}
       DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
       COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
 
@@ -57,15 +57,36 @@ jobs:
 
       # Debug the conversations listing endpoint (enable with DEBUG=1)
       - name: Debug conversations endpoint
-        if: ${{ env.DEBUG == '1' }}
+        if: env.DEBUG == '1'
+        env:
+          # plumb from repo Variables or Secrets; adjust as you use it today
+          CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL || secrets.CONVERSATIONS_URL }}
         run: |
           set -euo pipefail
-          echo "Hitting: $CONVERSATIONS_URL"
-          curl -i -sS -X "${CONVERSATIONS_METHOD:-GET}" "$CONVERSATIONS_URL" \
-            -H "Accept: application/json" \
-            ${CONVERSATIONS_AUTH_HEADER_NAME:+-H "${CONVERSATIONS_AUTH_HEADER_NAME}: ${CONVERSATIONS_AUTH_VALUE}"} \
-            ${CSRF_HEADER_NAME:+-H "${CSRF_HEADER_NAME}: ${CSRF_HEADER_VALUE:-}"} \
-            ${CONVERSATIONS_BODY:+--data "$CONVERSATIONS_BODY"} | sed -e 's/Authorization: .*/Authorization: <redacted>/'
+
+          # Read and sanitize the URL (strip CR/LF to avoid curl error 3)
+          url_raw="${CONVERSATIONS_URL:-}"
+          if [ -z "${url_raw}" ]; then
+            echo "::error::CONVERSATIONS_URL is empty"; exit 1
+          fi
+          url="$(printf '%s' "$url_raw" | tr -d '\r\n')"
+
+          # Warn if spaces; encode them so curl won’t choke
+          if printf '%s' "$url" | grep -q ' '; then
+            echo "::warning::Spaces detected in CONVERSATIONS_URL; encoding as %20"
+            url="${url// /%20}"
+          fi
+
+          echo "Hitting: $url"
+
+          # --globoff avoids curl interpreting [] in query params (e.g. filter[status]=open)
+          # --fail makes curl exit non-zero on HTTP >= 400
+          # --show-error prints the error text when failing
+          curl -sS --fail --show-error --globoff "$url" -w "\nHTTP %{http_code}\n" || {
+            code=$?
+            echo "::error::curl failed with exit code $code"
+            exit $code
+          }
 
       - name: Run SLA checker
         working-directory: .
