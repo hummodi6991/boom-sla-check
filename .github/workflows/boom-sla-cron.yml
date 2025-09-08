@@ -55,48 +55,51 @@ jobs:
             npm install --no-fund --no-audit
           fi
 
-      # Debug the conversations listing endpoint (enable with DEBUG=1)
       - name: Debug conversations endpoint
         if: env.DEBUG == '1'
         env:
-          # plumb from repo Variables or Secrets; adjust as you use it today
+          # Use whichever you already have configured
           CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL || secrets.CONVERSATIONS_URL }}
+        shell: bash
         run: |
           set -euo pipefail
 
-          # 1) Read and sanitize the URL from env (strip CR/LF/tabs and surrounding quotes/brackets)
           raw="${CONVERSATIONS_URL:-}"
-          if [ -z "${raw}" ]; then
+          if [ -z "$raw" ]; then
             echo "::error::CONVERSATIONS_URL is empty"; exit 1
           fi
 
-          # Remove CR, LF, TAB
+          # Sanitize: strip CR/LF/TAB and any pasted quotes/brackets
           url="$(printf '%s' "$raw" | tr -d '\r\n\t')"
-
-          # Strip surrounding angle/smart quotes if someone pasted with them
           url="${url#<}"; url="${url%>}"
-          url="${url#"}"; url="${url%"}"
-          url="${url#'}"; url="${url%'}"
+          url="${url#\"}"; url="${url%\"}"
+          url="${url#\'}"; url="${url%\'}"
           url="${url#“}"; url="${url%”}"
           url="${url#‘}"; url="${url%’}"
 
-          # If there are literal spaces, encode them (curl would reject them)
-          case "$url" in
-            *" "*) echo "::warning::Spaces found in URL; encoding as %20"; url="${url// /%20}";;
-          esac
+          # Encode spaces if any
+          case "$url" in *" "*) url="${url// /%20}";; esac
 
           echo "Hitting (sanitized): $url"
 
-          # 2) Print raw bytes so hidden characters are visible in logs
+          # Print raw bytes so hidden characters are visible in logs
           printf 'URL bytes (hex): '
           printf '%s' "$url" | od -An -t x1 | tr -d '\n'
           echo
 
-          # 3) Safe curl:
-          #    -g/--globoff: ignore [] globbing in query params
-          #    -L: follow redirects
-          #    --fail --show-error: fail clearly on HTTP 4xx/5xx
+          # Safe curl: disable globbing; follow redirects; fail clearly
           curl -sS -L --fail --show-error --globoff "$url" -w "\nHTTP %{http_code}\n"
+
+      - name: Debug conversations endpoint (rebuild query)
+        if: env.DEBUG == '1'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://app.boomnow.com/api/conversations/all"
+          echo "Hitting (rebuilt with --get): $base ? all=true"
+          curl -sS -L --fail --show-error --globoff --get "$base" \
+            --data-urlencode "all=true" \
+            -w "\nHTTP %{http_code}\n"
 
       - name: Run SLA checker
         working-directory: .
