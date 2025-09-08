@@ -182,16 +182,25 @@ function extractConversationId(input) {
   const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
   if (fromApi) return fromApi[1];
 
+  // 2b) accept plain numeric/alphanumeric IDs (many CRMs use these)
+  if (/^[A-Za-z0-9_-]+$/.test(s)) return s;
+
+  // 2c) accept /conversations/<id> (id can be numeric or slug)
+  const fromAnyConv = s.match(/\/conversations\/([^/?#]+)/i);
+  if (fromAnyConv) return fromAnyConv[1];
+
   // 3) attempt to pull the first URL from the text, then search path segments for UUID
   const urlStr = firstUrlLike(s);
   if (urlStr) {
     try {
-      // Unwrap potential tracking links that embed the destination URL
       const actualUrl = unwrapUrl(urlStr);
       const u = new URL(actualUrl);
       const parts = u.pathname.split("/").filter(Boolean);
+      // Prefer UUID if present, otherwise take the segment after /conversations/
       const fromPath = parts.find(x => UUID_RE.test(x));
       if (fromPath) return fromPath.match(UUID_RE)[0];
+      const idx = parts.findIndex(p => p.toLowerCase() === "conversations");
+      if (idx >= 0 && parts[idx+1]) return parts[idx+1];
     } catch {}
   }
 
