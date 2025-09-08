@@ -1,10 +1,13 @@
 import { spawn } from 'child_process';
 
+// small helper to read envs consistently
+const env = (k, d = '') => (process.env[k] ?? d).toString().trim();
+
 async function loginAndGetCookies(baseFetch){
-  const url=(process.env.LOGIN_URL||'').trim();
-  const method=(process.env.LOGIN_METHOD||'POST').toUpperCase();
-  const user=(process.env.BOOM_USER||'').trim();
-  const pass=(process.env.BOOM_PASS||'').trim();
+  const url=env('LOGIN_URL');
+  const method=env('LOGIN_METHOD','POST').toUpperCase();
+  const user=env('BOOM_USER');
+  const pass=env('BOOM_PASS');
   if(!url||!user||!pass) throw new Error('Missing LOGIN_URL/BOOM_USER/BOOM_PASS');
 
   const body = JSON.stringify({ email:user, password:pass });
@@ -16,23 +19,55 @@ async function loginAndGetCookies(baseFetch){
   return sc.split(',').map(v=>v.split(';',1)[0]).filter(Boolean).join('; ');
 }
 
+// New: token login (mirrors check.mjs)
+async function loginForToken(baseFetch){
+  const url=env('LOGIN_URL');
+  const method=env('LOGIN_METHOD','POST').toUpperCase();
+  const user=env('BOOM_USER');
+  const pass=env('BOOM_PASS');
+  if(!url||!user||!pass) throw new Error('Missing LOGIN_URL/BOOM_USER/BOOM_PASS');
+  const res = await baseFetch(url,{
+    method,
+    headers:{accept:'application/json','content-type':'application/json'},
+    body: JSON.stringify({ email:user, password:pass })
+  });
+  if (res.status>=400) throw new Error('Login failed: '+res.status);
+  let token = null;
+  try {
+    const j = await res.clone().json();
+    token = j?.token || j?.accessToken || j?.data?.accessToken || null;
+  } catch {}
+  return token;
+}
+
 function buildAuthFetch(){
   const baseFetch = globalThis.fetch;
   let cookies = '';
+  let bearer  = '';
 
   return async (url, init={})=>{
     const headers = { accept:'application/json', ...(init.headers||{}) };
+
+    // 1) Prefer Bearer token (same as check.mjs)
+    if (!bearer) {
+      try { bearer = await loginForToken(baseFetch); } catch {}
+    }
+    if (bearer) headers.authorization = `Bearer ${bearer}`;
+
+    // 2) Also carry cookies if we have them
     if (cookies) headers.cookie = cookies;
 
     let res = await baseFetch(url,{...init, headers});
     let ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
 
-    // If not JSON or empty content-type, login once and retry
-    if (!ctype.includes('application/json')) {
+    // 3) If the API still 401s or doesn’t return JSON, try cookie session login
+    if (res.status === 401 || !ctype.includes('application/json')) {
       try {
         if (!cookies) cookies = await loginAndGetCookies(baseFetch);
-        res = await baseFetch(url,{...init, headers:{...headers, cookie:cookies}});
-        ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
+        const hdr = {...headers, cookie:cookies};
+        // If bearer didn’t work, drop it on retry to avoid confusing some gateways
+        if (res.status === 401) delete hdr.authorization;
+        res = await baseFetch(url,{...init, headers:hdr});
       } catch(e){
         throw new Error('Auth retry failed: '+e.message);
       }
@@ -43,7 +78,6 @@ function buildAuthFetch(){
 
 // --- Conversation listing and checking ---
 async function listConversations() {
-  const env = (k,d='')=> (process.env[k] ?? d).toString();
   const inferFromMessages = ()=>{
     const m = env('MESSAGES_URL','');
     if(!m) return '';
