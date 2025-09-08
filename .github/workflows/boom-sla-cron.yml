@@ -74,8 +74,6 @@ jobs:
           url="${url#<}"; url="${url%>}"
           url="${url#\"}"; url="${url%\"}"
           url="${url#\'}"; url="${url%\'}"
-          url="${url#“}"; url="${url%”}"
-          url="${url#‘}"; url="${url%’}"
 
           # Encode spaces if any
           case "$url" in *" "*) url="${url// /%20}";; esac
