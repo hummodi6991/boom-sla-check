@@ -1,0 +1,62 @@
+name: Boom SLA check (debug)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Make the workflow read the auth secrets everywhere in this job
+    env:
+      BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
+      BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
+      # If your repo uses a different var for the base URL, map it here:
+      # MESSAGES_URL: ${{ vars.CONVERSATIONS_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        working-directory: .
+        run: |
+          ls -la
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-fund --no-audit
+          fi
+
+      - name: Debug conversations endpoint
+        shell: bash
+        # (Optional) also expose secrets at step scope if you prefer step-level envs
+        env:
+          BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
+          BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
+        run: |
+          set -euo pipefail
+          base="${MESSAGES_URL:-https://app.boomnow.com/api/conversations/all}"
+          base="$(printf '%s' "$base" | tr -d '\r' | xargs)"
+          sep='?'; [[ "$base" == *\?* ]] && sep='&'
+          url="${base}${sep}all=true"
+          echo "Hitting: $url"
+          hdrs=(-H 'Accept: application/json')
+          if [[ -n "${BOOM_BEARER:-}" ]]; then
+            echo "Using Bearer auth"
+            hdrs+=(-H "Authorization: Bearer ${BOOM_BEARER}")
+          elif [[ -n "${BOOM_COOKIE:-}" ]]; then
+            echo "Using Cookie auth"
+            hdrs+=(-H "Cookie: ${BOOM_COOKIE}")
+          else
+            echo "No auth provided; expect 401"
+          fi
+          code=$(curl -fsS --globoff -o /tmp/resp.json -w '%{http_code}' "${hdrs[@]}" "$url" || true)
+          echo "HTTP $code"
+          head -c 400 /tmp/resp.json || true
+
+      - name: Run SLA checker
+        working-directory: .
+        run: node ./check.mjs
