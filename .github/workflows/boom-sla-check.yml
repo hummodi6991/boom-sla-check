@@ -12,6 +12,7 @@ jobs:
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
       BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
       BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
+      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
       LOGIN_URL: ${{ vars.LOGIN_URL }}
       LOGIN_PREP_URL: ${{ vars.LOGIN_PREP_URL }}
       LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
@@ -47,7 +48,7 @@ jobs:
           CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
           MESSAGES_URL: ${{ vars.MESSAGES_URL }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           # Prefer conversations URL, fall back to messages, then a sane default
           base="${CONVERSATIONS_URL:-${MESSAGES_URL:-https://app.boomnow.com/api/conversations/all}}"
           base="$(printf '%s' "$base" | tr -d '\r' | xargs)"
@@ -67,7 +68,7 @@ jobs:
           else
             echo "No auth provided; expect 401"
           fi
-          # Never fail the job in this debug step
+          # never fail the job here, even on 401
           code=$(curl -sS --globoff -o /tmp/resp.json -w '%{http_code}' "${hdrs[@]}" "$url" || true)
           echo "HTTP $code"
           head -c 400 /tmp/resp.json || true
@@ -78,6 +79,7 @@ jobs:
           BOOM_PASS: ${{ secrets.BOOM_PASS }}
           BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
           BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
+          DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
           LOGIN_URL: ${{ vars.LOGIN_URL }}
           LOGIN_PREP_URL: ${{ vars.LOGIN_PREP_URL }}
           LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
