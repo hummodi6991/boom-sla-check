@@ -424,21 +424,33 @@ async function fetchMessages(baseUrl, id, { method = MESSAGES_METHOD, headers } 
   const ge2 = `${origin}/api/guest-experience/messages?conversation_id=${encodeURIComponent(id)}`;
   const isUuid = UUID_RE.test(String(id));
   const candidates = isUuid ? [convUrl, ge1, ge2] : [ge1, ge2, convUrl];
-  let res, url, lastStatus;
+
+  let res = null, url = '', lastStatus = 0;
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
   for (const u of candidates) {
     url = u;
-    if (process.env.DEBUG_MESSAGES) console.log('try messages url ->', url);
-    res = await jf(u, { method, headers });
-    lastStatus = res && res.status;
-    if (!res) continue;
-    if (res.status >= 500) {
-      console.warn(`Messages endpoint 5xx (${res.status}); skipping conversation`);
-      console.log('No alert sent.');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (process.env.DEBUG_MESSAGES) console.log('try messages url ->', url, '(attempt', attempt + 1, ')');
+      res = await jf(url, { method, headers });
+      lastStatus = res && res.status;
+
+      if (res && res.status === 200) {
+        return { res, url, lastStatus };
+      }
+
+      if (res && res.status >= 500) {
+        const backoff = 200 * (attempt + 1);
+        if (process.env.DEBUG_MESSAGES) console.warn(`messages 5xx (${res.status}); retrying in ${backoff}ms`);
+        await sleep(backoff);
+        continue; // retry same candidate
+      }
+
+      // 4xx or undefined -> try next candidate
       break;
     }
-    if (res.status === 200) break;
-    // 404/400 fallthrough
   }
+  // If we reached here, we tried all candidates and couldn't fetch successfully.
   return { res, url, lastStatus };
 }
 
@@ -784,7 +796,8 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     throw new Error(`Messages fetch failed: no response`);
   }
   if (res.status >= 500) {
-    process.exit(0);
+    console.error(`Messages endpoint 5xx for ${url || 'messages'} (status ${res.status}); retried all candidates; unable to fetch messages`);
+    throw new Error('Uncheckable conversation due to messages endpoint 5xx');
   }
   if (res.status >= 400) {
     throw new Error(`Messages fetch failed: ${lastStatus ?? (res ? res.status : 'unknown')}`);
