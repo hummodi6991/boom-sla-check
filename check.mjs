@@ -107,6 +107,43 @@ const pickConversationKey = (c) => {
   return uuid || candidates.find(Boolean);
 };
 
+const originOf = (base) => {
+  try {
+    const u = new URL(base);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    // fallback to known host if base isn't a full URL
+    return 'https://app.boomnow.com';
+  }
+};
+
+const urlCandidatesForMessages = (base, key, conv) => {
+  const origin = originOf(base);
+  const msgsBase = `${origin}/api/guest-experience/messages`;
+  const pathBase = `${origin}/api/conversations`;
+  const keyAlt = [
+    key,
+    conv?.uuid && String(conv.uuid),
+    conv?.conversation_id && String(conv.conversation_id),
+    conv?.id != null && String(conv.id),
+  ].filter(Boolean);
+  const uniq = [...new Set(keyAlt)];
+  const urls = [];
+  for (const k of uniq) {
+    if (looksLikeUuid(k)) {
+      // UUIDs: path first, then query style
+      urls.push(`${pathBase}/${encodeURIComponent(k)}/messages`);
+      urls.push(`${msgsBase}?conversation=${encodeURIComponent(k)}`);
+    } else {
+      // Numerics: query styles first (try both param names), then path as last resort
+      urls.push(`${msgsBase}?conversation=${encodeURIComponent(k)}`);
+      urls.push(`${msgsBase}?conversation_id=${encodeURIComponent(k)}`);
+      urls.push(`${pathBase}/${encodeURIComponent(k)}/messages`);
+    }
+  }
+  return urls;
+};
+
 const buildMessagesUrl = (base, key) => {
   let url = base || "";
   // 1) Template replacement
@@ -733,17 +770,22 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     ...(staticHeader ? { 'x-shared-secret': staticHeader } : {}),
   };
 
-  let res;
-  let messagesUrl;
+  let res, lastStatus;
   for (const key of uniqKeys) {
-    messagesUrl = buildMessagesUrl(MESSAGES_URL_TMPL, key);
-    res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
-    if (res.status < 400) break;
-    if (process.env.DEBUG_MESSAGES) {
-      console.log('retry messages url ->', messagesUrl, 'status:', res.status);
+    const urls = urlCandidatesForMessages(MESSAGES_URL_TMPL, key);
+    for (const u of urls) {
+      res = await jf(u, { method: MESSAGES_METHOD, headers });
+      lastStatus = res.status;
+      if (process.env.DEBUG_MESSAGES) {
+        console.log('try messages url ->', u, 'status:', res.status);
+      }
+      if (res.status < 400) break;
     }
+    if (res && res.status < 400) break;
   }
-  if (!res || res.status >= 400) throw new Error(`Messages fetch failed: ${res ? res.status : 'unknown'}`);
+  if (!res || res.status >= 400) {
+    throw new Error(`Messages fetch failed: ${lastStatus ?? (res ? res.status : 'unknown')}`);
+  }
 
   // 3) Parse and evaluate
   const data = await res.json();
