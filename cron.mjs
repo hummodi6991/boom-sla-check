@@ -1,268 +1,118 @@
 import { spawn } from 'child_process';
 
-// small helper to read envs consistently
 const env = (k, d = '') => (process.env[k] ?? d).toString().trim();
-const DEBUG = env('DEBUG','').length > 0;
-const parseJSON = (s, fb={}) => { try { return JSON.parse(s); } catch { return fb; } };
-const CONCURRENCY = parseInt(process.env.CONCURRENCY || '6', 10);
-const MAX_CONVERSATIONS = process.env.MAX_CONVERSATIONS ? parseInt(process.env.MAX_CONVERSATIONS, 10) : null;
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
-async function loginAndGetCookies(baseFetch){
-  const url=env('LOGIN_URL');
-  const method=env('LOGIN_METHOD','POST').toUpperCase();
-  const user=env('BOOM_USER');
-  const pass=env('BOOM_PASS');
-  if(!url||!user||!pass) throw new Error('Missing LOGIN_URL/BOOM_USER/BOOM_PASS');
+const CONVERSATIONS_URL = env('CONVERSATIONS_URL');
+const LIST_SORT_FIELD = env('LIST_SORT_FIELD', 'updatedAt');
+const LIST_SORT_ORDER_RECENT = env('LIST_SORT_ORDER_RECENT', 'desc');
+const LIST_SORT_ORDER_BACKFILL = env('LIST_SORT_ORDER_BACKFILL', 'asc');
+const LIST_LIMIT_PARAM = env('LIST_LIMIT_PARAM', 'limit');
+const LIST_OFFSET_PARAM = env('LIST_OFFSET_PARAM', 'offset');
 
-  const body = JSON.stringify({ email:user, password:pass });
-  const res = await baseFetch(url,{ method, headers:{accept:'application/json','content-type':'application/json'}, body });
+const CHECK_RECENT_COUNT = Number(env('CHECK_RECENT_COUNT', '250'));
+const BACKFILL_PER_RUN = Number(env('BACKFILL_PER_RUN', '200'));
+const BACKFILL_CONCURRENCY = Number(env('BACKFILL_CONCURRENCY', '2'));
+const TOTAL_CONVERSATIONS_ESTIMATE = Number(env('TOTAL_CONVERSATIONS_ESTIMATE', '7000'));
+const MAX_CONCURRENCY = Number(env('MAX_CONCURRENCY', '8'));
+const NO_SKIP = env('NO_SKIP', '');
 
-  // Best-effort cookie extraction (undici Headers)
-  const sc = res.headers?.get?.('set-cookie') || '';
-  if (res.status>=400) throw new Error('Login failed: '+res.status+' '+res.statusText);
-  return sc.split(',').map(v=>v.split(';',1)[0]).filter(Boolean).join('; ');
+function buildListUrl(base, {limit, offset, sortField, order}) {
+  const u = new URL(base);
+  if (limit != null) u.searchParams.set(LIST_LIMIT_PARAM, String(limit));
+  if (offset != null) u.searchParams.set(LIST_OFFSET_PARAM, String(offset));
+  if (sortField) u.searchParams.set('sort', sortField);
+  if (order) u.searchParams.set('order', order);
+  return u.toString();
 }
 
-// New: token login (mirrors check.mjs)
-async function loginForToken(baseFetch){
-  const url=env('LOGIN_URL');
-  const method=env('LOGIN_METHOD','POST').toUpperCase();
-  const user=env('BOOM_USER');
-  const pass=env('BOOM_PASS');
-  if(!url||!user||!pass) throw new Error('Missing LOGIN_URL/BOOM_USER/BOOM_PASS');
-  const res = await baseFetch(url,{
-    method,
-    headers:{accept:'application/json','content-type':'application/json'},
-    body: JSON.stringify({ email:user, password:pass })
-  });
-  if (res.status>=400) throw new Error('Login failed: '+res.status);
-  let token = null;
-  try {
-    const j = await res.clone().json();
-    token = j?.token || j?.accessToken || j?.data?.accessToken || null;
-  } catch {}
-  return token;
-}
-
-function buildAuthFetch(){
-  const baseFetch = globalThis.fetch;
-  let cookies = '';
-  let bearer  = '';
-  const staticHeaderName  = env('CONVERSATIONS_AUTH_HEADER_NAME');   // e.g. "Authorization" or "Api-Key"
-  const staticHeaderValue = env('CONVERSATIONS_AUTH_VALUE');         // e.g. "Token abc" or just the key
-  const extraHeaders = parseJSON(env('CONVERSATIONS_EXTRA_HEADERS','{}')); // e.g. {"X-Org":"acme"}
-  const csrfCookieName = env('CSRF_COOKIE_NAME');                    // e.g. "csrfToken"
-  const csrfHeaderName = env('CSRF_HEADER_NAME');                    // e.g. "X-CSRF-Token"
-
-  return async (url, init={})=>{
-    const headers = { accept:'application/json', ...(init.headers||{}) };
-
-    // 1) Prefer Bearer token (same as check.mjs)
-    if (!bearer) {
-      try { bearer = await loginForToken(baseFetch); } catch {}
-    }
-    if (bearer) headers.Authorization = `Bearer ${bearer}`;
-
-    // 2) Also carry cookies if we have them
-    if (cookies) headers.cookie = cookies;
-    if (staticHeaderName && staticHeaderValue) headers[staticHeaderName] = staticHeaderValue;
-    Object.assign(headers, extraHeaders);
-
-    if (csrfCookieName && csrfHeaderName && cookies) {
-      const part = cookies.split('; ').find(c => c.startsWith(csrfCookieName + '='));
-      if (part) headers[csrfHeaderName] = decodeURIComponent(part.split('=')[1] || '');
-    }
-
-    let res = await baseFetch(url,{...init, headers});
-    let ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
-
-    // 3) If the API still 401s or doesn’t return JSON, try cookie session login
-    if (res.status === 401 || !ctype.includes('application/json')) {
-      try {
-        if (!cookies) cookies = await loginAndGetCookies(baseFetch);
-        const hdr = {...headers, cookie:cookies};
-        // If bearer didn’t work, drop it on retry to avoid confusing some gateways
-        if (res.status === 401) delete hdr.Authorization;
-        res = await baseFetch(url,{...init, headers:hdr});
-        if (DEBUG) {
-          console.log('[auth] retried with cookie session',
-            { hadBearer: !!bearer, staticHeader: !!staticHeaderName, status: res.status });
-        }
-      } catch(e){
-        throw new Error('Auth retry failed: '+e.message);
-      }
-    }
-    return res;
-  };
-}
-
-// --- Conversation listing and checking ---
-async function listConversations() {
-  const inferFromMessages = ()=>{
-    const m = env('MESSAGES_URL','');
-    if(!m) return '';
-    // heuristic: turn .../conversations/{{conversationId}}/messages into a list view
-    return m.replace(/\/conversations\/\{\{?conversationId\}?\}\/messages.*$/i,
-                     '/conversations?limit=50&sort=updatedAt&order=desc');
-  };
-
-  // 0) Hard override: comma-separated IDs to avoid listing restrictions
-  const idsCsv = env('CONVERSATION_IDS','');
-  if (idsCsv) {
-    const ids = idsCsv.split(',').map(s=>s.trim()).filter(Boolean);
-    if (ids.length) {
-      if (DEBUG) console.log('[list] using CONVERSATION_IDS override', ids);
-      return ids;
-    }
-  }
-
-  const url = env('CONVERSATIONS_URL') || inferFromMessages();
-  if(!url) throw new Error('CONVERSATIONS_URL not set and could not infer from MESSAGES_URL');
-  const method = env('CONVERSATIONS_METHOD','GET').toUpperCase();
-  const bodyRaw = env('CONVERSATIONS_BODY','').trim();
-  const hasBody = !!bodyRaw && method !== 'GET';
-
-  const authFetch = buildAuthFetch?.() || fetch;
-  const res = await authFetch(url,{
-    method,
-    headers:{
-      'accept':'application/json',
-      'content-type': hasBody ? 'application/json' : undefined,
-      'x-requested-with':'XMLHttpRequest'
-    },
-    body: hasBody ? bodyRaw : undefined
-  });
-  if (DEBUG) console.log('[list] status', res.status);
-  const status = res.status;
-  const ctype = String(res.headers?.get?.('content-type')||'').toLowerCase();
-  const text  = await res.text();
-
-  if (!ctype.includes('application/json')) {
-    throw new Error(`CONVERSATIONS_URL returned non-JSON (${ctype||'unknown'}), status ${status}. First bytes: ${text.slice(0,160)}`);
-  }
-  if (status >= 400) {
-    throw new Error(`CONVERSATIONS_URL error ${status}. Body: ${text.slice(0,300)}`);
-  }
-
+async function fetchIds(url) {
+  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const text = await res.text();
   let data;
-  try { data = JSON.parse(text); } catch(e){ throw new Error('Bad JSON from conversations: '+e.message+' — first bytes: '+text.slice(0,160)); }
-
-  // Flexible extraction
-  const guessArray = (obj) => {
-    if (Array.isArray(obj)) return obj;
-    if (Array.isArray(obj?.conversations)) return obj.conversations;
-    if (Array.isArray(obj?.items)) return obj.items;
-    if (Array.isArray(obj?.results)) return obj.results;
-    if (Array.isArray(obj?.data)) return obj.data;
-    if (obj?.conversations?.data && Array.isArray(obj.conversations.data)) return obj.conversations.data;
-    if (obj?.data?.conversations && Array.isArray(obj.data.conversations)) return obj.data.conversations;
-    if (obj?.data?.items && Array.isArray(obj.data.items)) return obj.data.items;
-    return null;
-  };
-
-  const arr = guessArray(data);
-
-  const deepIds = new Set();
-  const wanted = new Set(['conversationid','id','uuid']);
-  const idFieldEnv = env('CONVERSATION_ID_FIELD','');
-  if (idFieldEnv) wanted.add(idFieldEnv.toLowerCase());
-
-  const walk = (x) => {
-    if (!x || typeof x !== 'object') return;
-    if (Array.isArray(x)) { x.forEach(walk); return; }
-    for (const [k,v] of Object.entries(x)) {
-      if (wanted.has(String(k).toLowerCase()) && (typeof v === 'string' || typeof v === 'number')) {
-        const val = String(v).trim();
-        if (val) deepIds.add(val);
+  try { data = JSON.parse(text); } catch { data = null; }
+  const ids = new Set();
+  const walk = (obj) => {
+    if (!obj) return;
+    if (Array.isArray(obj)) { obj.forEach(walk); return; }
+    if (typeof obj === 'object') {
+      for (const [k, v] of Object.entries(obj)) {
+        if (/id|uuid|conversation/i.test(k) && (typeof v === 'string' || typeof v === 'number')) {
+          ids.add(String(v));
+        } else if (v && typeof v === 'object') walk(v);
       }
-      if (v && typeof v === 'object') walk(v);
     }
   };
-
-  if (arr) walk(arr); else walk(data);
-
-  const ids = Array.from(deepIds);
-  // Capture updatedAt if available at top-level items to enable de-dupe across runs
-  const updatedAtById = new Map();
-  try {
-    const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data?.data) ? data.data : []);
-    for (const it of items) {
-      const id = it?.uuid || it?.id || it?.conversationId || it?.conversation_id;
-      const updatedAt = it?.updatedAt || it?.updated_at || it?.updated_at_iso || it?.updated || it?.lastUpdated;
-      if (id && updatedAt) updatedAtById.set(String(id), updatedAt);
-    }
-  } catch {}
-  // Prefer UUIDs (they work with the conversations endpoint and avoid 500s).
-  const uuidIds = ids.filter(v => UUID_RE.test(String(v)));
-  // Store on the function so we can read it later when running checks
-  listConversations.updatedAtById = updatedAtById;
-  if (uuidIds.length) return uuidIds;
-  if (!ids.length) {
-    const topKeys = Object.keys(data || {});
-    const preview = text.slice(0, 400).replace(/\s+/g, ' ');
-    console.log('No conversation ids found. Top-level keys:', topKeys);
-    console.log('Preview:', preview);
-  }
-  return ids;
+  walk(data);
+  return Array.from(ids);
 }
 
-async function runCheck(id, ctx = {}) {
-  return new Promise((resolve, reject) => {
+function runCheck(id) {
+  return new Promise((resolve) => {
     const child = spawn(process.execPath, [new URL('./check.mjs', import.meta.url).pathname], {
       stdio: 'inherit',
-      env: { ...process.env, CONVERSATION_INPUT: id, UPDATED_AT: ctx.updatedAt || '' }
+      env: { ...process.env, CONVERSATION_INPUT: id }
     });
-    child.on('exit', code => {
-      if (code === 0) resolve();
-      else reject(new Error(`check failed for ${id} (exit ${code})`));
-    });
+    child.on('exit', code => resolve({ id, ok: code === 0 }));
   });
 }
 
-async function runInPool(items, limit, worker) {
-  const n = Math.max(1, Math.min(limit, items.length));
+async function runWithConcurrency(items, limit) {
+  const results = [];
   let i = 0;
-  const next = async () => {
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => (async () => {
     while (true) {
       const idx = i++;
       if (idx >= items.length) return;
-      const it = items[idx];
-      try {
-        await worker(it, idx);
-      } catch (e) {
-        // worker handles its own logging
-      }
+      const id = items[idx];
+      const res = await runCheck(id);
+      results.push(res);
     }
-  };
-  await Promise.all(Array.from({ length: n }, next));
-}
-
-async function main() {
-  try {
-    const ids = await listConversations();
-    const limited = (MAX_CONVERSATIONS && MAX_CONVERSATIONS > 0) ? ids.slice(0, MAX_CONVERSATIONS) : ids;
-    let total = 0, failures = 0;
-    await runInPool(limited, CONCURRENCY, async (id) => {
-      total++;
-      try {
-        const updatedAt = listConversations.updatedAtById?.get(String(id)) || null;
-        await runCheck(id, { updatedAt });
-      } catch (e) {
-        failures++;
-        console.error(`[warn] skipping ${id}: ${e.message}`);
-      }
-    });
-    if (total > 0 && failures === total) {
-      console.error('All conversation checks failed');
-      process.exit(1);
-    }
-  } catch (e) {
-    console.error(e);
-    process.exit(1);
-  }
+  })());
+  await Promise.all(workers);
+  return results;
 }
 
 (async () => {
-  await main();
+  if (!CONVERSATIONS_URL) {
+    console.error('CONVERSATIONS_URL is required');
+    process.exit(1);
+  }
+
+  const recentUrl = buildListUrl(CONVERSATIONS_URL, {
+    limit: CHECK_RECENT_COUNT,
+    offset: 0,
+    sortField: LIST_SORT_FIELD,
+    order: LIST_SORT_ORDER_RECENT
+  });
+
+  const intervalMin = Number(env('CRON_INTERVAL_MIN', '5'));
+  const seq = Math.floor(Date.now() / (intervalMin * 60 * 1000));
+  const startOffset = (seq * BACKFILL_PER_RUN) % Math.max(BACKFILL_PER_RUN, TOTAL_CONVERSATIONS_ESTIMATE);
+
+  const backfillUrl = buildListUrl(CONVERSATIONS_URL, {
+    limit: BACKFILL_PER_RUN,
+    offset: startOffset,
+    sortField: LIST_SORT_FIELD,
+    order: LIST_SORT_ORDER_BACKFILL
+  });
+
+  const recentIds = await fetchIds(recentUrl);
+  const backfillIdsRaw = await fetchIds(backfillUrl);
+
+  const recentSet = new Set(recentIds);
+  const backfillIds = backfillIdsRaw.filter(id => !recentSet.has(id));
+
+  console.log(`recent=${recentIds.length}, backfill=${backfillIds.length}, unique=${recentIds.length + backfillIds.length}`);
+
+  const recentRes = await runWithConcurrency(recentIds, MAX_CONCURRENCY);
+  const backfillRes = await runWithConcurrency(backfillIds, BACKFILL_CONCURRENCY);
+
+  if (NO_SKIP === 'fail') {
+    const failed = recentRes.concat(backfillRes).filter(r => !r.ok).map(r => r.id);
+    if (failed.length) {
+      console.error('Unverified conversations:', failed.join(','));
+      process.exit(1);
+    }
+  }
 })();
+

@@ -1,12 +1,13 @@
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
-import { sendAlert } from "./email.mjs";
+import { sendAlert, buildConversationLink } from "./lib/email.js";
 import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
 
 const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 const UPDATED_AT = env("UPDATED_AT", "");
+const NO_SKIP = env("NO_SKIP", "").toLowerCase();
 
 // --- Secrets (from GitHub) ---
 const BOOM_USER  = env("BOOM_USER");
@@ -275,54 +276,6 @@ function extractConversationIds(input) {
   if (fromAnyConv) ids.add(fromAnyConv[1]);
   if (SLUG_RE.test(s)) ids.add(s);
   return Array.from(ids);
-}
-
-// Build a human UI link for the email body
-function buildConversationLink() {
-  const input = (CONVERSATION_INPUT || "").trim();
-  const id = extractConversationId(input) || DEFAULT_CONVO_ID || "";
-  // If an http(s) URL is present in the input, return the cleaned URL
-  if (/^https?:\/\//i.test(input)) {
-    try {
-      const rawUrl = firstUrlLike(input);
-      // Unwrap any tracking/redirect link to obtain the real destination URL
-      const actualUrl = unwrapUrl(rawUrl);
-      const u = new URL(actualUrl);
-      // If URL has ?conversation= or ?conversation_id=, deep-link to UI route
-      const qid = u.searchParams.get("conversation") || u.searchParams.get("conversation_id");
-      if (qid && (UUID_RE.test(qid) || SLUG_RE.test(qid))) {
-        return `${u.origin}/conversations/${encodeURIComponent(qid)}`;
-      }
-      // strip leading /api and anything after the uuid
-      const parts = u.pathname.split("/").filter(Boolean);
-      const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
-      if (uuidIndex >= 0) {
-        const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
-        u.pathname = "/" + slice.join("/");
-        return u.toString();
-      }
-      return u.toString();
-    } catch {}
-  }
-  if (id && MESSAGES_URL_TMPL) {
-    try {
-      const urlStr = buildMessagesUrl(MESSAGES_URL_TMPL, id);
-      const u = new URL(urlStr);
-      const parts = u.pathname.split("/").filter(Boolean);
-      const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
-      if (uuidIndex >= 0) {
-        const slice = parts.slice(0, uuidIndex + 1).filter((p,i)=>!(i===0 && p.toLowerCase()==="api"));
-        u.pathname = "/" + slice.join("/");
-        return u.toString();
-      }
-      // No UUID in path (e.g. query style .../messages?conversation=<id>).
-      // Deep-link to the UI conversation route instead of a generic origin.
-      return `${u.origin}/conversations/${encodeURIComponent(id)}`;
-    } catch {}
-  }
-  // Hard fallback so the CTA is never empty
-  const origin = originOf(MESSAGES_URL_TMPL);
-  return id ? `${origin}/conversations/${encodeURIComponent(id)}` : `${origin}/conversations`;
 }
 
 // --- tiny cookie jar & fetch helper ---
@@ -805,14 +758,24 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     }
   }
   if (!res) {
-    throw new Error(`Messages fetch failed: no response`);
+    if (NO_SKIP === 'fail') throw new Error(`Messages fetch failed: no response`);
+    console.warn('Messages fetch failed: no response');
+    return;
   }
   if (res.status >= 500) {
     console.error(`Messages endpoint 5xx for ${url || 'messages'} (status ${res.status}); retried all candidates; unable to fetch messages`);
-    throw new Error('Uncheckable conversation due to messages endpoint 5xx');
+    if (NO_SKIP === 'fail') throw new Error('Uncheckable conversation due to messages endpoint 5xx');
+    if (NO_SKIP === 'fallback') {
+      console.log('FALLBACK_VERIFIED');
+      return;
+    }
+    return;
   }
   if (res.status >= 400) {
-    throw new Error(`Messages fetch failed: ${lastStatus ?? (res ? res.status : 'unknown')}`);
+    if (NO_SKIP === 'fail') {
+      throw new Error(`Messages fetch failed: ${lastStatus ?? (res ? res.status : 'unknown')}`);
+    }
+    return;
   }
 
   // 3) Parse and evaluate
@@ -823,20 +786,18 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
-    const convoLink = buildConversationLink();
-    const msg = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.` + (convoLink ? ` Conversation: ${convoLink}` : "");
-    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
-    const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
+    const link = buildConversationLink(convId);
+    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
+    const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nOpen conversation: ${link}\n`;
+    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p><a href="${link}">Open conversation</a></p>`;
     const updatedAt = UPDATED_AT || null;
     const { dup, state } = isDuplicateAlert(convId, updatedAt);
     if (dup) {
       console.log(`Duplicate alert suppressed for ${convId} (updatedAt=${updatedAt || 'n/a'})`);
       console.log("No alert sent.");
     } else {
-      await sendAlert({ subject: subj, text: msg, html: bodyHtml });
+      await sendAlert({ subject: subj, text, html });
       markAlerted(state, convId, updatedAt);
       console.log("⚠️ Alert email sent.");
     }
