@@ -1,12 +1,8 @@
-  // Include AJAX header and bearer token (if present)
-  const headers = {
-    'x-requested-with': 'XMLHttpRequest',
-    ...((token) ? { authorization: `Bearer ` } : {})
-  };
-  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });const FORCE_RUN = process.env.FORCE_RUN === "1";
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
 import { sendAlert } from "./email.mjs";
+
+const FORCE_RUN = process.env.FORCE_RUN === "1";
 
 const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 
@@ -661,7 +657,7 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     return;
   }
   // 1) Login
-  const token = await login();
+  const loginToken = await login();
 
   // 2) Build messages URL from UI URL / API URL / UUID / default
   const id = extractConversationId(CONVERSATION_INPUT) || DEFAULT_CONVO_ID;
@@ -669,10 +665,19 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
 
   const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
-  // Include AJAX header and bearer token (if present)
+
+  // --- Auth sources ---
+  // Prefer cookie (you already have BOOM_COOKIE); fall back to bearer/static header if present.
+  const token = process.env.BOOM_TOKEN || process.env.GH_TOKEN || loginToken || undefined;
+  const cookie = process.env.BOOM_COOKIE || undefined;
+  const staticHeader = process.env.SHARED_SECRET || undefined;
+
+  // Build common headers safely (no bare identifiers)
   const headers = {
-    'x-requested-with': 'XMLHttpRequest',
-    ...(token ? { authorization: `Bearer ${token}` } : {})
+    accept: 'application/json',
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+    ...(cookie ? { cookie } : {}),
+    ...(staticHeader ? { 'x-shared-secret': staticHeader } : {}),
   };
   const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
   if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
