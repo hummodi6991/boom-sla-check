@@ -1,10 +1,12 @@
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
 import { sendAlert } from "./email.mjs";
+import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
 
 const env = (k, d="") => (process.env[k] ?? d).toString().trim();
+const UPDATED_AT = env("UPDATED_AT", "");
 
 // --- Secrets (from GitHub) ---
 const BOOM_USER  = env("BOOM_USER");
@@ -770,10 +772,13 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     ...(staticHeader ? { 'x-shared-secret': staticHeader } : {}),
   };
 
-  let res, lastStatus, url;
+  let res, lastStatus, url, usedKey;
   for (const key of uniqKeys) {
     ({ res, url, lastStatus } = await fetchMessages(MESSAGES_URL_TMPL, key, { method: MESSAGES_METHOD, headers }));
-    if (res && (res.status === 200 || res.status >= 500)) break;
+    if (res && (res.status === 200 || res.status >= 500)) {
+      usedKey = key;
+      break;
+    }
   }
   if (!res) {
     throw new Error(`Messages fetch failed: no response`);
@@ -799,8 +804,17 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const linkHtml = convoLink ? `<p>Conversation: <a href="${esc(convoLink)}">${esc(convoLink)}</a></p>` : "";
     const bodyHtml = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>${linkHtml}`;
-    await sendAlert({ subject: subj, text: msg, html: bodyHtml });
-    console.log("⚠️ Alert email sent.");
+    const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
+    const updatedAt = UPDATED_AT || null;
+    const { dup, state } = isDuplicateAlert(convId, updatedAt);
+    if (dup) {
+      console.log(`Duplicate alert suppressed for ${convId} (updatedAt=${updatedAt || 'n/a'})`);
+      console.log("No alert sent.");
+    } else {
+      await sendAlert({ subject: subj, text: msg, html: bodyHtml });
+      markAlerted(state, convId, updatedAt);
+      console.log("⚠️ Alert email sent.");
+    }
   } else {
     console.log("No alert sent.");
   }

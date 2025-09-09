@@ -183,8 +183,20 @@ async function listConversations() {
   if (arr) walk(arr); else walk(data);
 
   const ids = Array.from(deepIds);
+  // Capture updatedAt if available at top-level items to enable de-dupe across runs
+  const updatedAtById = new Map();
+  try {
+    const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data?.data) ? data.data : []);
+    for (const it of items) {
+      const id = it?.uuid || it?.id || it?.conversationId || it?.conversation_id;
+      const updatedAt = it?.updatedAt || it?.updated_at || it?.updated_at_iso || it?.updated || it?.lastUpdated;
+      if (id && updatedAt) updatedAtById.set(String(id), updatedAt);
+    }
+  } catch {}
   // Prefer UUIDs (they work with the conversations endpoint and avoid 500s).
   const uuidIds = ids.filter(v => UUID_RE.test(String(v)));
+  // Store on the function so we can read it later when running checks
+  listConversations.updatedAtById = updatedAtById;
   if (uuidIds.length) return uuidIds;
   if (!ids.length) {
     const topKeys = Object.keys(data || {});
@@ -195,11 +207,11 @@ async function listConversations() {
   return ids;
 }
 
-async function runCheck(id) {
+async function runCheck(id, ctx = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [new URL('./check.mjs', import.meta.url).pathname], {
       stdio: 'inherit',
-      env: { ...process.env, CONVERSATION_INPUT: id }
+      env: { ...process.env, CONVERSATION_INPUT: id, UPDATED_AT: ctx.updatedAt || '' }
     });
     child.on('exit', code => {
       if (code === 0) resolve();
@@ -234,7 +246,8 @@ async function main() {
     await runInPool(limited, CONCURRENCY, async (id) => {
       total++;
       try {
-        await runCheck(id);
+        const updatedAt = listConversations.updatedAtById?.get(String(id)) || null;
+        await runCheck(id, { updatedAt });
       } catch (e) {
         failures++;
         console.error(`[warn] skipping ${id}: ${e.message}`);
