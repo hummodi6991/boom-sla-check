@@ -180,6 +180,9 @@ async function listConversations() {
   if (arr) walk(arr); else walk(data);
 
   const ids = Array.from(deepIds);
+  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+  const uuidIds = ids.filter(v => UUID_RE.test(String(v)));
+  if (uuidIds.length) return uuidIds;
   if (!ids.length) {
     const topKeys = Object.keys(data || {});
     const preview = text.slice(0, 400).replace(/\s+/g, ' ');
@@ -205,8 +208,19 @@ async function runCheck(id) {
 (async () => {
   try {
     const ids = await listConversations();
+    let total = 0;
+    let failures = 0;
     for (const id of ids) {
-      await runCheck(id);
+      total++;
+      try {
+        await runCheck(id);
+      } catch (e) {
+        failures++;
+        console.warn('check failed for', id, e);
+      }
+    }
+    if (total > 0 && failures === total) {
+      process.exit(1);
     }
   } catch (e) {
     console.error(e);

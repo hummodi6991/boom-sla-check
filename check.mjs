@@ -783,8 +783,16 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     }
     if (res && res.status < 400) break;
   }
-  if (!res || res.status >= 400) {
-    throw new Error(`Messages fetch failed: ${lastStatus ?? (res ? res.status : 'unknown')}`);
+  if (!res) {
+    throw new Error(`Messages fetch failed: ${lastStatus ?? 'unknown'}`);
+  }
+  if (res.status >= 500) {
+    console.warn(`Messages endpoint 5xx (${res.status}); skipping conversation`);
+    console.log('No alert sent.');
+    process.exit(0);
+  }
+  if (res.status >= 400) {
+    throw new Error(`Messages fetch failed: ${res.status}`);
   }
 
   // 3) Parse and evaluate
