@@ -100,6 +100,15 @@ jobs:
             --data-urlencode "all=true" \
             -w "\nHTTP %{http_code}\n"
 
+      - name: Normalize messages URL
+        shell: bash
+        run: |
+          if [[ "$MESSAGES_URL" != *"{{conversationId}}"* && "$MESSAGES_URL" != *"conversation="* ]]; then
+            echo "MESSAGES_URL=${MESSAGES_URL}?conversation={{conversationId}}" >> $GITHUB_ENV
+          else
+            echo "MESSAGES_URL=${MESSAGES_URL}" >> $GITHUB_ENV
+          fi
+
       - name: Run SLA checker
         working-directory: .
         run: node ./cron.mjs
