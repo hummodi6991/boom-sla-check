@@ -232,8 +232,9 @@ function extractConversationId(input) {
   const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
   if (fromApi) return fromApi[1];
 
-  // 2b) accept plain numeric/alphanumeric IDs (many CRMs use these)
-  if (/^[A-Za-z0-9_-]+$/.test(s)) return s;
+  // 2b) accept plain alphanumeric IDs only if they look like real ids
+  // (avoid tiny tokens like "mfds")
+  if (/^[A-Za-z0-9_-]{10,}$/.test(s)) return s;
 
   // 2c) accept /conversations/<id> (id can be numeric or slug)
   const fromAnyConv = s.match(/\/conversations\/([^/?#]+)/i);
@@ -245,6 +246,9 @@ function extractConversationId(input) {
     try {
       const actualUrl = unwrapUrl(urlStr);
       const u = new URL(actualUrl);
+      // Prefer query param ids if present
+      const qid = u.searchParams.get("conversation") || u.searchParams.get("conversation_id");
+      if (qid) return qid;
       const parts = u.pathname.split("/").filter(Boolean);
       // Prefer UUID if present, otherwise take the segment after /conversations/
       const fromPath = parts.find(x => UUID_RE.test(x));
@@ -283,6 +287,11 @@ function buildConversationLink() {
       // Unwrap any tracking/redirect link to obtain the real destination URL
       const actualUrl = unwrapUrl(rawUrl);
       const u = new URL(actualUrl);
+      // If the URL carries ?conversation= or ?conversation_id=, deep-link to the UI route
+      const qid = u.searchParams.get("conversation") || u.searchParams.get("conversation_id");
+      if (qid) {
+        return `${u.origin}/conversations/${encodeURIComponent(qid)}`;
+      }
       // strip leading /api and anything after the uuid
       const parts = u.pathname.split("/").filter(Boolean);
       const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
