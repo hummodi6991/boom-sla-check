@@ -90,6 +90,43 @@ const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
 // === Utils ===
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
+const looksLikeUuid = (v) =>
+  typeof v === "string" &&
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(v);
+
+const pickConversationKey = (c) => {
+  const candidates = [
+    c?.conversation_id,
+    c?.conversationUuid,
+    c?.uuid,
+    c?.public_id,
+    c?.external_id,
+    c?.id,
+  ].map(x => (x == null ? undefined : String(x)));
+  const uuid = candidates.find(looksLikeUuid);
+  return uuid || candidates.find(Boolean);
+};
+
+const buildMessagesUrl = (base, key) => {
+  let url = base || "";
+  // 1) Template replacement
+  const templated = url.includes("{{conversationId}}");
+  if (templated) {
+    url = url.replace(/{{conversationId}}/g, encodeURIComponent(key));
+    return url;
+  }
+  // 2) Path style: /api/conversations/{id}/messages
+  if (url.includes("/api/conversations/") && !/\/messages\/?$/.test(url)) {
+    return url.replace(/\/$/, "") + "/" + encodeURIComponent(key) + "/messages";
+  }
+  // 3) Query style: …/messages?conversation={id} (avoid double-append)
+  if (!/conversation(_id)?=/.test(url)) {
+    return url + (url.includes("?") ? "&" : "?") + "conversation=" + encodeURIComponent(key);
+  }
+  // already has a conversation param — leave as-is
+  return url;
+};
+
 /**
  * Attempt to decode a string that may be Base64 encoded. Many email
  * tracking links include the destination URL as the final path segment
@@ -209,6 +246,20 @@ function extractConversationId(input) {
   return direct ? direct[0] : "";
 }
 
+function extractConversationIds(input) {
+  const s = (input || "").trim();
+  if (!s) return [];
+  const ids = new Set();
+  const direct = s.match(UUID_RE);
+  if (direct) ids.add(direct[0]);
+  const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
+  if (fromApi) ids.add(fromApi[1]);
+  const fromAnyConv = s.match(/\/conversations\/([^/?#]+)/i);
+  if (fromAnyConv) ids.add(fromAnyConv[1]);
+  if (/^[A-Za-z0-9_-]+$/.test(s)) ids.add(s);
+  return Array.from(ids);
+}
+
 // Build a human UI link for the email body
 function buildConversationLink() {
   const input = (CONVERSATION_INPUT || "").trim();
@@ -233,7 +284,7 @@ function buildConversationLink() {
   }
   if (id && MESSAGES_URL_TMPL) {
     try {
-      const urlStr = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
+      const urlStr = buildMessagesUrl(MESSAGES_URL_TMPL, id);
       const u = new URL(urlStr);
       const parts = u.pathname.split("/").filter(Boolean);
       const uuidIndex = parts.findIndex(p => UUID_RE.test(p));
@@ -660,11 +711,13 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   const loginToken = await login();
 
   // 2) Build messages URL from UI URL / API URL / UUID / default
-  const id = extractConversationId(CONVERSATION_INPUT) || DEFAULT_CONVO_ID;
-  if (!id) throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
+  const keyCandidates = extractConversationIds(CONVERSATION_INPUT);
+  if (DEFAULT_CONVO_ID) keyCandidates.push(DEFAULT_CONVO_ID);
+  const uniqKeys = Array.from(new Set(keyCandidates.filter(Boolean)));
+  if (!uniqKeys.length) {
+    throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
+  }
   if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
-
-  const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
 
   // --- Auth sources ---
   // Prefer cookie (you already have BOOM_COOKIE); fall back to bearer/static header if present.
@@ -679,8 +732,18 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     ...(cookie ? { cookie } : {}),
     ...(staticHeader ? { 'x-shared-secret': staticHeader } : {}),
   };
-  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
-  if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
+
+  let res;
+  let messagesUrl;
+  for (const key of uniqKeys) {
+    messagesUrl = buildMessagesUrl(MESSAGES_URL_TMPL, key);
+    res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
+    if (res.status < 400) break;
+    if (process.env.DEBUG_MESSAGES) {
+      console.log('retry messages url ->', messagesUrl, 'status:', res.status);
+    }
+  }
+  if (!res || res.status >= 400) throw new Error(`Messages fetch failed: ${res ? res.status : 'unknown'}`);
 
   // 3) Parse and evaluate
   const data = await res.json();
