@@ -303,7 +303,9 @@ function buildConversationLink() {
         u.pathname = "/" + slice.join("/");
         return u.toString();
       }
-      return u.origin;
+      // No UUID in path (e.g. query style .../messages?conversation=<id>).
+      // Deep-link to the UI conversation route instead of a generic origin.
+      return `${u.origin}/conversations/${encodeURIComponent(id)}`;
     } catch {}
   }
   return id ? id.toString() : "";
