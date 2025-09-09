@@ -12,7 +12,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       FORCE_RUN: 1
       # non-secret repo variables (already set in your repo)
@@ -27,6 +27,20 @@ jobs:
       DEBUG:                      ${{ vars.DEBUG || '0' }}
       DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
       COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
+
+      CHECK_RECENT_COUNT:         ${{ vars.CHECK_RECENT_COUNT }}
+      BACKFILL_PER_RUN:           ${{ vars.BACKFILL_PER_RUN }}
+      BACKFILL_CONCURRENCY:       ${{ vars.BACKFILL_CONCURRENCY }}
+      TOTAL_CONVERSATIONS_ESTIMATE: ${{ vars.TOTAL_CONVERSATIONS_ESTIMATE }}
+      MAX_CONCURRENCY:            ${{ vars.MAX_CONCURRENCY }}
+      CONVERSATION_LINK_TEMPLATE: ${{ vars.CONVERSATION_LINK_TEMPLATE }}
+      LIST_SORT_FIELD:            ${{ vars.LIST_SORT_FIELD }}
+      LIST_SORT_ORDER_RECENT:     ${{ vars.LIST_SORT_ORDER_RECENT }}
+      LIST_SORT_ORDER_BACKFILL:   ${{ vars.LIST_SORT_ORDER_BACKFILL }}
+      LIST_LIMIT_PARAM:           ${{ vars.LIST_LIMIT_PARAM }}
+      LIST_OFFSET_PARAM:          ${{ vars.LIST_OFFSET_PARAM }}
+      CRON_INTERVAL_MIN:          ${{ vars.CRON_INTERVAL_MIN }}
+      NO_SKIP:                    ${{ vars.NO_SKIP }}
 
       # secrets (already in your repo)
       BOOM_USER:   ${{ secrets.BOOM_USER }}
