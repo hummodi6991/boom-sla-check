@@ -266,6 +266,8 @@ const jar = new Jar();
 async function jf(url, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set("accept", "application/json, text/plain, */*");
+  // Ensure JSON endpoints that expect AJAX-style requests don't 406
+  headers.set("x-requested-with", "XMLHttpRequest");
   const ck = jar.header();
   if (ck) headers.set("cookie", ck);
 
@@ -662,8 +664,13 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   if (!MESSAGES_URL_TMPL) throw new Error("MESSAGES_URL not set");
 
   const messagesUrl = MESSAGES_URL_TMPL.replace(/{{conversationId}}/g, id);
-  const headers = token ? { authorization: `Bearer ${token}` } : {};
-  const res = await jf(messagesUrl, { method: MESSAGES_METHOD, headers });
+  // Use the same auth machinery as conversation listing and include AJAX header
+  const authFetch = buildAuthFetch?.() || fetch;
+  const headers = {
+    'x-requested-with': 'XMLHttpRequest',
+    ...(token ? { Authorization: `Bearer ${token}` } : {})
+  };
+  const res = await authFetch(messagesUrl, { method: MESSAGES_METHOD, headers });
   if (res.status >= 400) throw new Error(`Messages fetch failed: ${res.status}`);
 
   // 3) Parse and evaluate
