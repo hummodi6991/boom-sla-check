@@ -56,6 +56,7 @@ jobs:
           fi
 
       - name: Debug conversations endpoint
+        continue-on-error: true
         if: env.DEBUG == '1'
         env:
           # Use whichever you already have configured
@@ -86,7 +87,7 @@ jobs:
           echo
 
           # Safe curl: disable globbing; follow redirects; fail clearly
-          curl -sS -L --fail --show-error --globoff "$url" -w "\nHTTP %{http_code}\n"
+          curl -sS -L --fail --show-error --globoff "$url" -w "\nHTTP %{http_code}\n" || true
 
       - name: Debug conversations endpoint (rebuild query)
         if: env.DEBUG == '1'
