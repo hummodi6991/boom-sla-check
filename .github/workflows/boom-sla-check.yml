@@ -6,11 +6,10 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Make the workflow read the auth secrets everywhere in this job
     env:
       BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
       BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
-      # If your repo uses a different var for the base URL, map it here:
+      # If you use a different var for the base URL, uncomment:
       # MESSAGES_URL: ${{ vars.CONVERSATIONS_URL }}
 
     steps:
@@ -32,10 +31,6 @@ jobs:
 
       - name: Debug conversations endpoint
         shell: bash
-        # (Optional) also expose secrets at step scope if you prefer step-level envs
-        env:
-          BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
-          BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
         run: |
           set -euo pipefail
           base="${MESSAGES_URL:-https://app.boomnow.com/api/conversations/all}"
