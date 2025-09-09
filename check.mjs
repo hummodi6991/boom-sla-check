@@ -91,6 +91,8 @@ const DEFAULT_CONVO_ID = env("DEFAULT_CONVERSATION_ID","");
 
 // === Utils ===
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+// Accept long-ish non-UUID ids (avoid short noise like "mfds")
+const SLUG_RE = /^[A-Za-z0-9_-]{8,64}$/;
 
 const looksLikeUuid = (v) =>
   typeof v === "string" &&
@@ -232,9 +234,8 @@ function extractConversationId(input) {
   const fromApi = s.match(/\/api\/conversations\/([0-9a-f-]{36})/i);
   if (fromApi) return fromApi[1];
 
-  // 2b) accept plain alphanumeric IDs only if they look like real ids
-  // (avoid tiny tokens like "mfds")
-  if (/^[A-Za-z0-9_-]{10,}$/.test(s)) return s;
+  // 2b) accept plain alphanumeric IDs only if they look real (length guard)
+  if (SLUG_RE.test(s)) return s;
 
   // 2c) accept /conversations/<id> (id can be numeric or slug)
   const fromAnyConv = s.match(/\/conversations\/([^/?#]+)/i);
@@ -246,9 +247,9 @@ function extractConversationId(input) {
     try {
       const actualUrl = unwrapUrl(urlStr);
       const u = new URL(actualUrl);
-      // Prefer query param ids if present
+      // Prefer query param ids (?conversation= / ?conversation_id=)
       const qid = u.searchParams.get("conversation") || u.searchParams.get("conversation_id");
-      if (qid) return qid;
+      if (qid && (UUID_RE.test(qid) || SLUG_RE.test(qid))) return qid;
       const parts = u.pathname.split("/").filter(Boolean);
       // Prefer UUID if present, otherwise take the segment after /conversations/
       const fromPath = parts.find(x => UUID_RE.test(x));
@@ -272,7 +273,7 @@ function extractConversationIds(input) {
   if (fromApi) ids.add(fromApi[1]);
   const fromAnyConv = s.match(/\/conversations\/([^/?#]+)/i);
   if (fromAnyConv) ids.add(fromAnyConv[1]);
-  if (/^[A-Za-z0-9_-]+$/.test(s)) ids.add(s);
+  if (SLUG_RE.test(s)) ids.add(s);
   return Array.from(ids);
 }
 
@@ -287,9 +288,9 @@ function buildConversationLink() {
       // Unwrap any tracking/redirect link to obtain the real destination URL
       const actualUrl = unwrapUrl(rawUrl);
       const u = new URL(actualUrl);
-      // If the URL carries ?conversation= or ?conversation_id=, deep-link to the UI route
+      // If URL has ?conversation= or ?conversation_id=, deep-link to UI route
       const qid = u.searchParams.get("conversation") || u.searchParams.get("conversation_id");
-      if (qid) {
+      if (qid && (UUID_RE.test(qid) || SLUG_RE.test(qid))) {
         return `${u.origin}/conversations/${encodeURIComponent(qid)}`;
       }
       // strip leading /api and anything after the uuid
@@ -319,7 +320,9 @@ function buildConversationLink() {
       return `${u.origin}/conversations/${encodeURIComponent(id)}`;
     } catch {}
   }
-  return id ? id.toString() : "";
+  // Hard fallback so the CTA is never empty
+  const origin = originOf(MESSAGES_URL_TMPL);
+  return id ? `${origin}/conversations/${encodeURIComponent(id)}` : `${origin}/conversations`;
 }
 
 // --- tiny cookie jar & fetch helper ---
