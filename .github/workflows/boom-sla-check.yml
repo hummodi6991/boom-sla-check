@@ -7,10 +7,20 @@ jobs:
   check:
     runs-on: ubuntu-latest
     env:
+      # Secrets & vars available to all steps
+      BOOM_USER: ${{ secrets.BOOM_USER }}
+      BOOM_PASS: ${{ secrets.BOOM_PASS }}
       BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
       BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
-      # If you use a different var for the base URL, uncomment:
-      # MESSAGES_URL: ${{ vars.CONVERSATIONS_URL }}
+      LOGIN_URL: ${{ vars.LOGIN_URL }}
+      LOGIN_PREP_URL: ${{ vars.LOGIN_PREP_URL }}
+      LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
+      CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
+      CONVERSATIONS_METHOD: ${{ vars.CONVERSATIONS_METHOD }}
+      MESSAGES_URL: ${{ vars.MESSAGES_URL }}
+      MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
+      DEBUG: ${{ vars.DEBUG }}
+      DEBUG_MESSAGES: ${{ vars.DEBUG_MESSAGES }}
 
     steps:
       - uses: actions/checkout@v4
@@ -31,14 +41,23 @@ jobs:
 
       - name: Debug conversations endpoint
         shell: bash
+        env:
+          BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
+          BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
+          CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
+          MESSAGES_URL: ${{ vars.MESSAGES_URL }}
         run: |
           set -euo pipefail
-          base="${MESSAGES_URL:-https://app.boomnow.com/api/conversations/all}"
+          # Prefer conversations URL, fall back to messages, then a sane default
+          base="${CONVERSATIONS_URL:-${MESSAGES_URL:-https://app.boomnow.com/api/conversations/all}}"
           base="$(printf '%s' "$base" | tr -d '\r' | xargs)"
-          sep='?'; [[ "$base" == *\?* ]] && sep='&'
-          url="${base}${sep}all=true"
-          echo "Hitting: $url"
-          hdrs=(-H 'Accept: application/json')
+          # Only add ?all=true if there's no query AND the path ends with /all
+          url="$base"
+          if [[ "$base" != *\?* && "$base" == */all ]]; then
+            url="${base}?all=true"
+          fi
+          echo "Hitting (sanitized): $url"
+          hdrs=(-H 'Accept: application/json' -H 'User-Agent: curl/7' -H 'Referer: https://app.boomnow.com/' -H 'X-Requested-With: XMLHttpRequest')
           if [[ -n "${BOOM_BEARER:-}" ]]; then
             echo "Using Bearer auth"
             hdrs+=(-H "Authorization: Bearer ${BOOM_BEARER}")
@@ -48,10 +67,24 @@ jobs:
           else
             echo "No auth provided; expect 401"
           fi
-          code=$(curl -fsS --globoff -o /tmp/resp.json -w '%{http_code}' "${hdrs[@]}" "$url" || true)
+          # Never fail the job in this debug step
+          code=$(curl -sS --globoff -o /tmp/resp.json -w '%{http_code}' "${hdrs[@]}" "$url" || true)
           echo "HTTP $code"
           head -c 400 /tmp/resp.json || true
 
       - name: Run SLA checker
-        working-directory: .
+        env:
+          BOOM_USER: ${{ secrets.BOOM_USER }}
+          BOOM_PASS: ${{ secrets.BOOM_PASS }}
+          BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
+          BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
+          LOGIN_URL: ${{ vars.LOGIN_URL }}
+          LOGIN_PREP_URL: ${{ vars.LOGIN_PREP_URL }}
+          LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
+          CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
+          CONVERSATIONS_METHOD: ${{ vars.CONVERSATIONS_METHOD }}
+          MESSAGES_URL: ${{ vars.MESSAGES_URL }}
+          MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
+          DEBUG: ${{ vars.DEBUG }}
+          DEBUG_MESSAGES: ${{ vars.DEBUG_MESSAGES }}
         run: node ./check.mjs
