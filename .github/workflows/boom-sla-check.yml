@@ -12,7 +12,6 @@ jobs:
       BOOM_PASS: ${{ secrets.BOOM_PASS }}
       BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
       BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
-      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
       LOGIN_URL: ${{ vars.LOGIN_URL }}
       LOGIN_PREP_URL: ${{ vars.LOGIN_PREP_URL }}
       LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
@@ -22,6 +21,7 @@ jobs:
       MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
       DEBUG: ${{ vars.DEBUG }}
       DEBUG_MESSAGES: ${{ vars.DEBUG_MESSAGES }}
+      DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +48,7 @@ jobs:
           CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
           MESSAGES_URL: ${{ vars.MESSAGES_URL }}
         run: |
+          # don't fail the job even if this probe 401s
           set -uo pipefail
           # Prefer conversations URL, fall back to messages, then a sane default
           base="${CONVERSATIONS_URL:-${MESSAGES_URL:-https://app.boomnow.com/api/conversations/all}}"
@@ -73,19 +74,43 @@ jobs:
           echo "HTTP $code"
           head -c 400 /tmp/resp.json || true
 
+      - name: Build conversation id & messages URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          id="${DEFAULT_CONVERSATION_ID:-}"
+          # extract UUID if a full UI or API URL was provided
+          if [[ "$id" == *'?conversation='* ]]; then
+            id="${id##*?conversation=}"; id="${id%%&*}"
+          elif [[ "$id" == *'/conversations/'* ]]; then
+            id="${id##*/conversations/}"; id="${id%%[/?]*}"
+          fi
+          if [[ -z "$id" ]]; then
+            echo "No DEFAULT_CONVERSATION_ID set"; exit 1
+          fi
+          echo "CONVERSATION_ID=$id" >> "$GITHUB_ENV"
+          # rebuild MESSAGES_URL to include the required query param
+          base="${MESSAGES_URL:-https://app.boomnow.com/api/guest-experience/messages}"
+          base="$(printf '%s' "$base" | tr -d '\r' | xargs)"
+          sep='?'; [[ "$base" == *\?* ]] && sep='&'
+          built="${base}${sep}conversation=${id}"
+          echo "MESSAGES_URL=$built" >> "$GITHUB_ENV"
+          echo "Using conversation id: $id"
+          echo "Built messages URL: $built"
+
       - name: Run SLA checker
         env:
           BOOM_USER: ${{ secrets.BOOM_USER }}
           BOOM_PASS: ${{ secrets.BOOM_PASS }}
           BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
           BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
-          DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
           LOGIN_URL: ${{ vars.LOGIN_URL }}
           LOGIN_PREP_URL: ${{ vars.LOGIN_PREP_URL }}
           LOGIN_METHOD: ${{ vars.LOGIN_METHOD }}
           CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
           CONVERSATIONS_METHOD: ${{ vars.CONVERSATIONS_METHOD }}
-          MESSAGES_URL: ${{ vars.MESSAGES_URL }}
+          # MESSAGES_URL is overridden by the "Build conversation id" step
+          MESSAGES_URL: ${{ env.MESSAGES_URL }}
           MESSAGES_METHOD: ${{ vars.MESSAGES_METHOD }}
           DEBUG: ${{ vars.DEBUG }}
           DEBUG_MESSAGES: ${{ vars.DEBUG_MESSAGES }}
