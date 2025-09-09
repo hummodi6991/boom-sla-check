@@ -4,6 +4,9 @@ import { spawn } from 'child_process';
 const env = (k, d = '') => (process.env[k] ?? d).toString().trim();
 const DEBUG = env('DEBUG','').length > 0;
 const parseJSON = (s, fb={}) => { try { return JSON.parse(s); } catch { return fb; } };
+const CONCURRENCY = parseInt(process.env.CONCURRENCY || '6', 10);
+const MAX_CONVERSATIONS = process.env.MAX_CONVERSATIONS ? parseInt(process.env.MAX_CONVERSATIONS, 10) : null;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
 async function loginAndGetCookies(baseFetch){
   const url=env('LOGIN_URL');
@@ -180,7 +183,7 @@ async function listConversations() {
   if (arr) walk(arr); else walk(data);
 
   const ids = Array.from(deepIds);
-  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+  // Prefer UUIDs (they work with the conversations endpoint and avoid 500s).
   const uuidIds = ids.filter(v => UUID_RE.test(String(v)));
   if (uuidIds.length) return uuidIds;
   if (!ids.length) {
@@ -205,25 +208,48 @@ async function runCheck(id) {
   });
 }
 
-(async () => {
+async function runInPool(items, limit, worker) {
+  const n = Math.max(1, Math.min(limit, items.length));
+  let i = 0;
+  const next = async () => {
+    while (true) {
+      const idx = i++;
+      if (idx >= items.length) return;
+      const it = items[idx];
+      try {
+        await worker(it, idx);
+      } catch (e) {
+        // worker handles its own logging
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: n }, next));
+}
+
+async function main() {
   try {
     const ids = await listConversations();
-    let total = 0;
-    let failures = 0;
-    for (const id of ids) {
+    const limited = (MAX_CONVERSATIONS && MAX_CONVERSATIONS > 0) ? ids.slice(0, MAX_CONVERSATIONS) : ids;
+    let total = 0, failures = 0;
+    await runInPool(limited, CONCURRENCY, async (id) => {
       total++;
       try {
         await runCheck(id);
       } catch (e) {
         failures++;
-        console.warn('check failed for', id, e);
+        console.error(`[warn] skipping ${id}: ${e.message}`);
       }
-    }
+    });
     if (total > 0 && failures === total) {
+      console.error('All conversation checks failed');
       process.exit(1);
     }
   } catch (e) {
     console.error(e);
     process.exit(1);
   }
+}
+
+(async () => {
+  await main();
 })();

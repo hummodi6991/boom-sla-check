@@ -117,33 +117,6 @@ const originOf = (base) => {
   }
 };
 
-const urlCandidatesForMessages = (base, key, conv) => {
-  const origin = originOf(base);
-  const msgsBase = `${origin}/api/guest-experience/messages`;
-  const pathBase = `${origin}/api/conversations`;
-  const keyAlt = [
-    key,
-    conv?.uuid && String(conv.uuid),
-    conv?.conversation_id && String(conv.conversation_id),
-    conv?.id != null && String(conv.id),
-  ].filter(Boolean);
-  const uniq = [...new Set(keyAlt)];
-  const urls = [];
-  for (const k of uniq) {
-    if (looksLikeUuid(k)) {
-      // UUIDs: path first, then query style
-      urls.push(`${pathBase}/${encodeURIComponent(k)}/messages`);
-      urls.push(`${msgsBase}?conversation=${encodeURIComponent(k)}`);
-    } else {
-      // Numerics: query styles first (try both param names), then path as last resort
-      urls.push(`${msgsBase}?conversation=${encodeURIComponent(k)}`);
-      urls.push(`${msgsBase}?conversation_id=${encodeURIComponent(k)}`);
-      urls.push(`${pathBase}/${encodeURIComponent(k)}/messages`);
-    }
-  }
-  return urls;
-};
-
 const buildMessagesUrl = (base, key) => {
   let url = base || "";
   // 1) Template replacement
@@ -438,6 +411,31 @@ function normalizeMessages(data) {
   if (candidates.length) return candidates[0];
 
   return [];
+}
+
+async function fetchMessages(baseUrl, id, { method = MESSAGES_METHOD, headers } = {}) {
+  const origin = originOf(baseUrl);
+  const convUrl = `${origin}/api/conversations/${encodeURIComponent(id)}/messages`;
+  const ge1 = `${origin}/api/guest-experience/messages?conversation=${encodeURIComponent(id)}`;
+  const ge2 = `${origin}/api/guest-experience/messages?conversation_id=${encodeURIComponent(id)}`;
+  const isUuid = UUID_RE.test(String(id));
+  const candidates = isUuid ? [convUrl, ge1, ge2] : [ge1, ge2, convUrl];
+  let res, url, lastStatus;
+  for (const u of candidates) {
+    url = u;
+    if (process.env.DEBUG_MESSAGES) console.log('try messages url ->', url);
+    res = await jf(u, { method, headers });
+    lastStatus = res && res.status;
+    if (!res) continue;
+    if (res.status >= 500) {
+      console.warn(`Messages endpoint 5xx (${res.status}); skipping conversation`);
+      console.log('No alert sent.');
+      break;
+    }
+    if (res.status === 200) break;
+    // 404/400 fallthrough
+  }
+  return { res, url, lastStatus };
 }
 
 /**
@@ -750,7 +748,7 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 2) Build messages URL from UI URL / API URL / UUID / default
   const keyCandidates = extractConversationIds(CONVERSATION_INPUT);
   if (DEFAULT_CONVO_ID) keyCandidates.push(DEFAULT_CONVO_ID);
-  const uniqKeys = Array.from(new Set(keyCandidates.filter(Boolean)));
+  const uniqKeys = Array.from(new Set(keyCandidates.filter(Boolean))).slice(0, 200);
   if (!uniqKeys.length) {
     throw new Error("No conversationId available. Provide an input (UI URL / API URL / UUID) or set DEFAULT_CONVERSATION_ID repo variable.");
   }
@@ -770,29 +768,19 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     ...(staticHeader ? { 'x-shared-secret': staticHeader } : {}),
   };
 
-  let res, lastStatus;
+  let res, lastStatus, url;
   for (const key of uniqKeys) {
-    const urls = urlCandidatesForMessages(MESSAGES_URL_TMPL, key);
-    for (const u of urls) {
-      res = await jf(u, { method: MESSAGES_METHOD, headers });
-      lastStatus = res.status;
-      if (process.env.DEBUG_MESSAGES) {
-        console.log('try messages url ->', u, 'status:', res.status);
-      }
-      if (res.status < 400) break;
-    }
-    if (res && res.status < 400) break;
+    ({ res, url, lastStatus } = await fetchMessages(MESSAGES_URL_TMPL, key, { method: MESSAGES_METHOD, headers }));
+    if (res && (res.status === 200 || res.status >= 500)) break;
   }
   if (!res) {
-    throw new Error(`Messages fetch failed: ${lastStatus ?? 'unknown'}`);
+    throw new Error(`Messages fetch failed: no response`);
   }
   if (res.status >= 500) {
-    console.warn(`Messages endpoint 5xx (${res.status}); skipping conversation`);
-    console.log('No alert sent.');
     process.exit(0);
   }
   if (res.status >= 400) {
-    throw new Error(`Messages fetch failed: ${res.status}`);
+    throw new Error(`Messages fetch failed: ${lastStatus ?? (res ? res.status : 'unknown')}`);
   }
 
   // 3) Parse and evaluate
