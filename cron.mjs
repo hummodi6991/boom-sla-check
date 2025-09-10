@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
+import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -245,27 +246,39 @@ conversations.sort((a, b) => {
   return t(b) - t(a);
 });
 
-// map id -> conversation for quick lookup and build ids list
+// map id -> conversation for quick lookup
 const idOf = (c) => String(c?.id ?? c?.conversation_id ?? c?.uuid ?? c?._id ?? "");
 const byId = new Map(conversations.filter(Boolean).map(c => [idOf(c), c]));
 
-let ids = [...collectIds(conversations)];
-if (ids.length === 0) ids = conversations.map(idOf).filter(Boolean);
-console.log(`unique=${ids.length}`);
-log("sample IDs:", ids.slice(0, 5));
-if (ids.length === 0) {
+function buildConversationPool() {
+  return conversations.map(c => ({
+    id: idOf(c),
+    lastActivityAt: firstDefined(
+      c?.updated_at, c?.updatedAt,
+      c?.last_message_at, c?.lastMessageAt,
+      c?.modified_at, c?.modifiedAt,
+      c?.created_at, c?.createdAt
+    )
+  })).filter(x => x.id && x.lastActivityAt);
+}
+
+const pool = buildConversationPool();
+console.log(`unique=${pool.length}`);
+const sample = pool.slice(0, 5).map(x => `${x.id}@${x.lastActivityAt}`);
+console.log(`sample (unsorted) peek:`, sample);
+if (pool.length === 0) {
   console.log("No conversation IDs found. Check CONVERSATIONS_URL and auth (BOOM_BEARER/BOOM_COOKIE).");
   process.exit(0);
 }
+const selected = selectTop50(pool);
+assertTop50(pool, selected);
+const newest = selected[0];
+const oldest = selected[selected.length - 1];
+console.log(`selected window: newest=${newest.id}@${newest.lastActivityAt}  oldest=${oldest.id}@${oldest.lastActivityAt}`);
+console.log(`processing objectively newest 50 conversations`);
+const toCheck = selected;
 
-// throttle while debugging
-const LIMIT = parseInt(process.env.CHECK_LIMIT || "0", 10);
-if (LIMIT > 0 && ids.length > LIMIT) {
-  ids = ids.slice(0, LIMIT);
-  console.log(`debug limit: processing first ${LIMIT} conversations`);
-}
-
-console.log(`starting per-conversation checks: ${ids.length} ids (using inline thread when available)`);
+console.log(`starting per-conversation checks: ${toCheck.length} ids (using inline thread when available)`);
 
 // SLA threshold in minutes (now defaulting to 5)
 const THRESH = parseInt(process.env.SLA_MINUTES || "5", 10);
@@ -292,7 +305,7 @@ const getTs = (m) => {
 };
 
 let checked = 0, alerted = 0, skipped = 0;
-for (const id of ids) {
+for (const { id } of toCheck) {
   if (alerted >= MAX_ALERTS_PER_RUN) break;
   const conv = byId.get(String(id));
   let msgs = [];
