@@ -254,9 +254,19 @@ if (LIMIT > 0 && ids.length > LIMIT) {
 
 console.log(`starting per-conversation checks: ${ids.length} ids (using inline thread when available)`);
 
-const THRESH = parseInt(process.env.SLA_MINUTES || "15", 10);
+// SLA threshold in minutes (now defaulting to 5)
+const THRESH = parseInt(process.env.SLA_MINUTES || "5", 10);
 const RECENT_WINDOW_MIN = parseInt(process.env.RECENT_WINDOW_MIN || "720", 10); // ignore threads idle >12h
 const MAX_ALERTS_PER_RUN = parseInt(process.env.MAX_ALERTS_PER_RUN || "5", 10);
+// Optionally supply a URL template, e.g. "https://your.app/conversations/{id}"
+const CONV_URL_TEMPLATE = process.env.CONV_URL_TEMPLATE || "";
+function convoLinkFromTemplate(id) {
+  if (!CONV_URL_TEMPLATE) return null;
+  if (CONV_URL_TEMPLATE.includes("{id}")) {
+    return CONV_URL_TEMPLATE.replace("{id}", encodeURIComponent(String(id)));
+  }
+  return `${CONV_URL_TEMPLATE.replace(/\/$/, "")}/${encodeURIComponent(String(id))}`;
+}
 const to = process.env.ALERT_TO || "";
 const mask = (s) => s ? s.replace(/(.{2}).+(@.+)/, "$1***$2") : "";
 
@@ -300,7 +310,14 @@ for (const id of ids) {
   const result = await evaluateUnanswered(msgs, new Date(), THRESH);
   if (!result.ok && result.reason === "guest_unanswered") {
     const ageMin = result.minsSinceAgent ?? THRESH;
-    console.log(`ALERT: conv=${id} guest_unanswered=${ageMin}m > ${THRESH}m -> email ${mask(to) || "(no recipient set)"}`);
+
+    // Try to include a direct link to the conversation (prefer API-provided URL, else template)
+    const convUrl = firstDefined(conv?.url, conv?.link, conv?.href) || convoLinkFromTemplate(id);
+
+    console.log(
+      `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${THRESH}m -> email ${mask(to) || "(no recipient set)"}${convUrl ? ` link=${convUrl}` : ""}`
+    );
+
     // simple dedupe by conversation + newest message time
     const updatedAt = Number.isFinite(newestTs) ? new Date(newestTs).toISOString() : null;
     const { dup, state } = isDuplicateAlert(id, updatedAt);
@@ -309,7 +326,10 @@ for (const id of ids) {
       await sendAlertEmail({
         to,
         subject: `[Boom SLA] Unanswered ${ageMin}m (> ${THRESH}m) – conversation ${id}`,
-        text: `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${THRESH}m).\nPlease follow up.`,
+        text:
+`Latest guest message appears unanswered for ${ageMin} minutes (SLA ${THRESH}m).
+Conversation: ${id}${convUrl ? `\nLink: ${convUrl}` : "" }
+Please follow up.`,
       });
       markAlerted(state, id, updatedAt);
       alerted++;
