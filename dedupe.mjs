@@ -33,17 +33,15 @@ export function saveState(state) {
   }
 }
 
-export function isDuplicateAlert(id, updatedAt) {
+export function isDuplicateAlert(id, lastGuestTs) {
+  const key = `${id}:${lastGuestTs || ''}`;
   const state = loadState();
-  const entry = state[id];
-  if (!entry) return { dup: false, state };
-  if (!updatedAt) return { dup: true, state };
-  const prev = entry.lastUpdatedAt ? new Date(entry.lastUpdatedAt).getTime() : 0;
-  const curr = new Date(updatedAt).getTime();
-  return { dup: prev >= curr, state };
+  const entry = state[key];
+  return { dup: Boolean(entry), state };
 }
 
-export function markAlerted(state, id, updatedAt) {
-  state[id] = { lastUpdatedAt: updatedAt || null, ts: new Date().toISOString() };
+export function markAlerted(state, id, lastGuestTs) {
+  const key = `${id}:${lastGuestTs || ''}`;
+  state[key] = { lastUpdatedAt: lastGuestTs || null, ts: new Date().toISOString() };
   saveState(state);
 }

@@ -1,16 +1,17 @@
-import { getTop50PlatformWide } from "./fetchConversations";
+import { buildPoolFromMessages, PoolItem } from "./pool/fromMessages";
 
 // Placeholder for existing SLA check implementation
-async function checkSLA(conversations: any[]) {
+async function checkSLA(pool: PoolItem[]) {
   // existing SLA checks proceed unchanged
 }
 
 async function run() {
-  // Already the objective platform-wide latest 50 from the server:
-  const conversations = await getTop50PlatformWide();
+  const target = Number(process.env.POOL_SIZE ?? 50);
+  const pool = await buildPoolFromMessages(target);
+  console.log(`processing up to ${target} newest global convos by guest msg (actual: ${pool.length})`);
 
   // existing SLA checks proceed unchanged:
-  await checkSLA(conversations);
+  await checkSLA(pool);
 }
 
 run().catch(err => {

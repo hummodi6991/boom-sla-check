@@ -706,9 +706,9 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   const diffMs = now.getTime() - lastGuestTs.getTime();
   const completedMins = Math.floor(diffMs / 60000);
   if (diffMs < slaMin * 60000) {
-    return { ok: true, reason: "within_sla", minsSinceAgent: completedMins };
+    return { ok: true, reason: "within_sla", minsSinceAgent: completedMins, lastGuestTs };
   }
-  return { ok: false, reason: "guest_unanswered", minsSinceAgent: completedMins };
+  return { ok: false, reason: "guest_unanswered", minsSinceAgent: completedMins, lastGuestTs };
 }
 
 (async () => {
@@ -791,14 +791,14 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nOpen conversation: ${link}\n`;
     const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p><a href="${link}">Open conversation</a></p>`;
-    const updatedAt = UPDATED_AT || null;
-    const { dup, state } = isDuplicateAlert(convId, updatedAt);
+    const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
+    const { dup, state } = isDuplicateAlert(convId, lastGuestTs);
     if (dup) {
-      console.log(`Duplicate alert suppressed for ${convId} (updatedAt=${updatedAt || 'n/a'})`);
+      console.log(`Duplicate alert suppressed for ${convId} (lastGuestTs=${lastGuestTs || 'n/a'})`);
       console.log("No alert sent.");
     } else {
       await sendAlert({ subject: subj, text, html });
-      markAlerted(state, convId, updatedAt);
+      markAlerted(state, convId, lastGuestTs);
       console.log("⚠️ Alert email sent.");
     }
   } else {

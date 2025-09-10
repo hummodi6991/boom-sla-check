@@ -360,9 +360,8 @@ for (const { id } of toCheck) {
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"}${convUrl ? ` link=${convUrl}` : ""}`
       );
 
-      // simple dedupe by conversation + last update timestamp
-      const updatedAt = conv?.updated_at || conv?.updatedAt || null;
-      const { dup, state } = isDuplicateAlert(id, updatedAt);
+      // simple dedupe by conversation + last guest message timestamp
+      const { dup, state } = isDuplicateAlert(id, lastGuestMs);
       if (dup) {
         log(`conv ${id}: duplicate alert suppressed`);
       } else {
@@ -375,7 +374,7 @@ for (const { id } of toCheck) {
 Conversation: ${id}${convUrl ? `\nLink: ${convUrl}` : "" }
 Please follow up.`,
           });
-          markAlerted(state, id, updatedAt);
+          markAlerted(state, id, lastGuestMs);
           alerted++;
         } catch (e) {
           console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
