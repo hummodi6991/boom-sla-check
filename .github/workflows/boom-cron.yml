@@ -51,6 +51,7 @@ jobs:
       SMTP_PASS:   ${{ secrets.SMTP_PASS }}
       ALERT_TO:    ${{ secrets.ALERT_TO }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
 
     steps:
       - uses: actions/checkout@v4
