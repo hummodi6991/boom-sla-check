@@ -174,8 +174,8 @@ async function evaluateUnanswered(messages, now = new Date(), slaMin = 15) {
   if (!lastGuestTs) return { ok:true, reason:"no_breach" };
   const diffMs = now - lastGuestTs;
   return diffMs >= slaMin*60000
-    ? { ok:false, reason:"guest_unanswered", minsSinceAgent: Math.floor(diffMs/60000) }
-    : { ok:true, reason:"within_sla", minsSinceAgent: Math.floor(diffMs/60000) };
+    ? { ok:false, reason:"guest_unanswered", minsSinceAgent: Math.floor(diffMs/60000), lastGuestTs }
+    : { ok:true, reason:"within_sla", minsSinceAgent: Math.floor(diffMs/60000), lastGuestTs };
 }
 
 const BEARER = process.env.BOOM_BEARER || "";
@@ -282,9 +282,17 @@ const toCheck = selected;
 console.log(`starting per-conversation checks: ${toCheck.length} ids (using inline thread when available)`);
 
 // SLA threshold in minutes (now defaulting to 5)
-const THRESH = parseInt(process.env.SLA_MINUTES || "5", 10);
+const SLA_MIN = Number(process.env.SLA_MINUTES ?? 5);
+const CRON_INTERVAL_MIN = Number(process.env.CRON_INTERVAL_MINUTES ?? 5);
+const ALERT_TOL_MIN = Number(process.env.ALERT_TOLERANCE_MINUTES ?? 0.5); // small slack for drift
 const RECENT_WINDOW_MIN = parseInt(process.env.RECENT_WINDOW_MIN || "720", 10); // ignore threads idle >12h
 const MAX_ALERTS_PER_RUN = parseInt(process.env.MAX_ALERTS_PER_RUN || "5", 10);
+
+function shouldAlert(nowMs, lastGuestMsgMs) {
+  const ageMin = (nowMs - lastGuestMsgMs) / 60000;
+  // Fire exactly once: when the age enters the SLA window for this run.
+  return ageMin >= SLA_MIN && ageMin < SLA_MIN + CRON_INTERVAL_MIN + ALERT_TOL_MIN;
+}
 
 // Conversation deep-link builder: supports both env names and falls back to shared helper.
 function convoLinkFromTemplate(id) {
@@ -339,34 +347,37 @@ for (const { id } of toCheck) {
   if (newestAgeMin > RECENT_WINDOW_MIN) { checked++; continue; }
 
   // Proper unanswered evaluation
-  const result = await evaluateUnanswered(msgs, new Date(), THRESH);
+  const result = await evaluateUnanswered(msgs, new Date(), SLA_MIN);
   if (!result.ok && result.reason === "guest_unanswered") {
-    const ageMin = result.minsSinceAgent ?? THRESH;
+    const ageMin = result.minsSinceAgent ?? SLA_MIN;
+    const lastGuestMs = result.lastGuestTs || Date.parse(conv?.last_guest_message_at || conv?.lastGuestMessageAt || 0);
+    if (!Number.isFinite(lastGuestMs) || shouldAlert(Date.now(), lastGuestMs)) {
 
-    // Try to include a direct link to the conversation (prefer API-provided URL, else template)
-    const convUrl = firstDefined(conv?.url, conv?.link, conv?.href) || convoLinkFromTemplate(id);
+      // Try to include a direct link to the conversation (prefer API-provided URL, else template)
+      const convUrl = firstDefined(conv?.url, conv?.link, conv?.href) || convoLinkFromTemplate(id);
 
-    console.log(
-      `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${THRESH}m -> email ${mask(to) || "(no recipient set)"}${convUrl ? ` link=${convUrl}` : ""}`
-    );
+      console.log(
+        `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"}${convUrl ? ` link=${convUrl}` : ""}`
+      );
 
-    // simple dedupe by conversation + newest message time
-    const updatedAt = Number.isFinite(newestTs) ? new Date(newestTs).toISOString() : null;
-    const { dup, state } = isDuplicateAlert(id, updatedAt);
-    if (dup) { checked++; continue; }
-    try {
-      await sendAlertEmail({
-        to,
-        subject: `[Boom SLA] Unanswered ${ageMin}m (> ${THRESH}m) – conversation ${id}`,
-        text:
-`Latest guest message appears unanswered for ${ageMin} minutes (SLA ${THRESH}m).
+      // simple dedupe by conversation + newest message time
+      const updatedAt = Number.isFinite(newestTs) ? new Date(newestTs).toISOString() : null;
+      const { dup, state } = isDuplicateAlert(id, updatedAt);
+      if (dup) { checked++; continue; }
+      try {
+        await sendAlertEmail({
+          to,
+          subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${id}`,
+          text:
+`Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
 Conversation: ${id}${convUrl ? `\nLink: ${convUrl}` : "" }
 Please follow up.`,
-      });
-      markAlerted(state, id, updatedAt);
-      alerted++;
-    } catch (e) {
-      console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
+        });
+        markAlerted(state, id, updatedAt);
+        alerted++;
+      } catch (e) {
+        console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
+      }
     }
   } else {
     log(`conv ${id}: OK (${result.reason}${typeof result.minsSinceAgent === 'number' ? `, wait=${result.minsSinceAgent}m` : ''})`);
