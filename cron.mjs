@@ -23,13 +23,14 @@ function firstDefined(...vals) {
 }
 
 function normalizeMessages(raw) {
-  // Accept many shapes: array, {messages}, {thread}, {data:{messages|thread}}, {payload:{...}}, etc.
+  // Accept many shapes: array, {messages}, {thread}, {data:{messages|thread}}, etc.
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
-  // common containers we see
+  // common direct containers
   const candidates = [
     raw.messages,
     raw.thread,
+    raw.items,
     raw.data?.messages,
     raw.data?.thread,
     raw.payload?.messages,
@@ -38,14 +39,24 @@ function normalizeMessages(raw) {
     raw.payload?.data?.thread,
     raw.result?.messages,
     raw.result?.thread,
+    // 👇 shapes we were missing
+    raw.conversation?.messages,
+    raw.data?.conversation?.messages,
   ].filter(Boolean);
-  if (candidates.length) {
-    const arr = candidates.find(Array.isArray);
-    if (Array.isArray(arr)) return arr;
-  }
-  // some APIs wrap as {data:[...]}
+  const arr = candidates.find(Array.isArray);
+  if (Array.isArray(arr)) return arr;
   if (Array.isArray(raw.data)) return raw.data;
-  // last resort: single object?
+  // Deep fallback crawl – pick the first array that looks message-like
+  const buckets = [];
+  (function crawl(v){
+    if (!v || typeof v !== 'object') return;
+    if (Array.isArray(v) && v.some(x => x && typeof x === 'object' &&
+      ('by' in x || 'text' in x || 'body' in x || 'sent_at' in x))) {
+      buckets.push(v); return;
+    }
+    for (const k of Object.keys(v)) crawl(v[k]);
+  })(raw);
+  if (buckets.length) return buckets[0];
   return [];
 }
 
@@ -82,24 +93,27 @@ async function fetchMessagesWithRetry(conversationId, headers, { attempts = 3, b
 // ---------------------------
 // Guest detection (robust-ish)
 // ---------------------------
-function isGuestLike(msg) {
-  const roleish = firstDefined(
-    msg.role, msg.author_role, msg.sender_role, msg.from_role,
-    msg?.sender?.role, msg?.sender?.type, msg?.author?.role,
-    msg?.from?.role, msg?.by?.role
-  );
-  const dir = (msg.direction || msg?.meta?.direction || "").toLowerCase();
-  const isAI = Boolean(firstDefined(msg.is_ai, msg?.meta?.is_ai, msg?.sender?.is_ai));
+  function isGuestLike(msg) {
+    const roleish = firstDefined(
+      msg.role, msg.author_role, msg.sender_role, msg.from_role,
+      msg?.sender?.role, msg?.sender?.type, msg?.author?.role,
+      msg?.from?.role,
+      // 👇 support flat strings like by: "guest" or senderType: "guest"
+      msg.by, msg.senderType, msg.sender_type
+    );
+    const dir = String(firstDefined(
+      msg.direction, msg.message_direction, msg?.meta?.direction
+    ) || "").toLowerCase();
+    const isAI = Boolean(firstDefined(msg.is_ai, msg?.meta?.is_ai, msg?.sender?.is_ai));
 
-  if (isAI) return false;
-  if (dir === "inbound") return true;
+    if (isAI) return false;            // AI suggestions are not guests
+    if (dir === "inbound") return true;
 
-  const val = String(roleish || "").toLowerCase();
-  if (!val) return false;
-  // common guest synonyms seen across providers
-  const guestTokens = ["guest", "customer", "user", "end_user", "visitor", "client", "contact"];
-  return guestTokens.includes(val);
-}
+    const val = String(roleish || "").toLowerCase();
+    if (!val) return false;
+    const guestTokens = ["guest","customer","user","end_user","visitor","client","contact"];
+    return guestTokens.includes(val);
+  }
 
 const BEARER = process.env.BOOM_BEARER || "";
 const COOKIE = process.env.BOOM_COOKIE || "";
@@ -183,11 +197,13 @@ const THRESH = parseInt(process.env.SLA_MINUTES || "15", 10);
 const to = process.env.ALERT_TO || "";
 const mask = (s) => s ? s.replace(/(.{2}).+(@.+)/, "$1***$2") : "";
 
-const getTs = (m) => {
-  const t = m?.timestamp ?? m?.created_at ?? m?.createdAt ?? m?.sent_at ?? m?.time ?? null;
-  const v = t ? Date.parse(t) : NaN;
-  return Number.isFinite(v) ? v : 0;
-};
+  const getTs = (m) => {
+    const t =
+      m?.timestamp ?? m?.ts ?? m?.created_at ?? m?.createdAt ??
+      m?.sent_at ?? m?.sentAt ?? m?.time ?? null;
+    const v = t ? Date.parse(t) : NaN;
+    return Number.isFinite(v) ? v : 0;
+  };
 
 let checked = 0, alerted = 0, skipped = 0;
 for (const id of ids) {
