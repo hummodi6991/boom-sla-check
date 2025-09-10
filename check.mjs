@@ -1,7 +1,7 @@
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
 import { sendAlert, buildConversationLink } from "./lib/email.js";
-import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
+import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
 
@@ -792,6 +792,7 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nOpen conversation: ${link}\n`;
     const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p><a href="${link}">Open conversation</a></p>`;
     const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
+    const key = dedupeKey(convId, lastGuestTs);
     const { dup, state } = isDuplicateAlert(convId, lastGuestTs);
     if (dup) {
       console.log(`Duplicate alert suppressed for ${convId} (lastGuestTs=${lastGuestTs || 'n/a'})`);
@@ -799,6 +800,7 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     } else {
       await sendAlert({ subject: subj, text, html });
       markAlerted(state, convId, lastGuestTs);
+      console.log(`dedupe_key=${key}`);
       console.log("⚠️ Alert email sent.");
     }
   } else {
