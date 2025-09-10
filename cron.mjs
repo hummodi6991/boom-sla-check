@@ -360,23 +360,26 @@ for (const { id } of toCheck) {
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"}${convUrl ? ` link=${convUrl}` : ""}`
       );
 
-      // simple dedupe by conversation + newest message time
-      const updatedAt = Number.isFinite(newestTs) ? new Date(newestTs).toISOString() : null;
+      // simple dedupe by conversation + last update timestamp
+      const updatedAt = conv?.updated_at || conv?.updatedAt || null;
       const { dup, state } = isDuplicateAlert(id, updatedAt);
-      if (dup) { checked++; continue; }
-      try {
-        await sendAlertEmail({
-          to,
-          subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${id}`,
-          text:
+      if (dup) {
+        log(`conv ${id}: duplicate alert suppressed`);
+      } else {
+        try {
+          await sendAlertEmail({
+            to,
+            subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${id}`,
+            text:
 `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
 Conversation: ${id}${convUrl ? `\nLink: ${convUrl}` : "" }
 Please follow up.`,
-        });
-        markAlerted(state, id, updatedAt);
-        alerted++;
-      } catch (e) {
-        console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
+          });
+          markAlerted(state, id, updatedAt);
+          alerted++;
+        } catch (e) {
+          console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
+        }
       }
     }
   } else {
