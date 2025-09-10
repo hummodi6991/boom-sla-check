@@ -317,7 +317,7 @@ for (const id of ids) {
       console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
     }
   } else {
-    log(`conv ${id}: OK (within SLA or answered)`);
+    log(`conv ${id}: OK (${result.reason}${typeof result.minsSinceAgent === 'number' ? `, wait=${result.minsSinceAgent}m` : ''})`);
   }
   checked++;
 }
