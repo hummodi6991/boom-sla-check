@@ -232,6 +232,19 @@ const conversations =
   payload?.conversations ??
   [];
 
+// conversations array is already defined above
+// Ensure we process the most recent threads first (fallback to any timestamp we can find)
+conversations.sort((a, b) => {
+  const t = (o) =>
+    Date.parse(
+      o?.updated_at || o?.updatedAt ||
+      o?.last_message_at || o?.lastMessageAt ||
+      o?.modified_at || o?.modifiedAt ||
+      o?.created_at || o?.createdAt || 0
+    ) || 0;
+  return t(b) - t(a);
+});
+
 // map id -> conversation for quick lookup and build ids list
 const idOf = (c) => String(c?.id ?? c?.conversation_id ?? c?.uuid ?? c?._id ?? "");
 const byId = new Map(conversations.filter(Boolean).map(c => [idOf(c), c]));
