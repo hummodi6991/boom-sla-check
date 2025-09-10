@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
-import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
+import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 import { buildConversationLink as _buildConversationLink } from "./lib/email.js";
 
@@ -365,6 +365,7 @@ for (const { id } of toCheck) {
       if (dup) {
         log(`conv ${id}: duplicate alert suppressed`);
       } else {
+        const key = dedupeKey(id, lastGuestMs);
         try {
           await sendAlertEmail({
             to,
@@ -375,6 +376,7 @@ Conversation: ${id}${convUrl ? `\nLink: ${convUrl}` : "" }
 Please follow up.`,
           });
           markAlerted(state, id, lastGuestMs);
+          log(`dedupe_key=${key}`);
           alerted++;
         } catch (e) {
           console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
