@@ -2,6 +2,105 @@
 import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 
+// Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
+
+// ---------------------------
+// Helpers: URL & normalization
+// ---------------------------
+function buildMessagesUrl(conversationId) {
+  const base = process.env.MESSAGES_URL;
+  if (!base) throw new Error("MESSAGES_URL is not set");
+  if (base.includes("{{conversationId}}")) {
+    return base.replace("{{conversationId}}", encodeURIComponent(conversationId));
+  }
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}conversation=${encodeURIComponent(conversationId)}`;
+}
+
+function firstDefined(...vals) {
+  for (const v of vals) if (v !== undefined) return v;
+  return undefined;
+}
+
+function normalizeMessages(raw) {
+  // Accept many shapes: array, {messages}, {thread}, {data:{messages|thread}}, {payload:{...}}, etc.
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  // common containers we see
+  const candidates = [
+    raw.messages,
+    raw.thread,
+    raw.data?.messages,
+    raw.data?.thread,
+    raw.payload?.messages,
+    raw.payload?.thread,
+    raw.payload?.data?.messages,
+    raw.payload?.data?.thread,
+    raw.result?.messages,
+    raw.result?.thread,
+  ].filter(Boolean);
+  if (candidates.length) {
+    const arr = candidates.find(Array.isArray);
+    if (Array.isArray(arr)) return arr;
+  }
+  // some APIs wrap as {data:[...]}
+  if (Array.isArray(raw.data)) return raw.data;
+  // last resort: single object?
+  return [];
+}
+
+// ---------------------------
+// Helpers: fetch with retry
+// ---------------------------
+async function fetchMessagesWithRetry(conversationId, headers, { attempts = 3, baseDelayMs = 300 } = {}) {
+  const url = buildMessagesUrl(conversationId);
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, { headers, redirect: "manual" });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const msgs = normalizeMessages(json);
+        return { ok: true, status: res.status, messages: msgs, raw: json };
+      }
+      // Retry on 5xx; otherwise stop
+      if (res.status >= 500 && res.status < 600) {
+        lastErr = new Error(`HTTP ${res.status}`);
+      } else {
+        return { ok: false, status: res.status };
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+    // backoff
+    const delay = baseDelayMs * Math.pow(2, i);
+    await new Promise(r => setTimeout(r, delay));
+  }
+  return { ok: false, error: lastErr };
+}
+
+// ---------------------------
+// Guest detection (robust-ish)
+// ---------------------------
+function isGuestLike(msg) {
+  const roleish = firstDefined(
+    msg.role, msg.author_role, msg.sender_role, msg.from_role,
+    msg?.sender?.role, msg?.sender?.type, msg?.author?.role,
+    msg?.from?.role, msg?.by?.role
+  );
+  const dir = (msg.direction || msg?.meta?.direction || "").toLowerCase();
+  const isAI = Boolean(firstDefined(msg.is_ai, msg?.meta?.is_ai, msg?.sender?.is_ai));
+
+  if (isAI) return false;
+  if (dir === "inbound") return true;
+
+  const val = String(roleish || "").toLowerCase();
+  if (!val) return false;
+  // common guest synonyms seen across providers
+  const guestTokens = ["guest", "customer", "user", "end_user", "visitor", "client", "contact"];
+  return guestTokens.includes(val);
+}
+
 const BEARER = process.env.BOOM_BEARER || "";
 const COOKIE = process.env.BOOM_COOKIE || "";
 const DEBUG  = !!process.env.DEBUG;
@@ -89,11 +188,6 @@ const getTs = (m) => {
   const v = t ? Date.parse(t) : NaN;
   return Number.isFinite(v) ? v : 0;
 };
-const isGuest = (m) => {
-  const r = String(m?.role ?? m?.author_role ?? m?.sender_role ?? m?.from_role ?? m?.direction ?? "").toLowerCase();
-  const s = String(m?.sender ?? m?.author ?? m?.from ?? "").toLowerCase();
-  return r.includes("guest") || r.includes("customer") || r.includes("inbound") || s.includes("guest") || s.includes("customer");
-};
 
 let checked = 0, alerted = 0, skipped = 0;
 for (const id of ids) {
@@ -103,14 +197,22 @@ for (const id of ids) {
     msgs = conv.thread;
     log(`conv ${id}: using inline thread (${msgs.length} msgs)`);
   } else {
-    // Inline messages missing: skip for now (the external messages endpoints are 500’ing)
-    console.warn(`conv ${id}: no inline thread on conversations response; skipping (messages endpoint currently 500)`);
-    skipped++;
-    continue;
+    // NEW: try messages endpoint instead of skipping
+    const headers = authHeaders();
+    const r = await fetchMessagesWithRetry(id, headers);
+    if (r.ok) {
+      msgs = r.messages;
+      console.log(`conv ${id}: fetched ${msgs.length} via messages endpoint`);
+    } else {
+      const detail = r.status ? `status ${r.status}` : (r.error?.message || "unknown error");
+      console.warn(`conv ${id}: no inline thread; messages fetch failed (${detail}); skipping`);
+      skipped++;
+      continue;
+    }
   }
 
   // SLA calc
-  const lastGuest = msgs.filter(isGuest).map(getTs).filter(Boolean).sort((a,b)=>b-a)[0] || 0;
+  const lastGuest = msgs.filter(isGuestLike).map(getTs).filter(Boolean).sort((a,b)=>b-a)[0] || 0;
   if (!lastGuest) { log(`conv ${id}: no guest messages found`); checked++; continue; }
   const ageMin = Math.floor((Date.now() - lastGuest) / 60000);
 
