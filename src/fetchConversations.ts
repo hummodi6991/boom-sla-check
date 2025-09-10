@@ -1,48 +1,29 @@
-export type Conversation = {
-  id?: string | number;
-  uuid?: string;
-  conversationId?: string;
-  lastActivityAt?: string; // ISO string
+import axios from "axios";
+
+const BASE  = process.env.BOOM_API_BASE!;
+const TOKEN = process.env.BOOM_API_TOKEN!;
+const ORG_ID = process.env.BOOM_ORG_ID!; // org / account scope
+
+export type Conv = {
+  id: string;
+  lastActivityAt: string; // ISO timestamp used for SLA recency
+  // add any fields you already read elsewhere (participant ids, link, etc.)
 };
 
-async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  if (!res.ok) throw new Error(`Fetch failed ${res.status}: ${await res.text()}`);
-  return res.json() as Promise<T>;
-}
+export async function getTop50PlatformWide(): Promise<Conv[]> {
+  const res = await axios.get(`${BASE}/orgs/${ORG_ID}/conversations`, {
+    params: {
+      sort: "lastActivityAt",   // adjust if API uses "updatedAt" / "last_message_at"
+      order: "desc",
+      limit: 50
+    },
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    timeout: 15_000
+  });
 
-/** Preferred: ask API for the global newest 50 directly */
-export async function getTop50PlatformWide(): Promise<Conversation[]> {
-  if (process.env.PLATFORM_TOP50_URL) {
-    return jsonFetch<Conversation[]>(process.env.PLATFORM_TOP50_URL);
-  }
-  const base = process.env.CONVERSATIONS_URL!;
-  const url = new URL(base);
-  url.searchParams.set('limit', '50');
-  url.searchParams.set('order', 'desc');
-  url.searchParams.set('sort', 'lastActivity');
-  return jsonFetch<Conversation[]>(url.toString());
-}
-
-/** Fallback: fetch a window, then sort locally and slice top 50 */
-export async function getNewest50FromFetchedSet(): Promise<Conversation[]> {
-  const base = process.env.CONVERSATIONS_URL!;
-  const data = await jsonFetch<Conversation[]>(base);
-  return data
-    .sort(
-      (a, b) =>
-        new Date(b.lastActivityAt ?? 0).getTime() -
-        new Date(a.lastActivityAt ?? 0).getTime()
-    )
-    .slice(0, 50);
-}
-
-/** Final getter used by the cron */
-export async function getNewest50(): Promise<Conversation[]> {
-  try {
-    return await getTop50PlatformWide();
-  } catch (err) {
-    console.warn('Top50 platform-wide failed; falling back to local sort:', err);
-    return getNewest50FromFetchedSet();
-  }
+  const items = res.data.items ?? res.data ?? [];
+  return items.map((c: any) => ({
+    id: c.id,
+    lastActivityAt: c.lastActivityAt || c.updatedAt || c.last_message_at
+  }));
 }
