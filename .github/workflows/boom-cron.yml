@@ -25,6 +25,8 @@ jobs:
       CONVERSATIONS_BODY:          ${{ vars.CONVERSATIONS_BODY }}
       # alert threshold in minutes (adjust as needed)
       SLA_MINUTES: "5"
+      CRON_INTERVAL_MINUTES: "5"
+      ALERT_TOLERANCE_MINUTES: "0.5"
       # Turn on verbose logs for one run; remove later if noisy
       DEBUG: "1"
       # process this many conversations per run while tuning
@@ -37,13 +39,12 @@ jobs:
       BACKFILL_CONCURRENCY:       ${{ vars.BACKFILL_CONCURRENCY }}
       TOTAL_CONVERSATIONS_ESTIMATE: ${{ vars.TOTAL_CONVERSATIONS_ESTIMATE }}
       MAX_CONCURRENCY:            ${{ vars.MAX_CONCURRENCY }}
-      CONVERSATION_LINK_TEMPLATE: ${{ vars.CONVERSATION_LINK_TEMPLATE }}
+      CONVERSATION_LINK_TEMPLATE: https://app.boomnow.com/r/conversation/{id}
       LIST_SORT_FIELD:            ${{ vars.LIST_SORT_FIELD }}
       LIST_SORT_ORDER_RECENT:     ${{ vars.LIST_SORT_ORDER_RECENT }}
       LIST_SORT_ORDER_BACKFILL:   ${{ vars.LIST_SORT_ORDER_BACKFILL }}
       LIST_LIMIT_PARAM:           ${{ vars.LIST_LIMIT_PARAM }}
       LIST_OFFSET_PARAM:          ${{ vars.LIST_OFFSET_PARAM }}
-      CRON_INTERVAL_MIN:          ${{ vars.CRON_INTERVAL_MIN }}
       NO_SKIP:                    ${{ vars.NO_SKIP }}
 
       # secrets (already in your repo)
