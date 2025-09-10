@@ -1,6 +1,8 @@
 // --- auth + logging + email helpers ---
 import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
+import translate from "@vitalets/google-translate-api";
+import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -91,29 +93,88 @@ async function fetchMessagesWithRetry(conversationId, headers, { attempts = 3, b
 }
 
 // ---------------------------
-// Guest detection (robust-ish)
+// Roles & “unanswered” evaluation (ported from check.mjs)
 // ---------------------------
-  function isGuestLike(msg) {
-    const roleish = firstDefined(
-      msg.role, msg.author_role, msg.sender_role, msg.from_role,
-      msg?.sender?.role, msg?.sender?.type, msg?.author?.role,
-      msg?.from?.role,
-      // 👇 support flat strings like by: "guest" or senderType: "guest"
-      msg.by, msg.senderType, msg.sender_type
-    );
-    const dir = String(firstDefined(
-      msg.direction, msg.message_direction, msg?.meta?.direction
-    ) || "").toLowerCase();
-    const isAI = Boolean(firstDefined(msg.is_ai, msg?.meta?.is_ai, msg?.sender?.is_ai));
+function isGuestLike(msg) {
+  const roleish = firstDefined(
+    msg.role, msg.author_role, msg.sender_role, msg.from_role,
+    msg?.sender?.role, msg?.sender?.type, msg?.author?.role,
+    msg?.from?.role,
+    // 👇 support flat strings like by: "guest" or senderType: "guest"
+    msg.by, msg.senderType, msg.sender_type
+  );
+  const dir = String(firstDefined(
+    msg.direction, msg.message_direction, msg?.meta?.direction
+  ) || "").toLowerCase();
+  const isAI = Boolean(firstDefined(msg.is_ai, msg?.meta?.is_ai, msg?.sender?.is_ai));
 
-    if (isAI) return false;            // AI suggestions are not guests
-    if (dir === "inbound") return true;
+  if (isAI) return false;            // AI suggestions are not guests
+  if (dir === "inbound") return true;
 
-    const val = String(roleish || "").toLowerCase();
-    if (!val) return false;
-    const guestTokens = ["guest","customer","user","end_user","visitor","client","contact"];
-    return guestTokens.includes(val);
+  const val = String(roleish || "").toLowerCase();
+  if (!val) return false;
+  const guestTokens = ["guest","customer","user","end_user","visitor","client","contact"];
+  return guestTokens.includes(val);
+}
+
+// Classify sender (guest/agent/ai/internal)
+function aiMessageStatus(m) {
+  const status = String(m.ai_status || m.aiStatus || m.status || m.state || "").toLowerCase();
+  if (/(approved|confirmed|sent|delivered|published|released)/.test(status)) return "approved";
+  if (/(rejected|declined|discarded|canceled|cancelled|dismissed)/.test(status)) return "rejected";
+  if (/(suggest|draft|pending|proposed|generated)/.test(status)) return "untouched";
+  return "unknown";
+}
+function classifyMessage(m) {
+  const by = String(firstDefined(
+    m.by, m.senderType, m.sender_type, m.sender?.role, m.author?.role, m.author_role, m.role
+  ) || "").toLowerCase();
+  const dir = String(firstDefined(m.direction, m.message_direction) || "").toLowerCase();
+  const isAI = !!firstDefined(m.generated_by_ai, m.is_ai_generated, m.is_ai, m.ai_generated);
+  const ch  = String(firstDefined(m.channel, m.channel_type, m.channelName) || "").toLowerCase().replace(/[^a-z0-9]/g,"");
+  if (ch === "aics") return { role: "agent", aiStatus: "approved" };
+  if (/(system|automation|policy|workflow)/.test(by)) return { role: "internal", aiStatus: "none" };
+  if (isAI) return { role: "ai", aiStatus: aiMessageStatus(m) };
+  if (by && !/guest|customer|user/.test(by)) return { role: "agent", aiStatus: "none" };
+  if (dir === "outbound") return { role: "agent", aiStatus: "none" };
+  return { role: "guest", aiStatus: "none" };
+}
+function tsOf(m) {
+  const t = firstDefined(m.sent_at, m.sentAt, m.created_at, m.createdAt, m.timestamp, m.ts, m.time);
+  const d = t ? new Date(t) : null;
+  return d && !isNaN(+d) ? d : null;
+}
+async function isClosingStatement(m) {
+  const txt = String(firstDefined(m.body, m.text, m.message, m.content) || "").toLowerCase().trim();
+  if (!txt) return false;
+  if (/(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!. \s]*$/.test(txt)) return true;
+  try {
+    const res = await translate(txt, { to: "en" });
+    return /(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!. \s]*$/.test((res?.text||"").toLowerCase());
+  } catch { return false; }
+}
+async function evaluateUnanswered(messages, now = new Date(), slaMin = 15) {
+  const list = (messages||[]).map(m => {
+    const ts = tsOf(m); const { role, aiStatus } = classifyMessage(m);
+    return ts ? { m, ts, role, aiStatus } : null;
+  }).filter(Boolean).sort((a,b)=>a.ts-b.ts);
+  if (!list.length) return { ok:true, reason:"empty" };
+  let lastGuestTs = null;
+  for (const item of list) {
+    if (item.role === "internal") continue;
+    if (item.role === "ai" && item.aiStatus !== "approved") continue;
+    if (item.role === "guest") {
+      if (!(await isClosingStatement(item.m))) lastGuestTs = item.ts;
+    } else if (item.role === "agent" || item.role === "ai") {
+      if (lastGuestTs && item.ts >= lastGuestTs) lastGuestTs = null;
+    }
   }
+  if (!lastGuestTs) return { ok:true, reason:"no_breach" };
+  const diffMs = now - lastGuestTs;
+  return diffMs >= slaMin*60000
+    ? { ok:false, reason:"guest_unanswered", minsSinceAgent: Math.floor(diffMs/60000) }
+    : { ok:true, reason:"within_sla", minsSinceAgent: Math.floor(diffMs/60000) };
+}
 
 const BEARER = process.env.BOOM_BEARER || "";
 const COOKIE = process.env.BOOM_COOKIE || "";
@@ -194,19 +255,22 @@ if (LIMIT > 0 && ids.length > LIMIT) {
 console.log(`starting per-conversation checks: ${ids.length} ids (using inline thread when available)`);
 
 const THRESH = parseInt(process.env.SLA_MINUTES || "15", 10);
+const RECENT_WINDOW_MIN = parseInt(process.env.RECENT_WINDOW_MIN || "720", 10); // ignore threads idle >12h
+const MAX_ALERTS_PER_RUN = parseInt(process.env.MAX_ALERTS_PER_RUN || "5", 10);
 const to = process.env.ALERT_TO || "";
 const mask = (s) => s ? s.replace(/(.{2}).+(@.+)/, "$1***$2") : "";
 
-  const getTs = (m) => {
-    const t =
-      m?.timestamp ?? m?.ts ?? m?.created_at ?? m?.createdAt ??
-      m?.sent_at ?? m?.sentAt ?? m?.time ?? null;
-    const v = t ? Date.parse(t) : NaN;
-    return Number.isFinite(v) ? v : 0;
-  };
+const getTs = (m) => {
+  const t =
+    m?.timestamp ?? m?.ts ?? m?.created_at ?? m?.createdAt ??
+    m?.sent_at ?? m?.sentAt ?? m?.time ?? null;
+  const v = t ? Date.parse(t) : NaN;
+  return Number.isFinite(v) ? v : 0;
+};
 
 let checked = 0, alerted = 0, skipped = 0;
 for (const id of ids) {
+  if (alerted >= MAX_ALERTS_PER_RUN) break;
   const conv = byId.get(String(id));
   let msgs = [];
   if (conv && Array.isArray(conv.thread) && conv.thread.length) {
@@ -227,25 +291,33 @@ for (const id of ids) {
     }
   }
 
-  // SLA calc
-  const lastGuest = msgs.filter(isGuestLike).map(getTs).filter(Boolean).sort((a,b)=>b-a)[0] || 0;
-  if (!lastGuest) { log(`conv ${id}: no guest messages found`); checked++; continue; }
-  const ageMin = Math.floor((Date.now() - lastGuest) / 60000);
+  // Skip very stale threads entirely
+  const newestTs = Math.max(...msgs.map(getTs).filter(Boolean));
+  const newestAgeMin = Number.isFinite(newestTs) ? Math.floor((Date.now()-newestTs)/60000) : Infinity;
+  if (newestAgeMin > RECENT_WINDOW_MIN) { checked++; continue; }
 
-  if (ageMin > THRESH) {
-    console.log(`ALERT: conv=${id} guest_wait=${ageMin}m > ${THRESH}m -> email ${mask(to) || "(no recipient set)"}`);
+  // Proper unanswered evaluation
+  const result = await evaluateUnanswered(msgs, new Date(), THRESH);
+  if (!result.ok && result.reason === "guest_unanswered") {
+    const ageMin = result.minsSinceAgent ?? THRESH;
+    console.log(`ALERT: conv=${id} guest_unanswered=${ageMin}m > ${THRESH}m -> email ${mask(to) || "(no recipient set)"}`);
+    // simple dedupe by conversation + newest message time
+    const updatedAt = Number.isFinite(newestTs) ? new Date(newestTs).toISOString() : null;
+    const { dup, state } = isDuplicateAlert(id, updatedAt);
+    if (dup) { checked++; continue; }
     try {
       await sendAlertEmail({
         to,
-        subject: `[Boom SLA] Guest waiting ${ageMin}m (> ${THRESH}m) – conversation ${id}`,
-        text: `Conversation ${id} has a guest waiting ${ageMin} minutes which exceeds the SLA of ${THRESH} minutes.\n\nPlease follow up.`,
+        subject: `[Boom SLA] Unanswered ${ageMin}m (> ${THRESH}m) – conversation ${id}`,
+        text: `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${THRESH}m).\nPlease follow up.`,
       });
+      markAlerted(state, id, updatedAt);
       alerted++;
     } catch (e) {
       console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
     }
   } else {
-    log(`conv ${id}: OK (guest_wait=${ageMin}m <= ${THRESH}m)`);
+    log(`conv ${id}: OK (within SLA or answered)`);
   }
   checked++;
 }
