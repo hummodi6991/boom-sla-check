@@ -24,7 +24,7 @@ jobs:
       CONVERSATIONS_METHOD:       ${{ vars.CONVERSATIONS_METHOD }}
       CONVERSATIONS_BODY:          ${{ vars.CONVERSATIONS_BODY }}
       # alert threshold in minutes (adjust as needed)
-      SLA_MINUTES: "15"
+      SLA_MINUTES: "5"
       # Turn on verbose logs for one run; remove later if noisy
       DEBUG: "1"
       # process this many conversations per run while tuning
