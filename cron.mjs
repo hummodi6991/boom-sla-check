@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
+import { buildConversationLink as _buildConversationLink } from "./lib/email.js";
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -284,14 +285,19 @@ console.log(`starting per-conversation checks: ${toCheck.length} ids (using inli
 const THRESH = parseInt(process.env.SLA_MINUTES || "5", 10);
 const RECENT_WINDOW_MIN = parseInt(process.env.RECENT_WINDOW_MIN || "720", 10); // ignore threads idle >12h
 const MAX_ALERTS_PER_RUN = parseInt(process.env.MAX_ALERTS_PER_RUN || "5", 10);
-// Optionally supply a URL template, e.g. "https://your.app/conversations/{id}"
-const CONV_URL_TEMPLATE = process.env.CONV_URL_TEMPLATE || "";
+
+// Conversation deep-link builder: supports both env names and falls back to shared helper.
 function convoLinkFromTemplate(id) {
-  if (!CONV_URL_TEMPLATE) return null;
-  if (CONV_URL_TEMPLATE.includes("{id}")) {
-    return CONV_URL_TEMPLATE.replace("{id}", encodeURIComponent(String(id)));
+  const tpl = process.env.CONVERSATION_LINK_TEMPLATE || process.env.CONV_URL_TEMPLATE || "";
+  const encId = encodeURIComponent(String(id));
+  if (!tpl) {
+    // Use the shared builder (derives from app config) when no template is provided
+    return _buildConversationLink(String(id));
   }
-  return `${CONV_URL_TEMPLATE.replace(/\/$/, "")}/${encodeURIComponent(String(id))}`;
+  if (tpl.includes("{id}")) {
+    return tpl.replace("{id}", encId);
+  }
+  return `${tpl.replace(/\/$/, "")}/${encId}`;
 }
 const to = process.env.ALERT_TO || "";
 const mask = (s) => s ? s.replace(/(.{2}).+(@.+)/, "$1***$2") : "";
