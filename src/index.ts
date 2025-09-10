@@ -1,19 +1,19 @@
-import { getTop50PlatformWide } from "./fetchConversations";
+import { getNewest50 } from "./fetchConversations";
+import { buildConversationLink, pickUiConversationId } from "./lib/links";
 
 // Placeholder for existing SLA check implementation
-async function checkSLA(conversations: any[]) {
-  // existing SLA checks proceed unchanged
+async function runChecker() {
+  const conversations = await getNewest50();
+  for (const convo of conversations) {
+    const uiId = pickUiConversationId(convo);
+    const link = buildConversationLink(uiId);
+    // ... your checks
+  }
 }
 
-async function run() {
-  // Already the objective platform-wide latest 50 from the server:
-  const conversations = await getTop50PlatformWide();
-
-  // existing SLA checks proceed unchanged:
-  await checkSLA(conversations);
-}
-
-run().catch(err => {
+runChecker().catch(err => {
   console.error(err);
   process.exit(1);
 });
+
+export { runChecker };

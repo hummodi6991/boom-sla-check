@@ -1,6 +1,7 @@
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
-import { sendAlert, buildConversationLink } from "./lib/email.js";
+import { sendAlert } from "./lib/email.js";
+import { buildConversationLink, pickUiConversationId } from "./src/lib/links.ts";
 import { isDuplicateAlert, markAlerted } from "./dedupe.mjs";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
@@ -787,7 +788,8 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const link = buildConversationLink(convId);
+    const uiId = pickUiConversationId({ id: convId });
+    const link = buildConversationLink(uiId);
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nOpen conversation: ${link}\n`;
     const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p><a href="${link}">Open conversation</a></p>`;
