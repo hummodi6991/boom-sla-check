@@ -24,7 +24,8 @@ jobs:
       CONVERSATIONS_METHOD:       ${{ vars.CONVERSATIONS_METHOD }}
       CONVERSATIONS_BODY:          ${{ vars.CONVERSATIONS_BODY }}
       SLA_MINUTES:                ${{ vars.SLA_MINUTES }}
-      DEBUG:                      ${{ vars.DEBUG || '0' }}
+      # Turn on verbose logs for one run; remove later if noisy
+      DEBUG: "1"
       DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
       COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
 
@@ -51,6 +52,8 @@ jobs:
       SMTP_PASS:   ${{ secrets.SMTP_PASS }}
       ALERT_TO:    ${{ secrets.ALERT_TO }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      # Auth for the conversations endpoint (either may be empty)
+      BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
       BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
 
     steps:
@@ -70,51 +73,6 @@ jobs:
             npm install --no-fund --no-audit
           fi
 
-      - name: Debug conversations endpoint
-        continue-on-error: true
-        if: env.DEBUG == '1'
-        env:
-          # Use whichever you already have configured
-          CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL || secrets.CONVERSATIONS_URL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          raw="${CONVERSATIONS_URL:-}"
-          if [ -z "$raw" ]; then
-            echo "::error::CONVERSATIONS_URL is empty"; exit 1
-          fi
-
-          # Sanitize: strip CR/LF/TAB and any pasted quotes/brackets
-          url="$(printf '%s' "$raw" | tr -d '\r\n\t')"
-          url="${url#<}"; url="${url%>}"
-          url="${url#\"}"; url="${url%\"}"
-          url="${url#\'}"; url="${url%\'}"
-
-          # Encode spaces if any
-          case "$url" in *" "*) url="${url// /%20}";; esac
-
-          echo "Hitting (sanitized): $url"
-
-          # Print raw bytes so hidden characters are visible in logs
-          printf 'URL bytes (hex): '
-          printf '%s' "$url" | od -An -t x1 | tr -d '\n'
-          echo
-
-          # Safe curl: disable globbing; follow redirects; fail clearly
-          curl -sS -L --fail --show-error --globoff "$url" -w "\nHTTP %{http_code}\n" || true
-
-      - name: Debug conversations endpoint (rebuild query)
-        if: env.DEBUG == '1'
-        shell: bash
-        run: |
-          set -euo pipefail
-          base="https://app.boomnow.com/api/conversations/all"
-          echo "Hitting (rebuilt with --get): $base ? all=true"
-          curl -sS -L --fail --show-error --globoff --get "$base" \
-            --data-urlencode "all=true" \
-            -w "\nHTTP %{http_code}\n"
-
       - name: Normalize messages URL
         shell: bash
         run: |
@@ -123,6 +81,21 @@ jobs:
           else
             echo "MESSAGES_URL=${MESSAGES_URL}" >> $GITHUB_ENV
           fi
+      # Sanity-check the endpoint actually returns JSON with our auth
+      - name: Debug conversations endpoint (with auth)
+        run: |
+          set -euo pipefail
+          echo "CONVERSATIONS_URL=$CONVERSATIONS_URL"
+          echo "--- RESPONSE STATUS + HEADERS ---"
+          curl -sS -D - \
+            -H "Accept: application/json" \
+            ${BOOM_BEARER:+-H "Authorization: Bearer $BOOM_BEARER"} \
+            ${BOOM_COOKIE:+-H "Cookie: $BOOM_COOKIE"} \
+            "$CONVERSATIONS_URL" \
+            -o /tmp/body.json | head -n 40
+          echo
+          echo "--- FIRST 400 BYTES OF BODY ---"
+          head -c 400 /tmp/body.json || true; echo
 
       - name: Run SLA checker
         working-directory: .

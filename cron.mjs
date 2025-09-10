@@ -2,6 +2,32 @@ import { spawn } from 'child_process';
 
 const env = (k, d = '') => (process.env[k] ?? d).toString().trim();
 
+// --- auth + logging helpers ---
+const BEARER = process.env.BOOM_BEARER || "";
+const COOKIE = process.env.BOOM_COOKIE || "";
+const DEBUG  = !!process.env.DEBUG;
+const log = (...a) => DEBUG && console.log(...a);
+
+function authHeaders() {
+  const h = { accept: "application/json" };
+  if (BEARER) h.authorization = `Bearer ${BEARER}`;
+  if (COOKIE) h.cookie = COOKIE;
+  return h;
+}
+
+// Walk any JSON shape and collect plausible conversation IDs
+function collectIds(obj, out = new Set()) {
+  if (!obj || typeof obj !== "object") return out;
+  for (const [k, v] of Object.entries(obj)) {
+    const key = k.toLowerCase();
+    if (["conversationid", "conversation_id", "conv_id", "id"].includes(key)) {
+      if (typeof v === "string" || typeof v === "number") out.add(String(v));
+    }
+    if (v && typeof v === "object") collectIds(v, out);
+  }
+  return out;
+}
+
 const CONVERSATIONS_URL = env('CONVERSATIONS_URL');
 const LIST_SORT_FIELD = env('LIST_SORT_FIELD', 'updatedAt');
 const LIST_SORT_ORDER_RECENT = env('LIST_SORT_ORDER_RECENT', 'desc');
@@ -26,24 +52,28 @@ function buildListUrl(base, {limit, offset, sortField, order}) {
 }
 
 async function fetchIds(url) {
-  const res = await fetch(url, { headers: { accept: 'application/json' } });
+  const res = await fetch(url, {
+    headers: authHeaders(),
+    redirect: 'manual',
+  });
   const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = null; }
-  const ids = new Set();
-  const walk = (obj) => {
-    if (!obj) return;
-    if (Array.isArray(obj)) { obj.forEach(walk); return; }
-    if (typeof obj === 'object') {
-      for (const [k, v] of Object.entries(obj)) {
-        if (/id|uuid|conversation/i.test(k) && (typeof v === 'string' || typeof v === 'number')) {
-          ids.add(String(v));
-        } else if (v && typeof v === 'object') walk(v);
-      }
-    }
-  };
-  walk(data);
-  return Array.from(ids);
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch (e) {
+    console.error("Conversations endpoint did not return JSON. First 200 chars:\n", text.slice(0, 200));
+    process.exit(0);
+  }
+  log("Top-level keys:", Object.keys(payload));
+
+  const ids = [...collectIds(payload)];
+  console.log(`unique=${ids.length}`);
+  log("sample IDs:", ids.slice(0, 5));
+  if (ids.length === 0) {
+    console.log("No conversation IDs found. Check CONVERSATIONS_URL and auth (BOOM_BEARER/BOOM_COOKIE).\n");
+    process.exit(0);
+  }
+  return ids;
 }
 
 function runCheck(id) {
