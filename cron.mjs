@@ -1,8 +1,7 @@
+// --- auth + logging + email helpers ---
 import { spawn } from "node:child_process";
+import nodemailer from "nodemailer";
 
-const env = (k, d = '') => (process.env[k] ?? d).toString().trim();
-
-// --- auth + logging helpers ---
 const BEARER = process.env.BOOM_BEARER || "";
 const COOKIE = process.env.BOOM_COOKIE || "";
 const DEBUG  = !!process.env.DEBUG;
@@ -13,6 +12,15 @@ function authHeaders() {
   if (BEARER) h.authorization = `Bearer ${BEARER}`;
   if (COOKIE) h.cookie = COOKIE;
   return h;
+}
+
+// email
+async function sendAlertEmail({ to, subject, text }) {
+  if (!to) { console.warn("No ALERT_TO configured; skipping email"); return; }
+  const host = process.env.SMTP_HOST, user = process.env.SMTP_USER, pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) { console.warn("SMTP envs not fully set; skipping email"); return; }
+  const transporter = nodemailer.createTransport({ host, port: 587, secure: false, auth: { user, pass } });
+  await transporter.sendMail({ from: user, to, subject, text });
 }
 
 // Walk any JSON shape and collect plausible conversation IDs
@@ -28,124 +36,101 @@ function collectIds(obj, out = new Set()) {
   return out;
 }
 
-const CONVERSATIONS_URL = env('CONVERSATIONS_URL');
-const LIST_SORT_FIELD = env('LIST_SORT_FIELD', 'updatedAt');
-const LIST_SORT_ORDER_RECENT = env('LIST_SORT_ORDER_RECENT', 'desc');
-const LIST_SORT_ORDER_BACKFILL = env('LIST_SORT_ORDER_BACKFILL', 'asc');
-const LIST_LIMIT_PARAM = env('LIST_LIMIT_PARAM', 'limit');
-const LIST_OFFSET_PARAM = env('LIST_OFFSET_PARAM', 'offset');
+// fetch the conversations list
+const res = await fetch(process.env.CONVERSATIONS_URL, {
+  headers: authHeaders(),
+  redirect: "manual",
+});
+const text = await res.text();
+let payload;
+try {
+  payload = JSON.parse(text);
+} catch (e) {
+  console.error("Conversations endpoint did not return JSON. First 200 chars:\n", text.slice(0, 200));
+  process.exit(0);
+}
+log("Top-level keys:", Object.keys(payload));
 
-const CHECK_RECENT_COUNT = Number(env('CHECK_RECENT_COUNT', '250'));
-const BACKFILL_PER_RUN = Number(env('BACKFILL_PER_RUN', '200'));
-const BACKFILL_CONCURRENCY = Number(env('BACKFILL_CONCURRENCY', '2'));
-const TOTAL_CONVERSATIONS_ESTIMATE = Number(env('TOTAL_CONVERSATIONS_ESTIMATE', '7000'));
-const MAX_CONCURRENCY = Number(env('MAX_CONCURRENCY', '8'));
-const NO_SKIP = env('NO_SKIP', '');
-const CHECK_LIMIT = Number(env('CHECK_LIMIT', '0'));
+// prefer array at payload.data.conversations (falls back if layout differs)
+const conversations =
+  payload?.payload?.data?.conversations ??
+  payload?.data?.conversations ??
+  payload?.conversations ??
+  [];
 
-function buildListUrl(base, {limit, offset, sortField, order}) {
-  const u = new URL(base);
-  if (limit != null) u.searchParams.set(LIST_LIMIT_PARAM, String(limit));
-  if (offset != null) u.searchParams.set(LIST_OFFSET_PARAM, String(offset));
-  if (sortField) u.searchParams.set('sort', sortField);
-  if (order) u.searchParams.set('order', order);
-  return u.toString();
+// map id -> conversation for quick lookup and build ids list
+const idOf = (c) => String(c?.id ?? c?.conversation_id ?? c?.uuid ?? c?._id ?? "");
+const byId = new Map(conversations.filter(Boolean).map(c => [idOf(c), c]));
+
+let ids = [...collectIds(conversations)];
+if (ids.length === 0) ids = conversations.map(idOf).filter(Boolean);
+console.log(`unique=${ids.length}`);
+log("sample IDs:", ids.slice(0, 5));
+if (ids.length === 0) {
+  console.log("No conversation IDs found. Check CONVERSATIONS_URL and auth (BOOM_BEARER/BOOM_COOKIE).");
+  process.exit(0);
 }
 
-async function fetchIds(url) {
-  const res = await fetch(url, {
-    headers: authHeaders(),
-    redirect: 'manual',
-  });
-  const text = await res.text();
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch (e) {
-    console.error("Conversations endpoint did not return JSON. First 200 chars:\n", text.slice(0, 200));
-    process.exit(0);
-  }
-  log("Top-level keys:", Object.keys(payload));
-
-  const ids = [...collectIds(payload)];
-  console.log(`unique=${ids.length}`);
-  log("sample IDs:", ids.slice(0, 5));
-  if (ids.length === 0) {
-    console.log("No conversation IDs found. Check CONVERSATIONS_URL and auth (BOOM_BEARER/BOOM_COOKIE).\n");
-    process.exit(0);
-  }
-  return ids;
+// throttle while debugging
+const LIMIT = parseInt(process.env.CHECK_LIMIT || "0", 10);
+if (LIMIT > 0 && ids.length > LIMIT) {
+  ids = ids.slice(0, LIMIT);
+  console.log(`debug limit: processing first ${LIMIT} conversations`);
 }
 
-async function runCheck(id) {
-  return new Promise((resolve) => {
-    const p = spawn(process.execPath, [new URL("./check.mjs", import.meta.url).pathname], {
-      env: { ...process.env, CONVERSATION_INPUT: id },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    p.stdout.on("data", d => process.stdout.write(`conv ${id}: ${d}`));
-    p.stderr.on("data", d => process.stderr.write(`conv ${id} [err]: ${d}`));
-    p.on("close", code => resolve(code ?? 0));
-  });
-}
+console.log(`starting per-conversation checks: ${ids.length} ids (using inline thread when available)`);
 
-(async () => {
-  if (!CONVERSATIONS_URL) {
-    console.error('CONVERSATIONS_URL is required');
-    process.exit(1);
+const THRESH = parseInt(process.env.SLA_MINUTES || "15", 10);
+const to = process.env.ALERT_TO || "";
+const mask = (s) => s ? s.replace(/(.{2}).+(@.+)/, "$1***$2") : "";
+
+const getTs = (m) => {
+  const t = m?.timestamp ?? m?.created_at ?? m?.createdAt ?? m?.sent_at ?? m?.time ?? null;
+  const v = t ? Date.parse(t) : NaN;
+  return Number.isFinite(v) ? v : 0;
+};
+const isGuest = (m) => {
+  const r = String(m?.role ?? m?.author_role ?? m?.sender_role ?? m?.from_role ?? m?.direction ?? "").toLowerCase();
+  const s = String(m?.sender ?? m?.author ?? m?.from ?? "").toLowerCase();
+  return r.includes("guest") || r.includes("customer") || r.includes("inbound") || s.includes("guest") || s.includes("customer");
+};
+
+let checked = 0, alerted = 0, skipped = 0;
+for (const id of ids) {
+  const conv = byId.get(String(id));
+  let msgs = [];
+  if (conv && Array.isArray(conv.thread) && conv.thread.length) {
+    msgs = conv.thread;
+    log(`conv ${id}: using inline thread (${msgs.length} msgs)`);
+  } else {
+    // Inline messages missing: skip for now (the external messages endpoints are 500’ing)
+    console.warn(`conv ${id}: no inline thread on conversations response; skipping (messages endpoint currently 500)`);
+    skipped++;
+    continue;
   }
 
-  const recentUrl = buildListUrl(CONVERSATIONS_URL, {
-    limit: CHECK_RECENT_COUNT,
-    offset: 0,
-    sortField: LIST_SORT_FIELD,
-    order: LIST_SORT_ORDER_RECENT
-  });
+  // SLA calc
+  const lastGuest = msgs.filter(isGuest).map(getTs).filter(Boolean).sort((a,b)=>b-a)[0] || 0;
+  if (!lastGuest) { log(`conv ${id}: no guest messages found`); checked++; continue; }
+  const ageMin = Math.floor((Date.now() - lastGuest) / 60000);
 
-  const intervalMin = Number(env('CRON_INTERVAL_MIN', '5'));
-  const seq = Math.floor(Date.now() / (intervalMin * 60 * 1000));
-  const startOffset = (seq * BACKFILL_PER_RUN) % Math.max(BACKFILL_PER_RUN, TOTAL_CONVERSATIONS_ESTIMATE);
-
-  const backfillUrl = buildListUrl(CONVERSATIONS_URL, {
-    limit: BACKFILL_PER_RUN,
-    offset: startOffset,
-    sortField: LIST_SORT_FIELD,
-    order: LIST_SORT_ORDER_BACKFILL
-  });
-
-  let recentIds = await fetchIds(recentUrl);
-  const backfillIdsRaw = await fetchIds(backfillUrl);
-
-  const recentSet = new Set(recentIds);
-  let backfillIds = backfillIdsRaw.filter(id => !recentSet.has(id));
-
-  let ids = [...recentIds, ...backfillIds];
-  const recent = recentIds.length;
-  const backfill = backfillIds.length;
-
-  if (CHECK_LIMIT > 0 && ids.length > CHECK_LIMIT) {
-    ids = ids.slice(0, CHECK_LIMIT);
-    console.log(`debug limit: processing first ${CHECK_LIMIT} conversations`);
-  }
-
-  console.log(`starting per-conversation checks: ${ids.length} ids`);
-
-  const results = [];
-  for (const id of ids) {
-    console.log(`running check for conv ${id}`);
-    const code = await runCheck(id);
-    results.push({ id, ok: code === 0 });
-  }
-
-  console.log(`done: checked ${ids.length} conversations`);
-  console.log(`recent=${recent}, backfill=${backfill}, unique=${ids.length}`);
-
-  if (NO_SKIP === 'fail') {
-    const failed = results.filter(r => !r.ok).map(r => r.id);
-    if (failed.length) {
-      console.error('Unverified conversations:', failed.join(','));
-      process.exit(1);
+  if (ageMin > THRESH) {
+    console.log(`ALERT: conv=${id} guest_wait=${ageMin}m > ${THRESH}m -> email ${mask(to) || "(no recipient set)"}`);
+    try {
+      await sendAlertEmail({
+        to,
+        subject: `[Boom SLA] Guest waiting ${ageMin}m (> ${THRESH}m) – conversation ${id}`,
+        text: `Conversation ${id} has a guest waiting ${ageMin} minutes which exceeds the SLA of ${THRESH} minutes.\n\nPlease follow up.`,
+      });
+      alerted++;
+    } catch (e) {
+      console.warn(`conv ${id}: failed to send alert:`, e?.message || e);
     }
+  } else {
+    log(`conv ${id}: OK (guest_wait=${ageMin}m <= ${THRESH}m)`);
   }
-})();
+  checked++;
+}
+
+console.log(`done: checked=${checked}, alerted=${alerted}, skipped=${skipped}`);
 
