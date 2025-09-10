@@ -23,10 +23,11 @@ jobs:
       CONVERSATIONS_URL:          ${{ vars.CONVERSATIONS_URL }}
       CONVERSATIONS_METHOD:       ${{ vars.CONVERSATIONS_METHOD }}
       CONVERSATIONS_BODY:          ${{ vars.CONVERSATIONS_BODY }}
-      SLA_MINUTES:                ${{ vars.SLA_MINUTES }}
+      # alert threshold in minutes (adjust as needed)
+      SLA_MINUTES: "15"
       # Turn on verbose logs for one run; remove later if noisy
       DEBUG: "1"
-      # limit how many conversations to process per run while debugging
+      # process this many conversations per run while tuning
       CHECK_LIMIT: "50"
       DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
       COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
