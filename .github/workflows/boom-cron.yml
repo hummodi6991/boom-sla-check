@@ -88,6 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "CONVERSATIONS_URL=$CONVERSATIONS_URL"
+          echo "MESSAGES_URL=$MESSAGES_URL"
           echo "--- RESPONSE STATUS + HEADERS ---"
           curl -sS -D - \
             -H "Accept: application/json" \

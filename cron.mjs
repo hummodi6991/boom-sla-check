@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn } from "node:child_process";
 
 const env = (k, d = '') => (process.env[k] ?? d).toString().trim();
 
@@ -77,35 +77,16 @@ async function fetchIds(url) {
   return ids;
 }
 
-function runCheck(id) {
+async function runCheck(id) {
   return new Promise((resolve) => {
-    console.log(`conv ${id}: start`);
-    const child = spawn(process.execPath, [new URL('./check.mjs', import.meta.url).pathname], {
-      stdio: 'inherit',
-      env: { ...process.env, CONVERSATION_INPUT: id }
+    const p = spawn(process.execPath, [new URL("./check.mjs", import.meta.url).pathname], {
+      env: { ...process.env, CONVERSATION_INPUT: id },
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    child.on('exit', code => {
-      const status = code === 0 ? 'ok' : 'failed';
-      console.log(`conv ${id}: ${status}`);
-      resolve({ id, ok: code === 0 });
-    });
+    p.stdout.on("data", d => process.stdout.write(`conv ${id}: ${d}`));
+    p.stderr.on("data", d => process.stderr.write(`conv ${id} [err]: ${d}`));
+    p.on("close", code => resolve(code ?? 0));
   });
-}
-
-async function runWithConcurrency(items, limit) {
-  const results = [];
-  let i = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, () => (async () => {
-    while (true) {
-      const idx = i++;
-      if (idx >= items.length) return;
-      const id = items[idx];
-      const res = await runCheck(id);
-      results.push(res);
-    }
-  })());
-  await Promise.all(workers);
-  return results;
 }
 
 (async () => {
@@ -138,21 +119,29 @@ async function runWithConcurrency(items, limit) {
   const recentSet = new Set(recentIds);
   let backfillIds = backfillIdsRaw.filter(id => !recentSet.has(id));
 
-  let total = recentIds.length + backfillIds.length;
-  console.log(`recent=${recentIds.length}, backfill=${backfillIds.length}, unique=${total}`);
+  let ids = [...recentIds, ...backfillIds];
+  const recent = recentIds.length;
+  const backfill = backfillIds.length;
 
-  if (CHECK_LIMIT > 0 && total > CHECK_LIMIT) {
-    const combined = [...recentIds, ...backfillIds].slice(0, CHECK_LIMIT);
+  if (CHECK_LIMIT > 0 && ids.length > CHECK_LIMIT) {
+    ids = ids.slice(0, CHECK_LIMIT);
     console.log(`debug limit: processing first ${CHECK_LIMIT} conversations`);
-    recentIds = combined;
-    backfillIds = [];
   }
 
-  const recentRes = await runWithConcurrency(recentIds, MAX_CONCURRENCY);
-  const backfillRes = await runWithConcurrency(backfillIds, BACKFILL_CONCURRENCY);
+  console.log(`starting per-conversation checks: ${ids.length} ids`);
+
+  const results = [];
+  for (const id of ids) {
+    console.log(`running check for conv ${id}`);
+    const code = await runCheck(id);
+    results.push({ id, ok: code === 0 });
+  }
+
+  console.log(`done: checked ${ids.length} conversations`);
+  console.log(`recent=${recent}, backfill=${backfill}, unique=${ids.length}`);
 
   if (NO_SKIP === 'fail') {
-    const failed = recentRes.concat(backfillRes).filter(r => !r.ok).map(r => r.id);
+    const failed = results.filter(r => !r.ok).map(r => r.id);
     if (failed.length) {
       console.error('Unverified conversations:', failed.join(','));
       process.exit(1);
