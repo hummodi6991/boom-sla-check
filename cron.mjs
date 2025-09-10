@@ -41,6 +41,7 @@ const BACKFILL_CONCURRENCY = Number(env('BACKFILL_CONCURRENCY', '2'));
 const TOTAL_CONVERSATIONS_ESTIMATE = Number(env('TOTAL_CONVERSATIONS_ESTIMATE', '7000'));
 const MAX_CONCURRENCY = Number(env('MAX_CONCURRENCY', '8'));
 const NO_SKIP = env('NO_SKIP', '');
+const CHECK_LIMIT = Number(env('CHECK_LIMIT', '0'));
 
 function buildListUrl(base, {limit, offset, sortField, order}) {
   const u = new URL(base);
@@ -78,11 +79,16 @@ async function fetchIds(url) {
 
 function runCheck(id) {
   return new Promise((resolve) => {
+    console.log(`conv ${id}: start`);
     const child = spawn(process.execPath, [new URL('./check.mjs', import.meta.url).pathname], {
       stdio: 'inherit',
       env: { ...process.env, CONVERSATION_INPUT: id }
     });
-    child.on('exit', code => resolve({ id, ok: code === 0 }));
+    child.on('exit', code => {
+      const status = code === 0 ? 'ok' : 'failed';
+      console.log(`conv ${id}: ${status}`);
+      resolve({ id, ok: code === 0 });
+    });
   });
 }
 
@@ -126,13 +132,21 @@ async function runWithConcurrency(items, limit) {
     order: LIST_SORT_ORDER_BACKFILL
   });
 
-  const recentIds = await fetchIds(recentUrl);
+  let recentIds = await fetchIds(recentUrl);
   const backfillIdsRaw = await fetchIds(backfillUrl);
 
   const recentSet = new Set(recentIds);
-  const backfillIds = backfillIdsRaw.filter(id => !recentSet.has(id));
+  let backfillIds = backfillIdsRaw.filter(id => !recentSet.has(id));
 
-  console.log(`recent=${recentIds.length}, backfill=${backfillIds.length}, unique=${recentIds.length + backfillIds.length}`);
+  let total = recentIds.length + backfillIds.length;
+  console.log(`recent=${recentIds.length}, backfill=${backfillIds.length}, unique=${total}`);
+
+  if (CHECK_LIMIT > 0 && total > CHECK_LIMIT) {
+    const combined = [...recentIds, ...backfillIds].slice(0, CHECK_LIMIT);
+    console.log(`debug limit: processing first ${CHECK_LIMIT} conversations`);
+    recentIds = combined;
+    backfillIds = [];
+  }
 
   const recentRes = await runWithConcurrency(recentIds, MAX_CONCURRENCY);
   const backfillRes = await runWithConcurrency(backfillIds, BACKFILL_CONCURRENCY);

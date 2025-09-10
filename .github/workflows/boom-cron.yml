@@ -26,6 +26,8 @@ jobs:
       SLA_MINUTES:                ${{ vars.SLA_MINUTES }}
       # Turn on verbose logs for one run; remove later if noisy
       DEBUG: "1"
+      # limit how many conversations to process per run while debugging
+      CHECK_LIMIT: "50"
       DEBUG_MESSAGES:             ${{ vars.DEBUG_MESSAGES }}
       COUNT_AI_SUGGESTION_AS_AGENT: ${{ vars.COUNT_AI_SUGGESTION_AS_AGENT }}
 
