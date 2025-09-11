@@ -1,23 +1,25 @@
 import { NextResponse } from 'next/server.js';
 import type { NextRequest } from 'next/server.js';
 import { jwtVerify } from 'jose';
-const COOKIE = 'boom_session';
+const COOKIE='boom_session';
 const secret = new TextEncoder().encode(process.env.AUTH_SECRET || 'dev-secret');
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (!pathname.startsWith('/inbox')) return NextResponse.next();
+  const convoMatch = pathname.match(/^\/inbox\/conversations\/([^/]+)$/);
+  const dest = convoMatch ? `/inbox?cid=${encodeURIComponent(convoMatch[1])}` : pathname + search;
 
   const token = req.cookies.get(COOKIE)?.value;
   if (!token) {
     const url = new URL('/login', req.url);
-    url.search = `?next=${pathname}${search}`;
+    url.search = `?next=${dest}`;
     return NextResponse.redirect(url);
   }
   try { await jwtVerify(token, secret); return NextResponse.next(); }
   catch {
     const url = new URL('/login', req.url);
-    url.search = `?next=${pathname}${search}`;
+    url.search = `?next=${dest}`;
     return NextResponse.redirect(url);
   }
 }
