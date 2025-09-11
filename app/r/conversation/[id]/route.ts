@@ -1,15 +1,10 @@
-import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth';
+import { NextResponse } from 'next/server.js';
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
-  const session = await getSession(req.headers);
-  const dest = `/inbox/conversations/${params.id}`;
-  const base = new URL(req.url);
-  if (!session) {
-    const url = new URL('/login', base.origin);
-    url.searchParams.set('next', dest);
-    return NextResponse.redirect(url, { status: 307 });
-  }
-  return NextResponse.redirect(new URL(dest, base), { status: 307 });
+export async function GET(
+  req: Request,
+  { params }: { params: { id: string } }
+) {
+  const dest = new URL(`/inbox/conversations/${params.id}`, req.url);
+  return NextResponse.redirect(dest, { status: 307 });
 }
 
