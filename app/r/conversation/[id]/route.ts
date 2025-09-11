@@ -1,28 +1,15 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { NextResponse } from 'next/server';
+import { getSession } from '@/lib/auth';
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const { id } = params;
-
-  // Defensive: if id is missing, send users to inbox root
-  if (!id) {
-    return NextResponse.redirect(new URL("/inbox", req.url));
-  }
-
-  // Canonical target path within the UI
-  const targetPath = `/inbox/conversations/${encodeURIComponent(id)}`;
-
-  // Require authentication. If no session, bounce to login with next param
-  const session = await getSession();
+export async function GET(req: Request, { params }: { params: { id: string } }) {
+  const session = await getSession(req.headers);
+  const dest = `/inbox/conversations/${params.id}`;
+  const base = new URL(req.url);
   if (!session) {
-    const loginUrl = new URL("/login", req.url);
-    loginUrl.searchParams.set("next", targetPath);
-    return NextResponse.redirect(loginUrl);
+    const url = new URL('/login', base.origin);
+    url.searchParams.set('next', dest);
+    return NextResponse.redirect(url, { status: 307 });
   }
-
-  // Auth ok: redirect straight to conversation
-  return NextResponse.redirect(new URL(targetPath, req.url));
+  return NextResponse.redirect(new URL(dest, base), { status: 307 });
 }
+
