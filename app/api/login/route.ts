@@ -1,5 +1,5 @@
-import { NextResponse } from 'next/server';
-import { createSessionCookie } from '@/lib/auth';
+import { NextResponse } from 'next/server.js';
+import { createSessionCookie } from '../../../lib/auth';
 
 export async function POST(req: Request) {
   const form = await req.formData();
@@ -7,11 +7,11 @@ export async function POST(req: Request) {
   const password = String(form.get('password') || '');
   const next = String(form.get('next') || '/');
 
-  // TODO: replace with real authentication
   if (!email || !password) {
     return NextResponse.json({ error: 'Missing credentials' }, { status: 400 });
   }
 
+  // TODO: replace with real auth check
   const cookie = await createSessionCookie({ sub: email, email });
 
   const dest = next.startsWith('/') ? next : '/';

@@ -1,5 +1,5 @@
-import { NextResponse } from 'next/server';
-import { clearSessionCookie } from '@/lib/auth';
+import { NextResponse } from 'next/server.js';
+import { clearSessionCookie } from '../../../lib/auth';
 
 export async function POST(req: Request) {
   const res = NextResponse.redirect(new URL('/', req.url), { status: 303 });
