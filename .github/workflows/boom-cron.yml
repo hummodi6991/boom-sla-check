@@ -39,7 +39,7 @@ jobs:
       BACKFILL_CONCURRENCY:       ${{ vars.BACKFILL_CONCURRENCY }}
       TOTAL_CONVERSATIONS_ESTIMATE: ${{ vars.TOTAL_CONVERSATIONS_ESTIMATE }}
       MAX_CONCURRENCY:            ${{ vars.MAX_CONCURRENCY }}
-      CONVERSATION_LINK_TEMPLATE: https://app.boomnow.com/r/conversation/{id}
+      CONVERSATION_LINK_TEMPLATE: https://app.boomnow.com/inbox/conversations/{id}
       LIST_SORT_FIELD:            ${{ vars.LIST_SORT_FIELD }}
       LIST_SORT_ORDER_RECENT:     ${{ vars.LIST_SORT_ORDER_RECENT }}
       LIST_SORT_ORDER_BACKFILL:   ${{ vars.LIST_SORT_ORDER_BACKFILL }}
