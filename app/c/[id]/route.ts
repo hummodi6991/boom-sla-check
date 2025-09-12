@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server.js';
 import { prisma } from '../../../lib/db';
 
 const UUID_RE =
@@ -7,46 +6,30 @@ const UUID_RE =
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const { id } = params;
 
-  // UUID → straight to dashboard with query
-  if (UUID_RE.test(id)) {
+  const toDash = (v?: string) => {
     const to = new URL('/dashboard/guest-experience/all', req.url);
-    to.searchParams.set('conversation', id);
-    return NextResponse.redirect(to, 302);
-  }
+    if (v) to.searchParams.set('conversation', v);
+    return to;
+  };
 
-  // legacy numeric id
+  if (UUID_RE.test(id)) return Response.redirect(toDash(id), 302);
+
   if (!Number.isNaN(Number(id))) {
     const conv = await prisma.conversation
       .findFirst({
-        where: { legacyId: Number(id) },
+        where: { legacyId: Number(id) }, // keep if field exists
         select: { uuid: true },
       })
       .catch(() => null);
-
-    if (conv?.uuid) {
-      const to = new URL('/dashboard/guest-experience/all', req.url);
-      to.searchParams.set('conversation', conv.uuid);
-      return NextResponse.redirect(to, 302);
-    }
+    if (conv?.uuid) return Response.redirect(toDash(conv.uuid), 302);
   }
 
-  // NEW: slug / external / public id
   const conv = await prisma.conversation
     .findFirst({
-      where: {
-        OR: [{ externalId: id }, { publicId: id }, { slug: id }],
-      } as any,
+      where: { OR: [{ externalId: id }, { publicId: id }, { slug: id }] } as any,
       select: { uuid: true },
     })
     .catch(() => null);
 
-  if (conv?.uuid) {
-    const to = new URL('/dashboard/guest-experience/all', req.url);
-    to.searchParams.set('conversation', conv.uuid);
-    return NextResponse.redirect(to, 302);
-  }
-
-  // Fallback — dashboard without selection
-  const to = new URL('/dashboard/guest-experience/all', req.url);
-  return NextResponse.redirect(to, 302);
+  return Response.redirect(toDash(conv?.uuid), 302);
 }
