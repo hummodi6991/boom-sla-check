@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { buildConversationLink } from "../lib/email.js";
+import { conversationLink } from "../lib/links";
 import { GET as cRoute } from "../app/c/[id]/route";
 import { GET as convoRoute } from "../app/r/conversation/[id]/route";
 import { GET as legacyConvRoute } from "../app/conversations/[id]/route";
@@ -7,8 +7,8 @@ import { prisma } from "../lib/db";
 
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
 
-test("buildConversationLink uses universal conversation URL", () => {
-  const url = buildConversationLink({ uuid });
+test("conversationLink uses universal conversation URL", () => {
+  const url = conversationLink({ uuid });
   expect(url).toBe(
     `https://app.boomnow.com/c/${encodeURIComponent(uuid)}`
   );

@@ -1,6 +1,7 @@
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
-import { sendAlert, buildConversationLink } from "./lib/email.js";
+import { sendAlert } from "./lib/email.js";
+import { conversationLink, conversationIdDisplay } from "./lib/links.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
@@ -787,11 +788,12 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const link = buildConversationLink({ uuid: convId, id: convId });
-    const conversationIdDisplay = convId;
+    const conversation = { uuid: convId, id: convId };
+    const url = conversationLink(conversation);
+    const idDisplay = conversationIdDisplay(conversation);
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
-    const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${conversationIdDisplay}\nOpen: ${link}\n`;
-    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p>Conversation: <a href="${link}">${conversationIdDisplay}</a></p>`;
+    const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${idDisplay}\nOpen: ${url}`;
+    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p>Conversation: <strong>${idDisplay}</strong></p><p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p><p style="font-size:12px;color:#666">If the link doesn’t work, copy & paste this URL:<br>${url}</p>`;
     const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
     const key = dedupeKey(convId, lastGuestTs);
     const { dup, state } = isDuplicateAlert(convId, lastGuestTs);
