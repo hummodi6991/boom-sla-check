@@ -787,10 +787,11 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const link = buildConversationLink({ uuid: convId });
+    const link = buildConversationLink({ uuid: convId, id: convId });
+    const conversationIdDisplay = convId;
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
-    const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nOpen conversation: ${link}\n`;
-    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p><a href="${link}">Open conversation</a></p>`;
+    const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${conversationIdDisplay}\nOpen: ${link}\n`;
+    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p>Conversation: <a href="${link}">${conversationIdDisplay}</a></p>`;
     const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
     const key = dedupeKey(convId, lastGuestTs);
     const { dup, state } = isDuplicateAlert(convId, lastGuestTs);

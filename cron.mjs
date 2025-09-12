@@ -191,12 +191,12 @@ function authHeaders() {
 }
 
 // email
-async function sendAlertEmail({ to, subject, text }) {
+async function sendAlertEmail({ to, subject, text, html }) {
   if (!to) { console.warn("No ALERT_TO configured; skipping email"); return; }
   const host = process.env.SMTP_HOST, user = process.env.SMTP_USER, pass = process.env.SMTP_PASS;
   if (!host || !user || !pass) { console.warn("SMTP envs not fully set; skipping email"); return; }
   const transporter = nodemailer.createTransport({ host, port: 587, secure: false, auth: { user, pass } });
-  await transporter.sendMail({ from: user, to, subject, text });
+  await transporter.sendMail({ from: user, to, subject, text, html });
 }
 
 // Walk any JSON shape and collect plausible conversation IDs
@@ -340,11 +340,12 @@ for (const { id } of toCheck) {
     const lastGuestMs = result.lastGuestTs || Date.parse(conv?.last_guest_message_at || conv?.lastGuestMessageAt || 0);
     if (!Number.isFinite(lastGuestMs) || shouldAlert(Date.now(), lastGuestMs)) {
 
-      // Try to include a direct link to the conversation (prefer API-provided URL, else template)
-      const convUrl = conv?.uuid ? buildConversationLink(conv) : undefined;
+      // Build a universal conversation link
+      const convUrl = buildConversationLink(conv ?? { id });
+      const conversationIdDisplay = conv?.uuid ?? String(id);
 
       console.log(
-        `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"}${convUrl ? ` link=${convUrl}` : ""}`
+        `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${convUrl}`
       );
 
       // simple dedupe by conversation + last guest message timestamp
@@ -359,8 +360,14 @@ for (const { id } of toCheck) {
             subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${id}`,
             text:
 `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
-Conversation: ${id}${convUrl ? `\nLink: ${convUrl}` : "" }
+Conversation: ${conversationIdDisplay}
+Open: ${convUrl}
 Please follow up.`,
+            html:
+`<p>
+  Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).<br/>
+  Conversation: <a href="${convUrl}">${conversationIdDisplay}</a>
+</p>`,
           });
           markAlerted(state, id, lastGuestMs);
           log(`dedupe_key=${key}`);
