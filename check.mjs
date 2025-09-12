@@ -787,7 +787,7 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const link = buildConversationLink(convId);
+    const link = buildConversationLink({ uuid: convId });
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nOpen conversation: ${link}\n`;
     const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p><a href="${link}">Open conversation</a></p>`;

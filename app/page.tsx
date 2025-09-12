@@ -4,5 +4,5 @@ import { getSession } from '../lib/auth';
 
 export default async function Root() {
   const session = await getSession(headers());
-  redirect(session ? '/inbox' : '/login');
+  redirect(session ? '/dashboard/guest-experience/all' : '/login');
 }
