@@ -10,7 +10,7 @@ test('GET /inbox/conversations/123 -> 308 /c/123', async () => {
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    'https://app.boomnow.com/c/123'
+    'https://app.boomnow.com/dashboard/guest-experience/all?conversation=123'
   );
 });
 
@@ -19,7 +19,7 @@ test('middleware redirects legacy /inbox?cid=uuid to /c', async () => {
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    `https://app.boomnow.com/c/${uuid}`
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
   );
 });
 
