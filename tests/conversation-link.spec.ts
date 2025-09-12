@@ -16,6 +16,11 @@ test("conversationLink uses dashboard deep link", () => {
   );
 });
 
+test("conversationLink uses resolver for numeric id", () => {
+  const url = conversationLink({ id: 994018 });
+  expect(url).toBe(`https://app.boomnow.com/c/994018`);
+});
+
 test("/c/:id redirects to dashboard", async () => {
   const req = new Request(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`);
   const res = await cRoute(req, { params: { id: uuid } });
