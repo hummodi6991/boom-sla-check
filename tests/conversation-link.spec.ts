@@ -7,23 +7,21 @@ import { prisma } from "../lib/db";
 
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
 
-test("conversationLink uses dashboard deep link", () => {
+test("conversationLink uses path-based redirect for UUID", () => {
   const url = conversationLink({ uuid });
-  expect(url).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${encodeURIComponent(
-      uuid
-    )}`
-  );
+  expect(url).toBe(`https://app.boomnow.com/r/conversation/${uuid}`);
 });
 
-test("conversationLink uses resolver for numeric id", () => {
+test("conversationLink uses path-based redirect for numeric id", () => {
   const url = conversationLink({ id: 994018 });
-  expect(url).toBe(`https://app.boomnow.com/c/994018`);
+  expect(url).toBe(`https://app.boomnow.com/r/conversation/994018`);
 });
 
-test("/c/:id redirects to dashboard", async () => {
-  const req = new Request(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`);
-  const res = await cRoute(req, { params: { id: uuid } });
+test("/c/:id redirects UUID directly", async () => {
+  const req = new Request(
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
+  );
+  const res = await cRoute(req as any, { params: { id: uuid } });
   expect(res.status).toBe(308);
   expect(res.headers.get("location")).toBe(
     `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
@@ -31,23 +29,32 @@ test("/c/:id redirects to dashboard", async () => {
 });
 
 test("/c/:id resolves legacy numeric id", async () => {
-  prisma.conversation.findUnique = async () => ({ uuid });
-  const req = new Request(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=123`);
-  const res = await cRoute(req, { params: { id: "123" } });
+  prisma.conversation.findFirst = async () => ({ uuid });
+  const req = new Request(`https://app.boomnow.com/c/123`);
+  const res = await cRoute(req as any, { params: { id: "123" } });
   expect(res.status).toBe(308);
   expect(res.headers.get("location")).toBe(
     `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
   );
 });
 
-test("legacy /r/conversation/:id redirects to dashboard", async () => {
-  const req = new Request(`https://app.boomnow.com/r/conversation/${uuid}`);
-  const res = await convoRoute(req, { params: { id: uuid } });
-  expect(res.status).toBe(307);
+test("/c/:id resolves slug", async () => {
+  prisma.conversation.findFirst = async () => ({ uuid });
+  const req = new Request(`https://app.boomnow.com/c/sluggy`);
+  const res = await cRoute(req as any, { params: { id: "sluggy" } });
+  expect(res.status).toBe(308);
   expect(res.headers.get("location")).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${encodeURIComponent(
-      uuid
-    )}`
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
+  );
+});
+
+test("/r/conversation/:id resolves numeric id", async () => {
+  prisma.conversation.findFirst = async () => ({ uuid });
+  const req = new Request(`https://app.boomnow.com/r/conversation/123`);
+  const res = await convoRoute(req, { params: { id: "123" } });
+  expect(res.status).toBe(308);
+  expect(res.headers.get("location")).toBe(
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
   );
 });
 
