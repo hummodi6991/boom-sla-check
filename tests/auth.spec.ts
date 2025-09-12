@@ -10,7 +10,7 @@ test('GET /inbox/conversations/123 -> 308 /c/123', async () => {
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    'https://app.boomnow.com/dashboard/guest-experience/all?conversation=123'
+    'https://app.boomnow.com/dashboard/guest-experience/cs?conversation=123'
   );
 });
 
@@ -19,12 +19,12 @@ test('middleware redirects legacy /inbox?cid=uuid to /c', async () => {
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
+    `https://app.boomnow.com/dashboard/guest-experience/cs?conversation=${uuid}`
   );
 });
 
 test('POST /api/login with next=dashboard link -> 303 to that path', async () => {
-  const next = `/dashboard/guest-experience/all?conversation=${uuid}`;
+  const next = `/dashboard/guest-experience/cs?conversation=${uuid}`;
   const body = new URLSearchParams({
     email: 'test@example.com',
     password: 'x',

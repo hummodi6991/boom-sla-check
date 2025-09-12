@@ -42,7 +42,7 @@ async function toUuid(id: string) {
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const origin = process.env.APP_URL ?? new URL(req.url).origin;
   const uuid = await toUuid(params.id);
-  const to = new URL('/dashboard/guest-experience/all', origin);
+  const to = new URL('/dashboard/guest-experience/cs', origin);
   if (uuid) to.searchParams.set('conversation', uuid);
 
   const href = to.toString();

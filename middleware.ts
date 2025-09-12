@@ -10,7 +10,7 @@ export function middleware(req: Request) {
   if (path === '/inbox' && url.searchParams.has('cid')) {
     const cid = url.searchParams.get('cid')!;
     return NextResponse.redirect(
-      new URL(`/dashboard/guest-experience/all?conversation=${cid}`, url.origin),
+      new URL(`/dashboard/guest-experience/cs?conversation=${cid}`, url.origin),
       308,
     );
   }
@@ -18,7 +18,7 @@ export function middleware(req: Request) {
   const m = path.match(/^\/inbox\/conversations\/([^/]+)$/);
   if (m)
     return NextResponse.redirect(
-      new URL(`/dashboard/guest-experience/all?conversation=${m[1]}`, url.origin),
+      new URL(`/dashboard/guest-experience/cs?conversation=${m[1]}`, url.origin),
       308,
     );
 
