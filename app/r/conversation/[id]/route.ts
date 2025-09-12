@@ -1,33 +1,59 @@
-import { NextResponse } from 'next/server.js';
-
-// TODO: replace with your real DB access
 import { prisma } from '../../../../lib/db';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
-  const { id } = params;
+function esc(s: string) {
+  return s.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]!));
+}
 
-  let uuid = UUID_RE.test(id) ? id : undefined;
+async function resolveToUuid(id: string) {
+  if (UUID_RE.test(id)) return id;
 
-  if (!uuid) {
-    if (!Number.isNaN(Number(id))) {
-      const conv = await prisma.conversation.findFirst({
+  // numeric legacy id
+  if (!Number.isNaN(Number(id))) {
+    const hit = await prisma.conversation
+      .findFirst({
         where: { legacyId: Number(id) },
         select: { uuid: true },
-      });
-      uuid = conv?.uuid;
-    } else {
-      const conv = await prisma.conversation.findFirst({
-        where: { OR: [{ externalId: id }, { publicId: id }, { slug: id }] },
-        select: { uuid: true },
-      });
-      uuid = conv?.uuid;
-    }
+      })
+      .catch(() => null);
+    if (hit?.uuid) return hit.uuid;
   }
 
-  const to = new URL('/dashboard/guest-experience/all', req.url);
+  // slug / external ids
+  const slug = await prisma.conversation
+    .findFirst({
+      where: {
+        OR: [{ externalId: id }, { publicId: id }, { slug: id }],
+      } as any,
+      select: { uuid: true },
+    })
+    .catch(() => null);
+
+  return slug?.uuid;
+}
+
+export async function GET(req: Request, { params }: { params: { id: string } }) {
+  const origin = process.env.APP_URL ?? new URL(req.url).origin;
+  const uuid = await resolveToUuid(params.id);
+
+  const to = new URL('/dashboard/guest-experience/all', origin);
   if (uuid) to.searchParams.set('conversation', uuid);
-  return NextResponse.redirect(to, 308);
+
+  const href = to.toString();
+  const html = `<!doctype html>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=${esc(href)}">
+<title>Opening conversation…</title>
+<p>If you are not redirected, <a href="${esc(href)}" rel="nofollow">tap here to open the conversation</a>.</p>
+<script>try{location.replace(${JSON.stringify(href)})}catch(_){location.href=${JSON.stringify(href)}};</script>`;
+
+  return new Response(html, {
+    status: 200,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store, max-age=0',
+    },
+  });
 }
