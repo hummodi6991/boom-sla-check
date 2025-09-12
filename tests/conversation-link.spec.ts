@@ -8,15 +8,15 @@ import { prisma } from "../lib/db";
 const BASE = process.env.APP_URL ?? "https://app.boomnow.com";
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
 
-test("builds dashboard link for UUID", () => {
+test("builds redirect link for UUID", () => {
   expect(conversationLink({ uuid })).toBe(
-    `${BASE}/dashboard/guest-experience/cs?conversation=${uuid}`
+    `${BASE}/r/conversation/${uuid}`
   );
 });
 
-test("builds dashboard link for numeric id", () => {
+test("builds redirect link for numeric id", () => {
   expect(conversationLink({ id: 42 })).toBe(
-    `${BASE}/dashboard/guest-experience/cs?conversation=42`
+    `${BASE}/r/conversation/42`
   );
 });
 

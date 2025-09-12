@@ -2,7 +2,7 @@ export function conversationLink(c?: { id?: number | string; uuid?: string } | n
   const base = process.env.APP_URL ?? 'https://app.boomnow.com';
   const v = String(c?.uuid ?? c?.id ?? '');
   return v
-    ? `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(v)}`
+    ? `${base}/r/conversation/${encodeURIComponent(v)}`
     : `${base}/dashboard/guest-experience/cs`;
 }
 
