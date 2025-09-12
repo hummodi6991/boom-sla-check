@@ -20,8 +20,7 @@ export default function GuestExperience({ initialConversationId }: { initialConv
   const { data: s, isLoading, error } = useConversation(initialConversationId);
 
   useEffect(() => {
-    if (!initialConversationId) return;
-    if (s) openDrawer(initialConversationId);
+    if (initialConversationId && s) openDrawer(initialConversationId);
   }, [initialConversationId, s]);
 
   if (isLoading) return <SkeletonConversation />;

@@ -1,28 +1,24 @@
+import type { NextRequest } from 'next/server.js';
 import { NextResponse } from 'next/server.js';
 
-export function middleware(req: Request) {
+export function middleware(req: NextRequest) {
   const url = new URL(req.url);
-  const path = url.pathname;
 
-  // Bypass redirects/rewrite for health checks and redirector
-  if (path.startsWith('/_health') || path.startsWith('/r/')) return NextResponse.next();
+  // Match /r/conversation/:id
+  const match = url.pathname.match(/^\/r\/conversation\/([^/]+)/);
+  if (match) {
+    const id = match[1];
+    const dest = new URL('/dashboard/guest-experience/all', url);
 
-  if (path === '/inbox' && url.searchParams.has('cid')) {
-    const cid = url.searchParams.get('cid')!;
-    return NextResponse.redirect(
-      new URL(`/dashboard/guest-experience/cs?conversation=${cid}`, url.origin),
-      308,
-    );
+    // Preserve incoming params; override/add conversation
+    url.searchParams.forEach((v, k) => dest.searchParams.append(k, v));
+    dest.searchParams.set('conversation', id);
+
+    return NextResponse.redirect(dest, { status: 302 });
   }
-
-  const m = path.match(/^\/inbox\/conversations\/([^/]+)$/);
-  if (m)
-    return NextResponse.redirect(
-      new URL(`/dashboard/guest-experience/cs?conversation=${m[1]}`, url.origin),
-      308,
-    );
-
   return NextResponse.next();
 }
 
-export const config = { matcher: ['/((?!_next|static|images|favicon.ico).*)'] };
+export const config = {
+  matcher: ['/r/conversation/:path*'],
+};
