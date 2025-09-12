@@ -8,26 +8,30 @@ import { prisma } from "../lib/db";
 const BASE = process.env.APP_URL ?? "https://app.boomnow.com";
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
 
-test("uses path-based /r for UUID", () => {
-  expect(conversationLink({ uuid })).toBe(`${BASE}/r/conversation/${uuid}`);
+test("builds dashboard link for UUID", () => {
+  expect(conversationLink({ uuid })).toBe(
+    `${BASE}/dashboard/guest-experience/cs?conversation=${uuid}`
+  );
 });
 
-test("uses path-based /r for numeric id", () => {
-  expect(conversationLink({ id: 42 })).toBe(`${BASE}/r/conversation/42`);
+test("builds dashboard link for numeric id", () => {
+  expect(conversationLink({ id: 42 })).toBe(
+    `${BASE}/dashboard/guest-experience/cs?conversation=42`
+  );
 });
 
 test("falls back to dashboard when missing", () => {
   expect(conversationLink(undefined)).toBe(
-    `${BASE}/dashboard/guest-experience/all`
+    `${BASE}/dashboard/guest-experience/cs`
   );
 });
 
 test("/c/:id redirects UUID directly", async () => {
-  const req = new Request(`${BASE}/dashboard/guest-experience/all?conversation=${uuid}`);
+  const req = new Request(`${BASE}/dashboard/guest-experience/cs?conversation=${uuid}`);
   const res = await cRoute(req as any, { params: { id: uuid } });
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${uuid}`
+    `${BASE}/dashboard/guest-experience/cs?conversation=${uuid}`
   );
 });
 
@@ -37,7 +41,7 @@ test("/c/:id resolves legacy numeric id", async () => {
   const res = await cRoute(req as any, { params: { id: "123" } });
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${uuid}`
+    `${BASE}/dashboard/guest-experience/cs?conversation=${uuid}`
   );
 });
 
@@ -47,7 +51,7 @@ test("/c/:id resolves slug", async () => {
   const res = await cRoute(req as any, { params: { id: "sluggy" } });
   expect(res.status).toBe(302);
   expect(res.headers.get("location")).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${uuid}`
+    `${BASE}/dashboard/guest-experience/cs?conversation=${uuid}`
   );
 });
 
@@ -57,10 +61,10 @@ test("/r/conversation/:id serves HTML redirector", async () => {
   expect(res.status).toBe(200);
   const text = await res.text();
   expect(text).toContain(
-    `<meta http-equiv="refresh" content="0; url=${BASE}/dashboard/guest-experience/all?conversation=${uuid}">`
+    `<meta http-equiv="refresh" content="0; url=${BASE}/dashboard/guest-experience/cs?conversation=${uuid}">`
   );
   expect(text).toContain(
-    `<a href="${BASE}/dashboard/guest-experience/all?conversation=${uuid}" rel="nofollow">`
+    `<a href="${BASE}/dashboard/guest-experience/cs?conversation=${uuid}" rel="nofollow">`
   );
 });
 
@@ -69,7 +73,7 @@ test("legacy /conversations/:id redirects to dashboard", async () => {
   const res = await legacyConvRoute(req, { params: { id: uuid } });
   expect(res.status).toBe(307);
   expect(res.headers.get("location")).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
+    `${BASE}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
   );
 });
 
