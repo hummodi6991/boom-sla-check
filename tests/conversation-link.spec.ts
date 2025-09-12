@@ -17,7 +17,7 @@ test("conversationLink uses dashboard deep link", () => {
 });
 
 test("/c/:id redirects to dashboard", async () => {
-  const req = new Request(`https://app.boomnow.com/c/${uuid}`);
+  const req = new Request(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`);
   const res = await cRoute(req, { params: { id: uuid } });
   expect(res.status).toBe(308);
   expect(res.headers.get("location")).toBe(
@@ -27,7 +27,7 @@ test("/c/:id redirects to dashboard", async () => {
 
 test("/c/:id resolves legacy numeric id", async () => {
   prisma.conversation.findUnique = async () => ({ uuid });
-  const req = new Request(`https://app.boomnow.com/c/123`);
+  const req = new Request(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=123`);
   const res = await cRoute(req, { params: { id: "123" } });
   expect(res.status).toBe(308);
   expect(res.headers.get("location")).toBe(
