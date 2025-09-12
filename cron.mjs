@@ -4,7 +4,7 @@ import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { buildConversationLink } from "./lib/email.js";
+import { conversationLink, conversationIdDisplay } from "./lib/links.js";
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -341,11 +341,11 @@ for (const { id } of toCheck) {
     if (!Number.isFinite(lastGuestMs) || shouldAlert(Date.now(), lastGuestMs)) {
 
       // Build a universal conversation link
-      const convUrl = buildConversationLink(conv ?? { id });
-      const conversationIdDisplay = conv?.uuid ?? String(id);
+      const url = conversationLink(conv ?? { id });
+      const idDisplay = conversationIdDisplay(conv ?? { id });
 
       console.log(
-        `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${convUrl}`
+        `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url}`
       );
 
       // simple dedupe by conversation + last guest message timestamp
@@ -357,17 +357,16 @@ for (const { id } of toCheck) {
         try {
           await sendAlertEmail({
             to,
-            subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${id}`,
-            text:
-`Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
-Conversation: ${conversationIdDisplay}
-Open: ${convUrl}
-Please follow up.`,
-            html:
-`<p>
-  Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).<br/>
-  Conversation: <a href="${convUrl}">${conversationIdDisplay}</a>
-</p>`,
+            subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${idDisplay}`,
+            html: `
+    <p>Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).</p>
+    <p>Conversation: <strong>${idDisplay}</strong></p>
+    <p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p>
+    <p style="font-size:12px;color:#666">If the link doesn’t work, copy & paste this URL:<br>${url}</p>
+  `,
+            text: `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
+Conversation: ${idDisplay}
+Open: ${url}`,
           });
           markAlerted(state, id, lastGuestMs);
           log(`dedupe_key=${key}`);
