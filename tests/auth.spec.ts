@@ -5,21 +5,21 @@ import { POST as loginRoute } from '../app/api/login/route';
 
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
 
-test('Unauthed GET /inbox/conversations/123 -> 307 /login?next=%2Finbox%3Fcid%3D123', async () => {
+test('GET /inbox/conversations/123 -> 308 /c/123', async () => {
   const req = new NextRequest('https://app.boomnow.com/inbox/conversations/123');
   const res = await middleware(req);
-  expect(res.status).toBe(307);
+  expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    'https://app.boomnow.com/login?next=%2Finbox%3Fcid%3D123'
+    'https://app.boomnow.com/c/123'
   );
 });
 
-test('middleware redirects legacy /inbox?cid=uuid to dashboard', async () => {
+test('middleware redirects legacy /inbox?cid=uuid to /c', async () => {
   const req = new NextRequest(`https://app.boomnow.com/inbox?cid=${uuid}`);
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
+    `https://app.boomnow.com/c/${uuid}`
   );
 });
 

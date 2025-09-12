@@ -1,16 +1,35 @@
 import { test, expect } from "@playwright/test";
 import { buildConversationLink } from "../lib/email.js";
+import { GET as cRoute } from "../app/c/[id]/route";
 import { GET as convoRoute } from "../app/r/conversation/[id]/route";
 import { GET as legacyConvRoute } from "../app/conversations/[id]/route";
+import { prisma } from "../lib/db";
 
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
 
-test("buildConversationLink uses dashboard conversation URL", () => {
+test("buildConversationLink uses universal conversation URL", () => {
   const url = buildConversationLink({ uuid });
   expect(url).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${encodeURIComponent(
-      uuid
-    )}`
+    `https://app.boomnow.com/c/${encodeURIComponent(uuid)}`
+  );
+});
+
+test("/c/:id redirects to dashboard", async () => {
+  const req = new Request(`https://app.boomnow.com/c/${uuid}`);
+  const res = await cRoute(req, { params: { id: uuid } });
+  expect(res.status).toBe(308);
+  expect(res.headers.get("location")).toBe(
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
+  );
+});
+
+test("/c/:id resolves legacy numeric id", async () => {
+  prisma.conversation.findUnique = async () => ({ uuid });
+  const req = new Request(`https://app.boomnow.com/c/123`);
+  const res = await cRoute(req, { params: { id: "123" } });
+  expect(res.status).toBe(308);
+  expect(res.headers.get("location")).toBe(
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
   );
 });
 
