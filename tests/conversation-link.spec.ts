@@ -7,10 +7,12 @@ import { prisma } from "../lib/db";
 
 const uuid = "123e4567-e89b-12d3-a456-426614174000";
 
-test("conversationLink uses universal conversation URL", () => {
+test("conversationLink uses dashboard deep link", () => {
   const url = conversationLink({ uuid });
   expect(url).toBe(
-    `https://app.boomnow.com/c/${encodeURIComponent(uuid)}`
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${encodeURIComponent(
+      uuid
+    )}`
   );
 });
 
