@@ -1,6 +1,9 @@
 export const prisma = {
   conversation: {
-    async findUnique(_args: { where: { legacyId: number }; select?: { uuid: boolean } }) {
+    async findFirst(_args: any) {
+      return null;
+    },
+    async findUnique(_args: any) {
       return null;
     },
   },

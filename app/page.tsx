@@ -1,8 +1,10 @@
-import { redirect } from 'next/navigation.js';
-import { headers } from 'next/headers.js';
-import { getSession } from '../lib/auth';
+'use client';
+import { useEffect } from 'react';
 
-export default async function Root() {
-  const session = await getSession(headers());
-  redirect(session ? '/dashboard/guest-experience/all' : '/login');
+export default function Home() {
+  useEffect(() => {
+    const to = '/dashboard/guest-experience/all';
+    if (location.pathname !== to) location.replace(to);
+  }, []);
+  return <p>Redirecting…</p>;
 }
