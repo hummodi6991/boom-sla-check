@@ -1,5 +1,6 @@
-import { redirect } from "next/navigation";
+import { redirect } from "next/navigation.js";
 
 export default function Page({ params }: { params: { id: string } }) {
-  redirect(`/inbox/conversations/${encodeURIComponent(params.id)}`);
+  const url = `/dashboard/guest-experience/all?conversation=${encodeURIComponent(params.id)}`;
+  redirect(url);
 }

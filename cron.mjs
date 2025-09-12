@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
+import { buildConversationLink } from "./lib/email.js";
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -293,18 +294,6 @@ function shouldAlert(nowMs, lastGuestMsgMs) {
   return ageMin >= SLA_MIN && ageMin < SLA_MIN + CRON_INTERVAL_MIN + ALERT_TOL_MIN;
 }
 
-// Conversation deep-link builder: supports both env names and falls back to shared helper.
-function convoLinkFromTemplate(id) {
-  const tpl =
-    process.env.CONVERSATION_LINK_TEMPLATE ||
-    process.env.CONV_URL_TEMPLATE ||
-    "https://app.boomnow.com/inbox/conversations/{id}";
-  const encId = encodeURIComponent(String(id));
-  if (tpl.includes("{id}")) {
-    return tpl.replace("{id}", encId);
-  }
-  return `${tpl.replace(/\/$/, "")}/${encId}`;
-}
 const to = process.env.ALERT_TO || "";
 const mask = (s) => s ? s.replace(/(.{2}).+(@.+)/, "$1***$2") : "";
 
@@ -352,7 +341,7 @@ for (const { id } of toCheck) {
     if (!Number.isFinite(lastGuestMs) || shouldAlert(Date.now(), lastGuestMs)) {
 
       // Try to include a direct link to the conversation (prefer API-provided URL, else template)
-      const convUrl = firstDefined(conv?.url, conv?.link, conv?.href) || convoLinkFromTemplate(id);
+      const convUrl = conv?.uuid ? buildConversationLink(conv) : undefined;
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"}${convUrl ? ` link=${convUrl}` : ""}`
