@@ -787,7 +787,13 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
-    const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
+    const fromPayload =
+      data?.conversation?.uuid ||
+      data?.conversation_uuid ||
+      (typeof data?.conversation?.id === 'string' && data.conversation.id);
+
+    const candidate = (fromPayload && /^[0-9a-f-]{36}$/i.test(fromPayload)) ? fromPayload : undefined;
+    const convId = candidate ?? (usedKey || uniqKeys[0] || CONVERSATION_INPUT);
     const conversation = { uuid: convId, id: convId };
     const url = conversationLink(conversation);
     const idDisplay = conversationIdDisplay(conversation);

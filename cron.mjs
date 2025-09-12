@@ -341,8 +341,15 @@ for (const { id } of toCheck) {
     if (!Number.isFinite(lastGuestMs) || shouldAlert(Date.now(), lastGuestMs)) {
 
       // Build a universal conversation link
-      const url = conversationLink(conv ?? { id });
-      const idDisplay = conversationIdDisplay(conv ?? { id });
+      const fromPayload =
+        conv?.uuid ||
+        conv?.conversation_uuid ||
+        (typeof conv?.id === 'string' && conv.id);
+
+      const candidate = (fromPayload && /^[0-9a-f-]{36}$/i.test(fromPayload)) ? fromPayload : undefined;
+      const convId = candidate ?? id;
+      const url = conversationLink({ uuid: convId, id: convId });
+      const idDisplay = conversationIdDisplay({ uuid: convId, id: convId });
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url}`
