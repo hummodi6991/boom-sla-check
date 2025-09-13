@@ -1,18 +1,13 @@
-export function conversationLink(
-  c?: { id?: number | string; uuid?: string } | string | null,
-  base = process.env.APP_URL ?? 'https://app.boomnow.com',
-) {
-  const raw = typeof c === 'string' ? c : c?.uuid ?? c?.id ?? '';
-  const id = String(raw ?? '').trim();
-  const tmpl = process.env.CONVERSATION_LINK_TEMPLATE ?? '';
-  if (id && tmpl.includes('{id}')) {
-    return tmpl.replace('{id}', encodeURIComponent(id));
-  }
-  return id
-    ? `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(id)}`
-    : `${base}/dashboard/guest-experience/all`;
+export const appUrl = () =>
+  (process.env.APP_URL ?? 'https://app.boomnow.com').replace(/\/+$/, '');
+
+export function conversationDeepLink(uuid?: string) {
+  const base = appUrl();
+  return uuid
+    ? `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
+    : `${base}/dashboard/guest-experience/cs`;
 }
 
-export function conversationIdDisplay(c: { uuid?: string; id?: number }) {
-  return (c?.uuid ?? c?.id) as string | number;
+export function conversationIdDisplay(c: { uuid?: string; id?: number | string }) {
+  return (c?.uuid ?? c?.id) as string | number | undefined;
 }
