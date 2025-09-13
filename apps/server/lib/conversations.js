@@ -23,8 +23,24 @@ export async function tryResolveConversationUuid(
     t?.messages?.[0]?.conversation_uuid,
     t?.messages?.[0]?.conversation?.uuid,
   ].filter(Boolean);
+  const idCandidates = [
+    t?.conversation?.id,
+    t?.conversation_id,
+    t?.messages?.[0]?.conversation_id,
+    t?.messages?.[0]?.conversation?.id,
+  ].filter(Boolean);
   const guess = candidates.find(x => /^[0-9a-f-]{36}$/i.test(String(x)));
   if (guess) return String(guess).toLowerCase();
+
+  for (const raw of idCandidates) {
+    const v = String(raw);
+    if (/^\d+$/.test(v)) {
+      const hit = await prisma.conversation.findFirst({ where: { legacyId: Number(v) }, select: { uuid: true }});
+      if (hit?.uuid) return hit.uuid.toLowerCase();
+    }
+    const bySlug = await prisma.conversation.findFirst({ where: { slug: v }, select: { uuid: true }});
+    if (bySlug?.uuid) return bySlug.uuid.toLowerCase();
+  }
 
   return null;
 }
