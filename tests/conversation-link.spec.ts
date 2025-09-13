@@ -52,6 +52,16 @@ test("tryResolveConversationUuid resolves from inline thread", async () => {
   await expect(tryResolveConversationUuid("x", { inlineThread })).resolves.toBe(uuid);
 });
 
+test("tryResolveConversationUuid resolves ids from inline thread", async () => {
+  prisma.conversation.findFirst = async (args: any) => {
+    if (args.where.legacyId) return { uuid };
+    if (args.where.slug) return { uuid };
+    return null;
+  };
+  const inlineThread = { conversation_id: 123 };
+  await expect(tryResolveConversationUuid("x", { inlineThread })).resolves.toBe(uuid);
+});
+
 test("tryResolveConversationUuid returns null for unknown", async () => {
   prisma.conversation.findFirst = async () => null;
   await expect(tryResolveConversationUuid("unknown")).resolves.toBeNull();

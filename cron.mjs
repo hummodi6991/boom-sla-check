@@ -333,6 +333,10 @@ for (const { id } of toCheck) {
     }
   }
 
+  // Make inline thread available to the resolver (prevents ReferenceError).
+  // We only add keys that the resolver knows how to read.
+  const inlineThread = { messages: Array.isArray(msgs) ? msgs : undefined };
+
   // Skip very stale threads entirely
   const newestTs = Math.max(...msgs.map(getTs).filter(Boolean));
   const newestAgeMin = Number.isFinite(newestTs) ? Math.floor((Date.now()-newestTs)/60000) : Infinity;

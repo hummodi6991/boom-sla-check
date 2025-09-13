@@ -786,13 +786,18 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 3) Parse and evaluate
   const data = await res.json();
   const msgs = normalizeMessages(data);
+
+  // Make inline thread available to the resolver (prevents ReferenceError).
+  // We only add keys that the resolver knows how to read.
+  const inlineThread = { messages: Array.isArray(msgs) ? msgs : undefined };
+
   const result = await evaluate(msgs);
   console.log("Second check result:", JSON.stringify(result, null, 2));
 
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const uuid = await tryResolveConversationUuid(convId);
+    const uuid = await tryResolveConversationUuid(convId, { inlineThread });
     if (!uuid) {
       logger.warn({ convId }, 'skip alert: cannot resolve conversation UUID');
       metrics.increment('alerts.skipped_missing_uuid');
