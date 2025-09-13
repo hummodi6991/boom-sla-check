@@ -354,7 +354,7 @@ for (const { id } of toCheck) {
       const uuid = await tryResolveConversationUuid(lookupId, { inlineThread });
       if (!uuid) {
         logger.warn({ convId: id }, 'skip alert: cannot resolve conversation UUID');
-        metrics.increment('alerts.skipped_missing_uuid');
+        metrics.increment('alerts.skipped_producer_violation');
         skipped.push(id);
         skippedCount++;
         continue;
