@@ -3,7 +3,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const dash = (v?: string) => {
-    const u = new URL('/dashboard/guest-experience/cs', req.url);
+    const u = new URL('/dashboard/guest-experience/all', req.url);
     if (v) u.searchParams.set('conversation', v);
     return u;
   };
