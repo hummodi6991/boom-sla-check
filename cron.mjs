@@ -335,7 +335,7 @@ for (const { id } of toCheck) {
 
   // Make inline thread available to the resolver (prevents ReferenceError).
   // We only add keys that the resolver knows how to read.
-  const inlineThread = { messages: Array.isArray(msgs) ? msgs : undefined };
+  const inlineThread = { messages: Array.isArray(msgs) ? msgs : [] }; // ensure in-scope
 
   // Skip very stale threads entirely
   const newestTs = Math.max(...msgs.map(getTs).filter(Boolean));
@@ -352,13 +352,15 @@ for (const { id } of toCheck) {
       // Build a universal conversation link
       const lookupId = conv?.uuid ?? conv?.id ?? id;
       const uuid = await tryResolveConversationUuid(lookupId, { inlineThread });
+
       if (!uuid) {
-        logger.warn({ convId: id }, 'skip alert: cannot resolve conversation UUID');
-        metrics.increment('alerts.skipped_producer_violation');
+        logger?.warn?.({ convId: id }, 'skip alert: cannot resolve conversation UUID');
+        metrics?.increment?.('alerts.skipped_missing_uuid');
         skipped.push(id);
         skippedCount++;
-        continue;
+        continue; // do not send without a working link
       }
+
       const url = conversationDeepLinkFromUuid(uuid);
       const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
 
