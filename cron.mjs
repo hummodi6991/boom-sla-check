@@ -4,7 +4,8 @@ import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { conversationLink, conversationIdDisplay } from "./lib/links.js";
+import { conversationDeepLink, conversationIdDisplay } from "./lib/links.js";
+import { prisma } from "./lib/db.js";
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -341,8 +342,21 @@ for (const { id } of toCheck) {
     if (!Number.isFinite(lastGuestMs) || shouldAlert(Date.now(), lastGuestMs)) {
 
       // Build a universal conversation link
-      const url = conversationLink(conv ?? { id });
-      const idDisplay = conversationIdDisplay(conv ?? { id });
+      const lookupId = conv?.uuid ?? conv?.id ?? id;
+      const found = await prisma.conversation
+        .findFirst({
+          where: {
+            OR: [
+              { uuid: String(lookupId) },
+              { legacyId: Number(lookupId) || -1 },
+              { slug: String(lookupId) },
+            ],
+          },
+          select: { uuid: true },
+        })
+        .catch(() => null);
+      const url = conversationDeepLink(found?.uuid);
+      const idDisplay = conversationIdDisplay({ uuid: found?.uuid, id: lookupId });
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url}`

@@ -18,7 +18,7 @@ async function stopServer(server: http.Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-test('legacy /cs route redirects to /all and preserves query', async ({ page }) => {
+test('cs route loads directly without redirect', async ({ page }) => {
   const { server, port } = await startServer();
   const q = 'conversation=test-123';
   await page.goto(`http://localhost:${port}/dashboard/guest-experience/cs?${q}`, {
@@ -26,7 +26,7 @@ test('legacy /cs route redirects to /all and preserves query', async ({ page }) 
   });
 
   const url = new URL(page.url());
-  expect(url.pathname).toBe('/dashboard/guest-experience/all');
+  expect(url.pathname).toBe('/dashboard/guest-experience/cs');
   expect(url.searchParams.get('conversation')).toBe('test-123');
 
   await stopServer(server);
