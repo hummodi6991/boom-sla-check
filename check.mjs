@@ -1,7 +1,8 @@
 import fs from "fs";
 import translate from "@vitalets/google-translate-api";
 import { sendAlert } from "./lib/email.js";
-import { conversationDeepLink, conversationIdDisplay } from "./lib/links.js";
+import { conversationDeepLinkFromUuid, conversationIdDisplay } from "./lib/links.js";
+import { ensureConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 
@@ -789,20 +790,13 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const convo = await prisma.conversation
-      .findFirst({
-        where: {
-          OR: [
-            { uuid: convId },
-            { legacyId: Number(convId) || -1 },
-            { slug: convId },
-          ],
-        },
-        select: { uuid: true },
-      })
-      .catch(() => null);
-    const url = conversationDeepLink(convo?.uuid);
-    const idDisplay = conversationIdDisplay({ uuid: convo?.uuid, id: convId });
+    const uuid = await ensureConversationUuid(convId).catch(() => null);
+    if (!uuid) {
+      console.error(`ensureConversationUuid: cannot resolve UUID for ${convId}`);
+      return;
+    }
+    const url = conversationDeepLinkFromUuid(uuid);
+    const idDisplay = conversationIdDisplay({ uuid, id: convId });
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${idDisplay}\nOpen: ${url}`;
     const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p>Conversation: <strong>${idDisplay}</strong></p><p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p><p style="font-size:12px;color:#666">If the link doesn’t work, copy & paste this URL:<br>${url}</p>`;
