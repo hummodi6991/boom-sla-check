@@ -800,7 +800,7 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
     const uuid = await tryResolveConversationUuid(convId, { inlineThread });
     if (!uuid) {
       logger.warn({ convId }, 'skip alert: cannot resolve conversation UUID');
-      metrics.increment('alerts.skipped_missing_uuid');
+      metrics.increment('alerts.skipped_producer_violation');
       return;
     }
     const url = conversationDeepLinkFromUuid(uuid);
