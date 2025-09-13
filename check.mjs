@@ -2,11 +2,13 @@ import fs from "fs";
 import translate from "@vitalets/google-translate-api";
 import { sendAlert } from "./lib/email.js";
 import { conversationDeepLinkFromUuid, conversationIdDisplay } from "./lib/links.js";
-import { ensureConversationUuid } from "./apps/server/lib/conversations.js";
+import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
+const logger = console;
+const metrics = { increment: () => {} };
 
 const env = (k, d="") => (process.env[k] ?? d).toString().trim();
 const UPDATED_AT = env("UPDATED_AT", "");
@@ -790,9 +792,10 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const uuid = await ensureConversationUuid(convId).catch(() => null);
+    const uuid = await tryResolveConversationUuid(convId);
     if (!uuid) {
-      console.error(`ensureConversationUuid: cannot resolve UUID for ${convId}`);
+      logger.warn({ convId }, 'skip alert: cannot resolve conversation UUID');
+      metrics.increment('alerts.skipped_missing_uuid');
       return;
     }
     const url = conversationDeepLinkFromUuid(uuid);
