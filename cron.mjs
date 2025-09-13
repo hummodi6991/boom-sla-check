@@ -5,8 +5,10 @@ import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 import { conversationDeepLinkFromUuid, conversationIdDisplay } from "./lib/links.js";
-import { ensureConversationUuid } from "./apps/server/lib/conversations.js";
+import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
+const logger = console;
+const metrics = { increment: () => {} };
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -307,7 +309,8 @@ const getTs = (m) => {
   return Number.isFinite(v) ? v : 0;
 };
 
-let checked = 0, alerted = 0, skipped = 0;
+let checked = 0, alerted = 0, skippedCount = 0;
+const skipped = [];
 for (const { id } of toCheck) {
   if (alerted >= MAX_ALERTS_PER_RUN) break;
   const conv = byId.get(String(id));
@@ -325,7 +328,7 @@ for (const { id } of toCheck) {
     } else {
       const detail = r.status ? `status ${r.status}` : (r.error?.message || "unknown error");
       console.warn(`conv ${id}: no inline thread; messages fetch failed (${detail}); skipping`);
-      skipped++;
+      skippedCount++;
       continue;
     }
   }
@@ -344,21 +347,12 @@ for (const { id } of toCheck) {
 
       // Build a universal conversation link
       const lookupId = conv?.uuid ?? conv?.id ?? id;
-      const found = await prisma.conversation
-        .findFirst({
-          where: {
-            OR: [
-              { uuid: String(lookupId) },
-              { legacyId: Number(lookupId) || -1 },
-              { slug: String(lookupId) },
-            ],
-          },
-          select: { uuid: true },
-        })
-        .catch(() => null);
-      const uuid = await ensureConversationUuid(lookupId).catch(() => null);
+      const uuid = await tryResolveConversationUuid(lookupId, { inlineThread });
       if (!uuid) {
-        console.error(`ensureConversationUuid: cannot resolve UUID for ${lookupId}`);
+        logger.warn({ convId: id }, 'skip alert: cannot resolve conversation UUID');
+        metrics.increment('alerts.skipped_missing_uuid');
+        skipped.push(id);
+        skippedCount++;
         continue;
       }
       const url = conversationDeepLinkFromUuid(uuid);
@@ -402,5 +396,9 @@ Open: ${url}`,
   checked++;
 }
 
-console.log(`done: checked=${checked}, alerted=${alerted}, skipped=${skipped}`);
+console.log(`done: checked=${checked}, alerted=${alerted}, skipped=${skippedCount}`);
+
+if (skipped.length) {
+  logger.info({ skipped }, 'alerts skipped due to missing UUID');
+}
 

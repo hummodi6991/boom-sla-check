@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { conversationDeepLinkFromUuid } from "../apps/shared/lib/links";
-import { ensureConversationUuid } from "../apps/server/lib/conversations";
+import { tryResolveConversationUuid } from "../apps/server/lib/conversations";
 import { buildAlertEmail } from "../apps/worker/mailer/alerts";
 import { GET as convoRoute } from "../app/r/conversation/[id]/route";
 import { prisma } from "../lib/db";
@@ -20,32 +20,41 @@ test("conversationDeepLinkFromUuid throws when uuid missing", () => {
   expect(() => conversationDeepLinkFromUuid("" as any)).toThrow();
 });
 
-// Unit: ensureConversationUuid
-
-test("ensureConversationUuid resolves uuid input", async () => {
-  prisma.conversation.findFirst = async () => ({ uuid });
-  await expect(ensureConversationUuid(uuid)).resolves.toBe(uuid);
+test("conversationDeepLinkFromUuid throws for invalid uuid", () => {
+  expect(() => conversationDeepLinkFromUuid("not-a-uuid")).toThrow();
 });
 
-test("ensureConversationUuid resolves numeric id", async () => {
+// Unit: tryResolveConversationUuid
+
+test("tryResolveConversationUuid resolves uuid input", async () => {
+  await expect(tryResolveConversationUuid(uuid)).resolves.toBe(uuid);
+});
+
+test("tryResolveConversationUuid resolves numeric id", async () => {
   prisma.conversation.findFirst = async (args: any) => {
     if (args.where.legacyId) return { uuid };
     return null;
   };
-  await expect(ensureConversationUuid("123")).resolves.toBe(uuid);
+  await expect(tryResolveConversationUuid("123")).resolves.toBe(uuid);
 });
 
-test("ensureConversationUuid resolves slug", async () => {
+test("tryResolveConversationUuid resolves slug", async () => {
   prisma.conversation.findFirst = async (args: any) => {
     if (args.where.slug) return { uuid };
     return null;
   };
-  await expect(ensureConversationUuid("sluggy")).resolves.toBe(uuid);
+  await expect(tryResolveConversationUuid("sluggy")).resolves.toBe(uuid);
 });
 
-test("ensureConversationUuid throws for unknown", async () => {
+test("tryResolveConversationUuid resolves from inline thread", async () => {
   prisma.conversation.findFirst = async () => null;
-  await expect(ensureConversationUuid("unknown")).rejects.toThrow(/cannot resolve UUID/);
+  const inlineThread = { conversation_uuid: uuid };
+  await expect(tryResolveConversationUuid("x", { inlineThread })).resolves.toBe(uuid);
+});
+
+test("tryResolveConversationUuid returns null for unknown", async () => {
+  prisma.conversation.findFirst = async () => null;
+  await expect(tryResolveConversationUuid("unknown")).resolves.toBeNull();
 });
 
 // Snapshot: alert email contains deep link
@@ -54,6 +63,48 @@ test("alert email includes conversation link", async () => {
   prisma.conversation.findFirst = async () => ({ uuid });
   const html = await buildAlertEmail("123");
   expect(html).toContain(`/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`);
+});
+
+// Integration: cron/mailer skip when uuid unresolved
+
+async function simulateAlert(convId: string, inlineThread: any, deps: any) {
+  const { sendAlertEmail, logger, metrics, skipped } = deps;
+  const resolved = await tryResolveConversationUuid(convId, { inlineThread });
+  if (!resolved) {
+    logger.warn({ convId }, "skip alert: cannot resolve conversation UUID");
+    metrics.increment("alerts.skipped_missing_uuid");
+    skipped.push(convId);
+    return;
+  }
+  const url = conversationDeepLinkFromUuid(resolved);
+  await sendAlertEmail({ url });
+}
+
+test("cron path skips alert when uuid unresolved", async () => {
+  prisma.conversation.findFirst = async () => null;
+  const logs: any[] = [];
+  const metrics: string[] = [];
+  const emails: any[] = [];
+  const logger = { warn: (...args: any[]) => logs.push(args) };
+  const metricObj = { increment: (n: string) => metrics.push(n) };
+  const skipped: string[] = [];
+  await simulateAlert("unknown", null, { sendAlertEmail: (x: any) => emails.push(x), logger, metrics: metricObj, skipped });
+  expect(emails.length).toBe(0);
+  expect(metrics).toContain("alerts.skipped_missing_uuid");
+  expect(skipped).toContain("unknown");
+});
+
+test("cron path sends alert when uuid resolved", async () => {
+  prisma.conversation.findFirst = async () => ({ uuid });
+  const emails: any[] = [];
+  const logger = { warn: () => {} };
+  const metricObj = { increment: () => {} };
+  const skipped: string[] = [];
+  await simulateAlert("123", null, { sendAlertEmail: (x: any) => emails.push(x), logger, metrics: metricObj, skipped });
+  expect(emails.length).toBe(1);
+  const url = emails[0].url;
+  expect(url).toContain(`?conversation=${uuid}`);
+  expect(url).not.toContain("/r/");
 });
 
 // API: GET /r/conversation/:id
