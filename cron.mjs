@@ -4,7 +4,8 @@ import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { conversationDeepLink, conversationIdDisplay } from "./lib/links.js";
+import { conversationDeepLinkFromUuid, conversationIdDisplay } from "./lib/links.js";
+import { ensureConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
@@ -355,8 +356,13 @@ for (const { id } of toCheck) {
           select: { uuid: true },
         })
         .catch(() => null);
-      const url = conversationDeepLink(found?.uuid);
-      const idDisplay = conversationIdDisplay({ uuid: found?.uuid, id: lookupId });
+      const uuid = await ensureConversationUuid(lookupId).catch(() => null);
+      if (!uuid) {
+        console.error(`ensureConversationUuid: cannot resolve UUID for ${lookupId}`);
+        continue;
+      }
+      const url = conversationDeepLinkFromUuid(uuid);
+      const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url}`
