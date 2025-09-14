@@ -386,7 +386,7 @@ for (const { id } of toCheck) {
         }) ||
         await resolveViaInternalEndpoint(lookupId);
 
-      const url = makeConversationLink({ uuid, legacyId: convId });
+      const url = makeConversationLink({ uuid });
       if (!url) {
         logger?.warn?.({ convId }, 'skip alert: cannot resolve conversation link');
         metrics?.increment?.('alerts.skipped_missing_uuid');

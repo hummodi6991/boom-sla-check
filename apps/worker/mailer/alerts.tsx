@@ -7,10 +7,17 @@ export async function buildAlertEmail(
   deps?: { logger?: any; verify?: (url: string) => Promise<boolean> }
 ) {
   const uuid = event?.conversation_uuid;
-  const legacyId = event?.legacyId;
-  const url = makeConversationLink({ uuid, legacyId });
+  if (!uuid) {
+    deps?.logger?.warn(
+      { event },
+      'skip alert: missing conversation_uuid; include a UUID per docs/conversation-uuid-migration.md'
+    );
+    metrics.increment('alerts.skipped_missing_uuid');
+    return null;
+  }
+  const url = makeConversationLink({ uuid });
   if (!url) {
-    deps?.logger?.warn({ event }, 'skip alert: missing conversation id');
+    deps?.logger?.warn({ event }, 'skip alert: invalid conversation_uuid');
     metrics.increment('alerts.skipped_missing_uuid');
     return null;
   }
@@ -20,6 +27,6 @@ export async function buildAlertEmail(
     metrics.increment('alerts.skipped_link_preflight');
     return null;
   }
-  metrics.increment(uuid ? 'alerts.sent_with_uuid' : 'alerts.sent_with_legacyId');
+  metrics.increment('alerts.sent_with_uuid');
   return `<p>Alert for conversation <a href="${url}">${url}</a></p>`;
 }

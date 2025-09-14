@@ -11,25 +11,39 @@ export default function CsPage() {
   const legacyId = params.get('legacyId');
   const [uuid, setUuid] = useState<string | null>(conversation && UUID_RE.test(conversation) ? conversation.toLowerCase() : null);
   const [resolving, setResolving] = useState(false);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     if (!uuid && legacyId && /^\d+$/.test(legacyId)) {
       setResolving(true);
       fetch(`/api/resolve/conversation?legacyId=${encodeURIComponent(legacyId)}`, { method: 'GET', credentials: 'include' })
-        .then(r => r.ok ? r.json() : Promise.reject(r))
-        .then(({ uuid: u }) => {
+        .then(r => {
+          if (!r.ok) {
+            setNotFound(true);
+            return null;
+          }
+          return r.json();
+        })
+        .then((data) => {
+          const u = data?.uuid;
           if (u && UUID_RE.test(u)) {
             setUuid(u.toLowerCase());
             const sp = new URLSearchParams(window.location.search);
             sp.delete('legacyId');
             sp.set('conversation', u.toLowerCase());
             window.history.replaceState({}, '', `${window.location.pathname}?${sp.toString()}`);
+          } else if (!data) {
+            setNotFound(true);
           }
         })
-        .catch(() => {})
+        .catch(() => setNotFound(true))
         .finally(() => setResolving(false));
     }
   }, [legacyId, uuid]);
+
+  if (notFound) {
+    return <div style={{ padding: 16 }}>Conversation not found or has been deleted.</div>;
+  }
 
   if (!uuid && (legacyId || resolving)) {
     return <div style={{ padding: 16 }}>Opening conversation…</div>;

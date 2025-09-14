@@ -12,13 +12,7 @@ test('makeConversationLink builds ?conversation when uuid provided', () => {
   );
 });
 
-test('makeConversationLink builds /r/legacy when uuid missing', () => {
-  expect(makeConversationLink({ legacyId: 123 })).toBe(
-    `${BASE}/r/legacy/123`
-  );
-});
-
-test('makeConversationLink returns null when neither id provided', () => {
+test('makeConversationLink returns null when uuid missing', () => {
   expect(makeConversationLink({})).toBeNull();
 });
 
@@ -28,7 +22,7 @@ async function simulateAlert(event: any, deps: any) {
   if (html) await sendAlertEmail({ html });
 }
 
-test('mailer skips when both uuid and legacyId missing', async () => {
+test('mailer skips when conversation_uuid missing', async () => {
   const logs: any[] = [];
   const metricsArr: string[] = [];
   const emails: any[] = [];
@@ -61,22 +55,4 @@ test('mailer uses uuid when available', async () => {
   expect(emails.length).toBe(1);
   expect(emails[0].html).toContain(`?conversation=${uuid}`);
   expect(metricsArr).toContain('alerts.sent_with_uuid');
-});
-
-test('mailer falls back to legacyId when uuid missing', async () => {
-  const emails: any[] = [];
-  const metricsArr: string[] = [];
-  const logger = { warn: () => {} };
-  const verify = async (url: string) => url.includes('/r/legacy/123');
-  const orig = metrics.increment;
-  metrics.increment = (n: string) => metricsArr.push(n);
-  await simulateAlert({ legacyId: 123 }, {
-    sendAlertEmail: (x: any) => emails.push(x),
-    logger,
-    verify,
-  });
-  metrics.increment = orig;
-  expect(emails.length).toBe(1);
-  expect(emails[0].html).toContain(`/r/legacy/123`);
-  expect(metricsArr).toContain('alerts.sent_with_legacyId');
 });
