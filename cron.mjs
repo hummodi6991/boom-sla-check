@@ -351,12 +351,16 @@ for (const { id } of toCheck) {
 
       // Build a universal conversation link
       const lookupId = conv?.uuid ?? conv?.id ?? id;
-      const uuid = await tryResolveConversationUuid(lookupId, { inlineThread });
+      const convId = id;
+      const uuid = await tryResolveConversationUuid(lookupId, {
+        inlineThread,
+        onDebug: (d) => logger?.debug?.({ convId, ...d }, 'uuid resolution attempted'),
+      });
 
       if (!uuid) {
-        logger?.warn?.({ convId: id }, 'skip alert: cannot resolve conversation UUID');
+        logger?.warn?.({ convId }, 'skip alert: cannot resolve conversation UUID');
         metrics?.increment?.('alerts.skipped_missing_uuid');
-        skipped.push(id);
+        skipped.push(convId);
         skippedCount++;
         continue; // do not send without a working link
       }
