@@ -22,6 +22,7 @@ jobs:
       DEBUG: ${{ vars.DEBUG }}
       DEBUG_MESSAGES: ${{ vars.DEBUG_MESSAGES }}
       DEFAULT_CONVERSATION_ID: ${{ vars.DEFAULT_CONVERSATION_ID }}
+      APP_URL: https://app.boomnow.com
 
     steps:
       - uses: actions/checkout@v4
