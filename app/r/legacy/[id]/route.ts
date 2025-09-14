@@ -30,10 +30,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const base = appUrl()
   const uuid = await resolveUuid(params.id)
 
-  // If we couldn't resolve a UUID on the server, pass legacyId so the CS page can resolve it.
   const target = uuid
     ? `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
-    : `${base}/dashboard/guest-experience/cs?legacyId=${encodeURIComponent(params.id)}`
+    : `${base}/conversation-not-found`
 
   const html = `<!doctype html>
     <meta http-equiv="refresh" content="0; url=${target}">
