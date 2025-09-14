@@ -6,27 +6,54 @@ const UUID_RE =
 
 const appUrl = () => (process.env.APP_URL ?? 'https://app.boomnow.com').replace(/\/+$/,'');
 
+function findUuidInString(s) {
+  if (!s) return null;
+  const m = String(s).match(UUID_RE);
+  return m ? m[0].toLowerCase() : null;
+}
+
 async function probeRedirectForUuid(idOrSlug) {
   const base = appUrl();
   const url  = `${base}/r/conversation/${encodeURIComponent(String(idOrSlug))}`;
-  // Some hosts disallow HEAD; try HEAD then GET with manual redirect.
-  const tryOnce = async (method) => {
-    const res = await fetch(url, { method, redirect: 'manual' });
-    const loc = res.headers.get('location') || '';
-    const m = /conversation=([0-9a-f-]{36})/i.exec(loc);
-    return m ? m[1].toLowerCase() : null;
-  };
-  try {
-    return (await tryOnce('HEAD')) || (await tryOnce('GET'));
-  } catch {
-    return null;
-  }
-}
 
-function firstUuid(str) {
-  if (typeof str !== 'string') return null;
-  const m = str.match(UUID_RE);
-  return m ? m[0].toLowerCase() : null;
+  // 5s timeout
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 5000);
+
+  try {
+    // 1) Prefer HEAD with manual redirect
+    const head = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: ctrl.signal });
+    let loc = head.headers.get('location') || '';
+    let hit = (loc.match(/conversation=([0-9a-f-]{36})/i)?.[1] || '').toLowerCase();
+    if (hit && UUID_RE.test(hit)) return hit;
+
+    // 2) Fallback to GET with manual redirect
+    const res = await fetch(url, { method: 'GET', redirect: 'manual', signal: ctrl.signal });
+    loc = res.headers.get('location') || '';
+    hit = (loc.match(/conversation=([0-9a-f-]{36})/i)?.[1] || '').toLowerCase();
+    if (hit && UUID_RE.test(hit)) return hit;
+
+    // 3) If not a 3xx, parse the HTML body for meta-refresh or JS location.replace
+    const body = await res.text().catch(() => '');
+    // <meta http-equiv="refresh" content="0; url=...conversation=<uuid>">
+    hit = (body.match(/conversation=([0-9a-f-]{36})/i)?.[1] || '').toLowerCase();
+    if (hit && UUID_RE.test(hit)) return hit;
+
+    // location.replace("...conversation=<uuid>")
+    const js = body.match(/location\.replace\(["']([^"']+)["']\)/i)?.[1];
+    const q = js ? new URLSearchParams(js.split('?')[1] || '') : null;
+    const fromJs = q?.get('conversation');
+    if (fromJs && UUID_RE.test(fromJs)) return fromJs.toLowerCase();
+
+    // last resort: any raw UUID appearing in the body
+    const raw = findUuidInString(body);
+    if (raw) return raw;
+  } catch {
+    // ignore network/abort, fall through
+  } finally {
+    clearTimeout(t);
+  }
+  return null;
 }
 
 function* textFields(obj) {
@@ -46,7 +73,7 @@ async function tryUuidFromInlineThread(inlineThread) {
     inlineThread.conversationUuid ||
     inlineThread.uuid ||
     inlineThread.conversation?.uuid;
-  const directHit = firstUuid(String(direct || ''));
+  const directHit = findUuidInString(String(direct || ''));
   if (directHit) return directHit;
 
   const msgs =
@@ -61,13 +88,13 @@ async function tryUuidFromInlineThread(inlineThread) {
       m.conversation?.uuid, m.thread?.uuid,
     ];
     for (const c of cands) {
-      const hit = firstUuid(String(c || ''));
+      const hit = findUuidInString(String(c || ''));
       if (hit) return hit;
     }
     for (const s of textFields(m)) {
       const q = s.match(/conversation=([0-9a-fA-F-]{36})/);
       if (q && UUID_RE.test(q[1])) return q[1].toLowerCase();
-      const any = firstUuid(s);
+      const any = findUuidInString(s);
       if (any) return any;
     }
   }
@@ -121,13 +148,26 @@ export async function tryResolveConversationUuid(idOrUuid, opts = {}) {
   const mined = await tryUuidFromInlineThread(opts.inlineThread);
   if (mined) return mined;
 
+  // NEW: probe one message from API to read its conversation_uuid
+  if (typeof opts.fetchFirstMessage === 'function') {
+    attempted.push('messages-probe');
+    try {
+      const m = await opts.fetchFirstMessage(raw);
+      const fromMsg =
+        findUuidInString(m?.conversation_uuid) ||
+        findUuidInString(m?.conversation?.uuid) ||
+        findUuidInString(m?.body || m?.text || m?.html || m?.content);
+      if (fromMsg) return fromMsg;
+    } catch { /* ignore and continue */ }
+  }
+
   // NEW: Redirect probe (public route resolves legacy id/slug → uuid)
   attempted.push('redirect-probe');
   const probed = await probeRedirectForUuid(raw);
   if (probed) return probed;
 
   // Optional: expose attempted paths for caller logging (if desired)
-  opts.onDebug && opts.onDebug({ attempted });
+  opts.onDebug && opts.onDebug({ convId: raw, attempted });
 
   return null;
 }
