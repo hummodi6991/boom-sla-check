@@ -196,17 +196,8 @@ export async function evaluateUnanswered(messages, now = new Date(), slaMin = 15
 }
 if (typeof globalThis.__CRON_TEST__ === 'undefined') {
 
-const BEARER = process.env.BOOM_BEARER || "";
-const COOKIE = process.env.BOOM_COOKIE || "";
 const DEBUG  = !!process.env.DEBUG;
 const log = (...a) => DEBUG && console.log(...a);
-
-function authHeaders() {
-  const h = { accept: "application/json" };
-  if (BEARER) h.authorization = `Bearer ${BEARER}`;
-  if (COOKIE) h.cookie = COOKIE;
-  return h;
-}
 
 // email
 async function sendAlertEmail({ to, subject, text, html }) {
@@ -230,27 +221,44 @@ function collectIds(obj, out = new Set()) {
   return out;
 }
 
-// fetch the conversations list
-const res = await fetch(process.env.CONVERSATIONS_URL, {
-  headers: authHeaders(),
-  redirect: "manual",
-});
-const text = await res.text();
-let payload;
-try {
-  payload = JSON.parse(text);
-} catch (e) {
-  console.error("Conversations endpoint did not return JSON. First 200 chars:\n", text.slice(0, 200));
-  process.exit(0);
-}
-log("Top-level keys:", Object.keys(payload));
+// fetch first two pages of the conversations list (≈30 per page)
+const LIMIT_PARAM  = process.env.LIST_LIMIT_PARAM || "";   // e.g. "limit" or "per_page"
+const OFFSET_PARAM = process.env.LIST_OFFSET_PARAM || "";  // e.g. "offset" or "page"
+const PAGE_SIZE    = Number(process.env.PAGE_SIZE || 30);
+const PAGES        = 2;
 
-// prefer array at payload.data.conversations (falls back if layout differs)
-const conversations =
-  payload?.payload?.data?.conversations ??
-  payload?.data?.conversations ??
-  payload?.conversations ??
-  [];
+function authHeaders() {
+  const h = { accept: "application/json" };
+  if (process.env.BOOM_BEARER) h.authorization = `Bearer ${process.env.BOOM_BEARER}`;
+  if (process.env.BOOM_COOKIE) h.cookie = process.env.BOOM_COOKIE;
+  return h;
+}
+
+async function fetchListPage(pageIndex /* 0-based */) {
+  const u = new URL(process.env.CONVERSATIONS_URL);
+  if (LIMIT_PARAM)  u.searchParams.set(LIMIT_PARAM, String(PAGE_SIZE));
+  if (OFFSET_PARAM) {
+    const looksLikePage = /page/i.test(OFFSET_PARAM);
+    u.searchParams.set(OFFSET_PARAM, String(looksLikePage ? (pageIndex + 1) : (pageIndex * PAGE_SIZE)));
+  }
+  const r = await fetch(u, { headers: authHeaders(), redirect: "manual" });
+  const text = await r.text();
+  let payload;
+  try { payload = JSON.parse(text); } catch { return []; }
+  return (
+    payload?.payload?.data?.conversations ??
+    payload?.data?.conversations ??
+    payload?.conversations ?? []
+  ).filter(Boolean);
+}
+
+const [page1, page2] = await Promise.all([fetchListPage(0), fetchListPage(1)]);
+const conversationsRaw = [...page1, ...page2];
+const idOf = (c) => String(c?.id ?? c?.conversation_id ?? c?.uuid ?? c?._id ?? "");
+const conversations = Array.from(new Map(conversationsRaw.map(c => [idOf(c), c])).values());
+
+/* update the default check window */
+const CHECK_LIMIT = Number(process.env.CHECK_LIMIT || 60);
 
 // conversations array is already defined above
 // Ensure we process the most recent threads first (fallback to any timestamp we can find)
@@ -266,7 +274,6 @@ conversations.sort((a, b) => {
 });
 
 // map id -> conversation for quick lookup
-const idOf = (c) => String(c?.id ?? c?.conversation_id ?? c?.uuid ?? c?._id ?? "");
 const byId = new Map(conversations.filter(Boolean).map(c => [idOf(c), c]));
 
 function buildConversationPool() {
@@ -289,8 +296,7 @@ if (pool.length === 0) {
   console.log("No conversation IDs found. Check CONVERSATIONS_URL and auth (BOOM_BEARER/BOOM_COOKIE).");
   process.exit(0);
 }
-// Choose the most-recent window (default 50; overridable via env)
-const CHECK_LIMIT = Number(process.env.CHECK_LIMIT ?? 50);
+// Choose the most-recent window (default 60; overridable via env)
 const selected = selectTop50(pool).slice(0, CHECK_LIMIT);
 assertTop50(pool, selected, CHECK_LIMIT);
 const newest = selected[0];
