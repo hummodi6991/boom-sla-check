@@ -5,7 +5,7 @@ import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { conversationLink, conversationIdDisplay } from "./lib/links.js";
+import { makeConversationLink, conversationIdDisplay } from "./lib/links.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 const logger = console;
@@ -389,7 +389,7 @@ for (const { id } of toCheck) {
         }) ||
         await resolveViaInternalEndpoint(lookupId);
 
-      const url = conversationLink({ uuid, legacyId: convId });
+      const url = makeConversationLink({ uuid, legacyId: convId });
       if (!url) {
         logger?.warn?.({ convId }, 'skip alert: cannot resolve conversation link');
         metrics?.increment?.('alerts.skipped_missing_uuid');
