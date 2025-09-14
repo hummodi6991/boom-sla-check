@@ -354,7 +354,12 @@ for (const { id } of toCheck) {
       const convId = id;
       const uuid = await tryResolveConversationUuid(lookupId, {
         inlineThread,
-        onDebug: (d) => logger?.debug?.({ convId, ...d }, 'uuid resolution attempted'),
+        fetchFirstMessage: async (idOrSlug) => {
+          const headers = authHeaders();
+          const r = await fetchMessagesWithRetry(idOrSlug, headers, { attempts: 1 });
+          return r.ok ? r.messages[0] : null;
+        },
+        onDebug: (d) => logger?.debug?.(d, 'uuid resolution attempted'),
       });
 
       if (!uuid) {
