@@ -1,4 +1,4 @@
-import { conversationLink } from '../../shared/lib/links';
+import { makeConversationLink } from '../../shared/lib/links';
 import { verifyConversationLink } from '../../shared/lib/verifyLink';
 import { metrics } from '../../../lib/metrics';
 
@@ -8,7 +8,7 @@ export async function buildAlertEmail(
 ) {
   const uuid = event?.conversation_uuid;
   const legacyId = event?.legacyId;
-  const url = conversationLink({ uuid, legacyId });
+  const url = makeConversationLink({ uuid, legacyId });
   if (!url) {
     deps?.logger?.warn({ event }, 'skip alert: missing conversation id');
     metrics.increment('alerts.skipped_missing_uuid');

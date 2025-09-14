@@ -1,25 +1,25 @@
 import { test, expect } from '@playwright/test';
-import { conversationLink } from '../apps/shared/lib/links';
+import { makeConversationLink } from '../apps/shared/lib/links';
 import { buildAlertEmail } from '../apps/worker/mailer/alerts';
 import { metrics } from '../lib/metrics';
 
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
 
-test('conversationLink builds ?conversation when uuid provided', () => {
-  expect(conversationLink({ uuid })).toBe(
+test('makeConversationLink builds ?conversation when uuid provided', () => {
+  expect(makeConversationLink({ uuid })).toBe(
     `${BASE}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
   );
 });
 
-test('conversationLink builds ?legacyId when uuid missing', () => {
-  expect(conversationLink({ legacyId: 123 })).toBe(
-    `${BASE}/dashboard/guest-experience/cs?legacyId=123`
+test('makeConversationLink builds /r/legacy when uuid missing', () => {
+  expect(makeConversationLink({ legacyId: 123 })).toBe(
+    `${BASE}/r/legacy/123`
   );
 });
 
-test('conversationLink returns null when neither id provided', () => {
-  expect(conversationLink({})).toBeNull();
+test('makeConversationLink returns null when neither id provided', () => {
+  expect(makeConversationLink({})).toBeNull();
 });
 
 async function simulateAlert(event: any, deps: any) {
@@ -67,7 +67,7 @@ test('mailer falls back to legacyId when uuid missing', async () => {
   const emails: any[] = [];
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
-  const verify = async (url: string) => url.includes('legacyId=123');
+  const verify = async (url: string) => url.includes('/r/legacy/123');
   const orig = metrics.increment;
   metrics.increment = (n: string) => metricsArr.push(n);
   await simulateAlert({ legacyId: 123 }, {
@@ -77,6 +77,6 @@ test('mailer falls back to legacyId when uuid missing', async () => {
   });
   metrics.increment = orig;
   expect(emails.length).toBe(1);
-  expect(emails[0].html).toContain(`?legacyId=123`);
+  expect(emails[0].html).toContain(`/r/legacy/123`);
   expect(metricsArr).toContain('alerts.sent_with_legacyId');
 });
