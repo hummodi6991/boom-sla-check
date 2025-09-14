@@ -1,5 +1,6 @@
 // --- auth + logging + email helpers ---
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import nodemailer from "nodemailer";
 import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
@@ -9,6 +10,30 @@ import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 const logger = console;
 const metrics = { increment: () => {} };
+const RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL || process.env.APP_URL || 'https://app.boomnow.com';
+const RESOLVE_SECRET = process.env.RESOLVE_SECRET || '';
+
+export async function resolveViaInternalEndpoint(idOrSlug) {
+  if (!RESOLVE_SECRET) return null;
+  const ts = Date.now();
+  const nonce = crypto.randomBytes(8).toString('hex');
+  const params = new URLSearchParams({ id: String(idOrSlug), ts: String(ts), nonce });
+  const payload = `id=${idOrSlug}&ts=${ts}&nonce=${nonce}`;
+  const sig = crypto.createHmac('sha256', RESOLVE_SECRET).update(payload).digest('hex');
+  params.set('sig', sig);
+  const base = RESOLVE_BASE_URL.endsWith('/') ? RESOLVE_BASE_URL.slice(0, -1) : RESOLVE_BASE_URL;
+  const url = `${base}/api/internal/resolve-conversation?${params.toString()}`;
+  try {
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) return null;
+    const { uuid } = await res.json();
+    return /^[0-9a-f-]{36}$/i.test(uuid) ? uuid.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+if (typeof globalThis.__CRON_TEST__ === 'undefined') {
 
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
@@ -352,15 +377,17 @@ for (const { id } of toCheck) {
       // Build a universal conversation link
       const lookupId = conv?.uuid ?? conv?.id ?? id;
       const convId = id;
-      const uuid = await tryResolveConversationUuid(lookupId, {
-        inlineThread,
-        fetchFirstMessage: async (idOrSlug) => {
-          const headers = authHeaders();
-          const r = await fetchMessagesWithRetry(idOrSlug, headers, { attempts: 1 });
-          return r.ok ? r.messages[0] : null;
-        },
-        onDebug: (d) => logger?.debug?.(d, 'uuid resolution attempted'),
-      });
+      const uuid =
+        await tryResolveConversationUuid(lookupId, {
+          inlineThread,
+          fetchFirstMessage: async (idOrSlug) => {
+            const headers = authHeaders();
+            const r = await fetchMessagesWithRetry(idOrSlug, headers, { attempts: 1 });
+            return r.ok ? r.messages[0] : null;
+          },
+          onDebug: (d) => logger?.debug?.({ convId, ...d }, 'uuid resolution attempted'),
+        }) ||
+        await resolveViaInternalEndpoint(lookupId);
 
       if (!uuid) {
         logger?.warn?.({ convId }, 'skip alert: cannot resolve conversation UUID');
@@ -415,5 +442,7 @@ console.log(`done: checked=${checked}, alerted=${alerted}, skipped=${skippedCoun
 
 if (skipped.length) {
   logger.info({ skipped }, 'alerts skipped due to missing UUID');
+}
+
 }
 
