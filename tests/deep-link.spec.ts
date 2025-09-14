@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 
 test('deep-link to conversation loads without runtime errors', async ({ page }) => {
   const id = 'test-123';
-  await page.goto(`http://localhost:3000/dashboard/guest-experience/cs?conversation=${id}`);
+  await page.goto(`http://127.0.0.1:3000/dashboard/guest-experience/cs?conversation=${id}`);
 
   // No fatal overlay/dialog appears
   const errorDialog = page.getByText(/TypeError: undefined is not an object/);
