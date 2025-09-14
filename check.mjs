@@ -1,10 +1,10 @@
 import fs from "fs";
-import translate from "@vitalets/google-translate-api";
 import { sendAlert } from "./lib/email.js";
 import { conversationDeepLinkFromUuid, conversationIdDisplay } from "./lib/links.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
+import { isClosingStatement } from "./src/lib/isClosingStatement.js";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
 const logger = console;
@@ -597,58 +597,6 @@ function tsOf(m) {
     null;
   const d = t ? new Date(t) : null;
   return d && !isNaN(+d) ? d : null;
-}
-
-function messageBody(m) {
-  return (
-    m.body ||
-    m.body_text ||
-    m.text ||
-    m.message ||
-    m.content ||
-    ""
-  ).toString();
-}
-
-const CLOSING_PHRASES = [
-  "bye",
-  "goodbye",
-  "see you",
-  "see ya",
-  "cya",
-  "talk to you later",
-  "talk soon",
-  "thanks, bye",
-  "thanks bye",
-  "thank you, bye",
-  "thank you bye",
-  "that's all",
-  "no more questions",
-  "no further questions",
-  "cheers",
-  "take care",
-  "later",
-  "laterz",
-];
-
-const CLOSING_RE = /(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!.\s]*$/;
-
-async function isClosingStatement(m) {
-  const txt = messageBody(m).toLowerCase();
-  if (!txt.trim()) return false;
-  if (CLOSING_PHRASES.some((p) => txt.includes(p))) return true;
-  if (CLOSING_RE.test(txt)) return true;
-
-  // Translate to English to catch closings in other languages.
-  try {
-    const res = await translate(txt, { to: "en" });
-    const translated = (res?.text || "").toLowerCase();
-    if (CLOSING_PHRASES.some((p) => translated.includes(p))) return true;
-    if (CLOSING_RE.test(translated)) return true;
-  } catch (err) {
-    console.warn("Translation failed:", err.message);
-  }
-  return false;
 }
 
 async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {

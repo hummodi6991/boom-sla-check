@@ -2,12 +2,12 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import nodemailer from "nodemailer";
-import translate from "@vitalets/google-translate-api";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 import { makeConversationLink, conversationIdDisplay } from "./lib/links.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
+import { isClosingStatement } from "./src/lib/isClosingStatement.js";
 const logger = console;
 const metrics = { increment: () => {} };
 const RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL || process.env.APP_URL || 'https://app.boomnow.com';
@@ -32,9 +32,6 @@ export async function resolveViaInternalEndpoint(idOrSlug) {
     return null;
   }
 }
-
-if (typeof globalThis.__CRON_TEST__ === 'undefined') {
-
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
 // ---------------------------
@@ -175,16 +172,7 @@ function tsOf(m) {
   const d = t ? new Date(t) : null;
   return d && !isNaN(+d) ? d : null;
 }
-async function isClosingStatement(m) {
-  const txt = String(firstDefined(m.body, m.text, m.message, m.content) || "").toLowerCase().trim();
-  if (!txt) return false;
-  if (/(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!. \s]*$/.test(txt)) return true;
-  try {
-    const res = await translate(txt, { to: "en" });
-    return /(thanks[^a-z0-9]{0,5})?(bye|goodbye|take care|cya|see\s+ya|later|cheers)[!. \s]*$/.test((res?.text||"").toLowerCase());
-  } catch { return false; }
-}
-async function evaluateUnanswered(messages, now = new Date(), slaMin = 15) {
+export async function evaluateUnanswered(messages, now = new Date(), slaMin = 15) {
   const list = (messages||[]).map(m => {
     const ts = tsOf(m); const { role, aiStatus } = classifyMessage(m);
     return ts ? { m, ts, role, aiStatus } : null;
@@ -206,6 +194,7 @@ async function evaluateUnanswered(messages, now = new Date(), slaMin = 15) {
     ? { ok:false, reason:"guest_unanswered", minsSinceAgent: Math.floor(diffMs/60000), lastGuestTs }
     : { ok:true, reason:"within_sla", minsSinceAgent: Math.floor(diffMs/60000), lastGuestTs };
 }
+if (typeof globalThis.__CRON_TEST__ === 'undefined') {
 
 const BEARER = process.env.BOOM_BEARER || "";
 const COOKIE = process.env.BOOM_COOKIE || "";
