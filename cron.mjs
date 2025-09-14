@@ -300,12 +300,14 @@ if (pool.length === 0) {
   console.log("No conversation IDs found. Check CONVERSATIONS_URL and auth (BOOM_BEARER/BOOM_COOKIE).");
   process.exit(0);
 }
-const selected = selectTop50(pool);
-assertTop50(pool, selected);
+// Choose the most-recent window (default 50; overridable via env)
+const CHECK_LIMIT = Number(process.env.CHECK_LIMIT ?? 50);
+const selected = selectTop50(pool).slice(0, CHECK_LIMIT);
+assertTop50(pool, selected, CHECK_LIMIT);
 const newest = selected[0];
 const oldest = selected[selected.length - 1];
 console.log(`selected window: newest=${newest.id}@${newest.lastActivityAt}  oldest=${oldest.id}@${oldest.lastActivityAt}`);
-console.log(`processing objectively newest 50 conversations`);
+console.log(`processing objectively newest ${CHECK_LIMIT} conversations`);
 const toCheck = selected;
 
 console.log(`starting per-conversation checks: ${toCheck.length} ids (using inline thread when available)`);
