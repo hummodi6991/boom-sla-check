@@ -27,20 +27,22 @@ export default function GuestExperience({ initialConversationId }: { initialConv
   if (error) return <InlineError message="Failed to load conversation." />;
   if (!s && initialConversationId) return null;
 
-  const related_reservations = Array.isArray(s?.related_reservations)
-    ? s!.related_reservations
+  // Harden against partially shaped data
+  const safe = s ?? { related_reservations: [] as any[] };
+  const related_reservations = Array.isArray(safe?.related_reservations)
+    ? safe.related_reservations
     : [];
 
-  const hasRelated = (s?.related_reservations?.length ?? 0) > 0;
+  const hasRelated = (related_reservations.length ?? 0) > 0;
 
   return (
     <main style={{ padding: 24 }}>
       Guest Experience {initialConversationId ? `(conversation ${initialConversationId})` : ''}
-      {s && (
+      {safe && (
         <div>
           <h2>Related Reservations</h2>
           {hasRelated ? (
-            (s?.related_reservations ?? []).map((r) => <div key={r.id}>{r.id}</div>)
+            (related_reservations ?? []).map((r) => <div key={r.id}>{r.id}</div>)
           ) : (
             <div>No related reservations.</div>
           )}
