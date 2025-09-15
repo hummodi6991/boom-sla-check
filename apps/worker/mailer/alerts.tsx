@@ -1,4 +1,4 @@
-import { makeConversationLink } from '../../shared/lib/links';
+import { makeConversationLink, appUrl } from '../../shared/lib/links';
 import { verifyConversationLink } from '../../shared/lib/verifyLink';
 import { metrics } from '../../../lib/metrics';
 
@@ -7,17 +7,17 @@ export async function buildAlertEmail(
   deps?: { logger?: any; verify?: (url: string) => Promise<boolean> }
 ) {
   const uuid = event?.conversation_uuid;
-  if (!uuid) {
-    deps?.logger?.warn(
-      { event },
-      'skip alert: missing conversation_uuid; include a UUID per docs/conversation-uuid-migration.md'
-    );
-    metrics.increment('alerts.skipped_missing_uuid');
-    return null;
+  // Prefer a proper UUID deep-link
+  let url = makeConversationLink({ uuid });
+  // Fallback: shortlink that resolves server-side
+  if (!url && event?.legacyId != null && String(event.legacyId).trim() !== '') {
+    const raw = String(event.legacyId).trim();
+    const base = appUrl();
+    const isNum = /^\d+$/.test(raw);
+    url = `${base}${isNum ? '/r/legacy/' : '/r/conversation/'}${encodeURIComponent(raw)}`;
   }
-  const url = makeConversationLink({ uuid });
   if (!url) {
-    deps?.logger?.warn({ event }, 'skip alert: invalid conversation_uuid');
+    deps?.logger?.warn({ event }, 'skip alert: missing resolvable id (uuid/legacyId)');
     metrics.increment('alerts.skipped_missing_uuid');
     return null;
   }
@@ -27,6 +27,6 @@ export async function buildAlertEmail(
     metrics.increment('alerts.skipped_link_preflight');
     return null;
   }
-  metrics.increment('alerts.sent_with_uuid');
+  metrics.increment(uuid ? 'alerts.sent_with_uuid' : 'alerts.sent_with_legacy_shortlink');
   return `<p>Alert for conversation <a href="${url}">${url}</a></p>`;
 }

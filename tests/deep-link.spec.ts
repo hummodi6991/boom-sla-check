@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
+import { startTestServer, stopTestServer } from './helpers/nextServer';
 
 // Regression test: deep-link to conversation should not crash even if data is slow/empty
 
 test('deep-link to conversation loads without runtime errors', async ({ page }) => {
+  const { server, port } = await startTestServer();
   const id = 'test-123';
-  await page.goto(`http://127.0.0.1:3000/dashboard/guest-experience/cs?conversation=${id}`);
+  await page.goto(`http://localhost:${port}/dashboard/guest-experience/cs?conversation=${id}`);
 
   // No fatal overlay/dialog appears
   const errorDialog = page.getByText(/TypeError: undefined is not an object/);
@@ -12,4 +14,5 @@ test('deep-link to conversation loads without runtime errors', async ({ page }) 
 
   // Page reaches a stable, interactive state
   await expect(page).toHaveURL(/\/dashboard\/guest-experience\/cs/);
+  await stopTestServer(server);
 });
