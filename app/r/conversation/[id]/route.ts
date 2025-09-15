@@ -13,9 +13,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const to = uuid
     ? conversationDeepLinkFromUuid(uuid)
     : (/^\d+$/.test(raw)
-        // Numeric legacy id → let the server resolver map to UUID
+        // Numeric legacy id → hop through the server resolver
         ? `${base}/r/legacy/${encodeURIComponent(raw)}`
-        // Non‑numeric slug → open CS with the slug preserved
+        // Non-numeric id/slug → open CS with the id preserved (client can resolve)
         : `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(raw)}`);
   return NextResponse.redirect(to, 302);
 }
