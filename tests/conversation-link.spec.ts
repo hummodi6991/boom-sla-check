@@ -1,10 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { makeConversationLink } from '../apps/shared/lib/links';
+import { verifyLinkToken } from '../apps/shared/lib/linkToken';
 import { buildAlertEmail } from '../apps/worker/mailer/alerts';
 import { metrics } from '../lib/metrics';
 
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
+
+test.beforeEach(() => {
+  process.env.LINK_SECRET = 'test-secret';
+});
 
 test('makeConversationLink builds ?conversation when uuid provided', () => {
   expect(makeConversationLink({ uuid })).toBe(
@@ -43,7 +48,12 @@ test('mailer uses uuid when available', async () => {
   const emails: any[] = [];
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
-  const verify = async (url: string) => url.includes(uuid);
+  const verify = async (url: string) => {
+    const match = url.match(/\/r\/t\/([^/?#]+)/);
+    if (!match) return false;
+    const res = verifyLinkToken(match[1]);
+    return 'uuid' in res && res.uuid === uuid;
+  };
   const orig = metrics.increment;
   metrics.increment = (n: string) => metricsArr.push(n);
   await simulateAlert({ conversation_uuid: uuid }, {
@@ -53,7 +63,14 @@ test('mailer uses uuid when available', async () => {
   });
   metrics.increment = orig;
   expect(emails.length).toBe(1);
-  expect(emails[0].html).toContain(`?conversation=${uuid}`);
+  const href = emails[0].html.match(/href="([^"]+)"/i)?.[1];
+  expect(href).toBeDefined();
+  const parsed = href ? new URL(href) : null;
+  expect(parsed?.pathname.startsWith('/r/t/')).toBe(true);
+  const token = parsed?.pathname.split('/').pop();
+  if (!token) throw new Error('missing token in href');
+  const decoded = verifyLinkToken(token);
+  expect('uuid' in decoded ? decoded.uuid : null).toBe(uuid);
   expect(metricsArr).toContain('alerts.sent_with_uuid');
 });
 

@@ -1,12 +1,25 @@
 import { test, expect } from '@playwright/test';
 import { startTestServer, stopTestServer } from '../tests/helpers/nextServer';
+import { makeLinkToken } from '../apps/shared/lib/linkToken';
 
-test('legacy shortlink redirects to deep link', async ({ page }) => {
+const uuid = '123e4567-e89b-12d3-a456-426614174000';
+
+test.use({ ignoreHTTPSErrors: true });
+
+test.beforeEach(() => {
+  process.env.LINK_SECRET = 'test-secret';
+});
+
+test('token shortlink redirects to deep link', async ({ page }) => {
   const { server, port } = await startTestServer();
-  await page.goto(`http://localhost:${port}/r/conversation/abc123?from=email`, { waitUntil: 'domcontentloaded' });
+  process.env.APP_URL = `http://localhost:${port}`;
+  const token = makeLinkToken({ uuid, exp: Math.floor(Date.now() / 1000) + 60 });
+  await page.goto(`http://localhost:${port}/r/t/${token}?from=email`, {
+    waitUntil: 'domcontentloaded',
+  });
   const u = new URL(page.url());
   expect(u.pathname).toBe('/dashboard/guest-experience/cs');
-  expect(u.searchParams.get('conversation')).toBe('abc123');
+  expect(u.searchParams.get('conversation')).toBe(uuid);
   expect(u.searchParams.get('from')).toBeNull();
   await stopTestServer(server);
 });
