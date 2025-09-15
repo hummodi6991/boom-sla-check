@@ -388,16 +388,15 @@ for (const { id } of toCheck) {
 
       // Build a working link:
       //  - If we have a UUID, use the canonical deep link (?conversation=<uuid>)
-      //  - If we *don't* have a UUID:
-      //      * numeric id → use ?legacyId=<id> (CS page will resolve → UUID and update URL)
-      //      * non-numeric slug → use the short redirect (/r/conversation/<id>)
+      //  - If we *don't* have a UUID, use a resolver link:
+      //      * numeric id → /r/legacy/<id>
+      //      * non-numeric slug → /r/conversation/<slug>
       const base = (process.env.APP_URL || 'https://app.boomnow.com').replace(/\/+$/,'');
-      const isNumericId = /^\d+$/.test(String(lookupId));
-      const url =
-        makeConversationLink({ uuid }) ||
-        (isNumericId
-          ? `${base}/dashboard/guest-experience/cs?legacyId=${encodeURIComponent(String(lookupId))}`
-          : `${base}/r/conversation/${encodeURIComponent(String(lookupId))}`);
+      const lookup = String(lookupId);
+      const fallbackUrl = /^\d+$/.test(lookup)
+        ? `${base}/r/legacy/${encodeURIComponent(lookup)}`
+        : `${base}/r/conversation/${encodeURIComponent(lookup)}`;
+      const url = makeConversationLink({ uuid }) || fallbackUrl;
       const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
 
       try {
