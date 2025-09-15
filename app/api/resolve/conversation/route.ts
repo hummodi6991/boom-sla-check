@@ -6,15 +6,20 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 
 async function dbLookup(legacyId: number) {
   const alias = await prisma.conversation_aliases.findUnique({ where: { legacy_id: legacyId } });
-  if (alias?.uuid) return alias.uuid.toLowerCase();
-  const row = await prisma.conversation.findFirst({ where: { legacyId }, select: { uuid: true } });
-  if (row?.uuid) {
+  if (alias?.uuid && UUID_RE.test(alias.uuid)) {
+    return alias.uuid.toLowerCase();
+  }
+
+  const row = await prisma.conversation.findFirst({ where: { legacyId } });
+  const uuid = row?.uuid && UUID_RE.test(row.uuid) ? row.uuid.toLowerCase() : null;
+  if (uuid) {
+    const slug = typeof row?.slug === 'string' ? row.slug : undefined;
     await prisma.conversation_aliases.upsert({
       where: { legacy_id: legacyId },
-      create: { legacy_id: legacyId, uuid: row.uuid.toLowerCase() },
-      update: { uuid: row.uuid.toLowerCase(), last_seen_at: new Date() },
+      create: { legacy_id: legacyId, uuid, ...(slug !== undefined ? { slug } : {}) },
+      update: { uuid, ...(slug !== undefined ? { slug } : {}), last_seen_at: new Date() },
     });
-    return row.uuid.toLowerCase();
+    return uuid;
   }
   return null;
 }
