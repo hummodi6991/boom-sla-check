@@ -39,7 +39,7 @@ export default function CsPage() {
             setUuid(u.toLowerCase());
             const sp = new URLSearchParams(window.location.search);
             sp.delete('legacyId');
-            if (numericConversation) sp.delete('conversation'); // prevent loops
+            if (numericConversation) sp.delete('conversation');
             sp.set('conversation', u.toLowerCase());
             window.history.replaceState({}, '', `${window.location.pathname}?${sp.toString()}`);
           } else if (!data) {
