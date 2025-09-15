@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server.js';
-import { tryResolveConversationUuid } from '../../../../apps/server/lib/conversations';
+// Use robust JS resolver (supports legacyId/slug/redirect probe)
+import { tryResolveConversationUuid } from '../../../../apps/server/lib/conversations.js';
 import { conversationDeepLinkFromUuid, appUrl } from '../../../../apps/shared/lib/links';
 
 export const runtime = 'nodejs';
