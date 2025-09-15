@@ -9,7 +9,7 @@ export const revalidate = 0;
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const raw = params.id;
-  const uuid = await tryResolveConversationUuid(raw);
+  const uuid = await tryResolveConversationUuid(raw, { skipRedirectProbe: true });
   const to = uuid
     ? conversationDeepLinkFromUuid(uuid)
     : `${appUrl()}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(raw)}`;
