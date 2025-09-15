@@ -386,28 +386,47 @@ for (const { id } of toCheck) {
         }) ||
         await resolveViaInternalEndpoint(lookupId);
 
-      // Build a working link:
-      //  - If we have a UUID, use the canonical deep link (?conversation=<uuid>)
-      //  - If we *don't* have a UUID, use a resolver link:
-      //      * numeric id → /r/legacy/<id>
-      //      * non-numeric slug → /r/conversation/<slug>
+      // Prefer canonical deep link; otherwise fall back to a CS link that the app
+      // can auto-resolve (for numeric ids) or the server shortlink.
       const base = (process.env.APP_URL || 'https://app.boomnow.com').replace(/\/+$/,'');
-      const lookup = String(lookupId);
-      const fallbackUrl = /^\d+$/.test(lookup)
-        ? `${base}/r/legacy/${encodeURIComponent(lookup)}`
-        : `${base}/r/conversation/${encodeURIComponent(lookup)}`;
-      const url = makeConversationLink({ uuid }) || fallbackUrl;
+      const lookupStr = String(lookupId);
+      const isNumeric = /^\d+$/.test(lookupStr);
+      let url =
+        makeConversationLink({ uuid }) ||
+        (isNumeric
+          ? `${base}/r/legacy/${encodeURIComponent(lookupStr)}`
+          : `${base}/r/conversation/${encodeURIComponent(lookupStr)}`);
       const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
 
+      // Preflight: shortlinks must redirect to a deep link; otherwise fall back to CS?conversation=<id>.
       try {
         const pre = await fetch(url, { method: 'GET', redirect: 'manual' });
-        if (!(pre.ok || (pre.status >= 300 && pre.status < 400))) throw new Error(String(pre.status));
+        const isShort = url.includes('/r/legacy/') || url.includes('/r/conversation/');
+        const loc = pre.headers?.get?.('location') || '';
+        const hasUuid = /[?&]conversation=([0-9a-f-]{36})/i.test(loc);
+        if (isShort && !(pre.status >= 300 && pre.status < 400 && hasUuid)) {
+          throw new Error('shortlink_preflight_failed');
+        }
+        if (!isShort && !(pre.ok || (pre.status >= 300 && pre.status < 400))) {
+          throw new Error(String(pre.status));
+        }
       } catch {
-        logger?.warn?.({ convId, url }, 'skip alert: link did not pass preflight');
-        metrics?.increment?.('alerts.skipped_link_preflight');
-        skipped.push(convId);
-        skippedCount++;
-        continue;
+        // Last resort: let the CS page resolve numeric ids client-side
+        const ui = `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(lookupStr)}`;
+        try {
+          const pre2 = await fetch(ui, { method: 'GET', redirect: 'manual' });
+          if (pre2.ok || (pre2.status >= 300 && pre2.status < 400)) {
+            url = ui;
+          } else {
+            throw new Error('ui_fallback_failed');
+          }
+        } catch {
+          logger?.warn?.({ convId, url }, 'skip alert: link did not pass preflight');
+          metrics?.increment?.('alerts.skipped_link_preflight');
+          skipped.push(convId);
+          skippedCount++;
+          continue;
+        }
       }
 
       console.log(

@@ -12,7 +12,7 @@ export default function CsPage() {
   const [uuid, setUuid] = useState<string | null>(
     conversation && UUID_RE.test(conversation) ? conversation.toLowerCase() : null
   );
-  // Also treat ?conversation=<number> as a legacyId to auto-resolve
+  // NEW: treat ?conversation=<number> as a legacy id to auto-resolve
   const numericConversation =
     conversation && !UUID_RE.test(conversation) && /^\d+$/.test(conversation)
       ? conversation
