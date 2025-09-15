@@ -57,6 +57,7 @@ jobs:
       SMTP_PASS:   ${{ secrets.SMTP_PASS }}
       ALERT_TO:    ${{ secrets.ALERT_TO }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      LINK_SECRET:     ${{ secrets.LINK_SECRET }}
       # Auth for the conversations endpoint (either may be empty)
       BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
       BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
