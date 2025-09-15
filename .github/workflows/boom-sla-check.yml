@@ -42,7 +42,7 @@ jobs:
             npm install --no-fund --no-audit
           fi
 
-      - name: Debug conversations endpoint
+      - name: Debug conversations endpoint (with auth)
         continue-on-error: true
         shell: bash
         env:
@@ -63,19 +63,36 @@ jobs:
           fi
           echo "Hitting (sanitized): $url"
           hdrs=(-H 'Accept: application/json' -H 'User-Agent: curl/7' -H 'Referer: https://app.boomnow.com/' -H 'X-Requested-With: XMLHttpRequest')
+          # Ignore any pre-set AUTH_HEADER; it causes arg-splitting in curl
+          unset AUTH_HEADER || true
+          HEADER=""
           if [[ -n "${BOOM_BEARER:-}" ]]; then
             echo "Using Bearer auth"
-            hdrs+=(-H "Authorization: Bearer ${BOOM_BEARER}")
+            BB=$(printf '%s' "${BOOM_BEARER}" | tr -d '\r\n')
+            HEADER="Authorization: Bearer ${BB}"
           elif [[ -n "${BOOM_COOKIE:-}" ]]; then
             echo "Using Cookie auth"
-            hdrs+=(-H "Cookie: ${BOOM_COOKIE}")
+            CK=$(printf '%s' "${BOOM_COOKIE}" | tr -d '\r\n')
+            HEADER="Cookie: ${CK}"
           else
             echo "No auth provided; expect 401"
+          fi
+          if [[ -n "$HEADER" ]]; then
+            hdrs+=(-H "$HEADER")
           fi
           # never fail the job here, even on 401
           code=$(curl -sS --globoff -o /tmp/resp.json -w '%{http_code}' "${hdrs[@]}" "$url" || true) || true
           echo "HTTP $code"
           head -c 400 /tmp/resp.json || true
+          if [[ -n "${MESSAGES_URL:-}" ]]; then
+            echo
+            echo "Probing messages endpoint headers"
+            if [[ -n "$HEADER" ]]; then
+              curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$MESSAGES_URL"
+            else
+              curl --globoff -sS -D - -o /dev/null "$MESSAGES_URL"
+            fi
+          fi
 
       - name: Build conversation id & messages URL
         shell: bash

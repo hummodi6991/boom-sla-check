@@ -51,23 +51,22 @@ jobs:
           echo "CONVERSATIONS_URL=${CONVERSATIONS_URL}"
           echo "MESSAGES_URL=${MESSAGES_URL}"
           echo "--- RESPONSE STATUS + HEADERS ---"
-
-          # Build a single header string safely (no embedded quotes),
-          # and disable curl's URL globbing to avoid {} / [] issues.
+          # Ignore any pre-set AUTH_HEADER; it causes arg-splitting
+          unset AUTH_HEADER || true
+          # Build a single header from secrets; strip newlines
           HEADER=""
           if [[ -n "${BOOM_BEARER:-}" ]]; then
-            HEADER="Authorization: Bearer ${BOOM_BEARER}"
+            BB=$(printf '%s' "${BOOM_BEARER}" | tr -d '\r\n')
+            HEADER="Authorization: Bearer ${BB}"
           elif [[ -n "${BOOM_COOKIE:-}" ]]; then
-            HEADER="Cookie: ${BOOM_COOKIE}"
+            CK=$(printf '%s' "${BOOM_COOKIE}" | tr -d '\r\n')
+            HEADER="Cookie: ${CK}"
           fi
-
           if [[ -n "$HEADER" ]]; then
             curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$CONVERSATIONS_URL"
           else
             curl --globoff -sS -D - -o /dev/null "$CONVERSATIONS_URL"
           fi
-
-          # Optional: also sanity-check the messages endpoint
           if [[ -n "${MESSAGES_URL:-}" ]]; then
             echo
             if [[ -n "$HEADER" ]]; then
