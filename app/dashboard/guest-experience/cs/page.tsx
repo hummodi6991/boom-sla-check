@@ -9,14 +9,25 @@ export default function CsPage() {
   const router = useRouter();
   const conversation = params.get('conversation');
   const legacyId = params.get('legacyId');
-  const [uuid, setUuid] = useState<string | null>(conversation && UUID_RE.test(conversation) ? conversation.toLowerCase() : null);
+  const [uuid, setUuid] = useState<string | null>(
+    conversation && UUID_RE.test(conversation) ? conversation.toLowerCase() : null
+  );
+  // Also treat ?conversation=<number> as a legacyId to auto-resolve
+  const numericConversation =
+    conversation && !UUID_RE.test(conversation) && /^\d+$/.test(conversation)
+      ? conversation
+      : null;
   const [resolving, setResolving] = useState(false);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    if (!uuid && legacyId && /^\d+$/.test(legacyId)) {
+    const leg = numericConversation || legacyId;
+    if (!uuid && leg && /^\d+$/.test(leg)) {
       setResolving(true);
-      fetch(`/api/resolve/conversation?legacyId=${encodeURIComponent(legacyId)}`, { method: 'GET', credentials: 'include' })
+      fetch(`/api/resolve/conversation?legacyId=${encodeURIComponent(leg)}`, {
+        method: 'GET',
+        credentials: 'include',
+      })
         .then(r => {
           if (!r.ok) {
             setNotFound(true);
@@ -30,6 +41,7 @@ export default function CsPage() {
             setUuid(u.toLowerCase());
             const sp = new URLSearchParams(window.location.search);
             sp.delete('legacyId');
+            if (numericConversation) sp.delete('conversation');
             sp.set('conversation', u.toLowerCase());
             window.history.replaceState({}, '', `${window.location.pathname}?${sp.toString()}`);
           } else if (!data) {
@@ -39,7 +51,7 @@ export default function CsPage() {
         .catch(() => setNotFound(true))
         .finally(() => setResolving(false));
     }
-  }, [legacyId, uuid]);
+  }, [legacyId, numericConversation, uuid]);
 
   if (notFound) {
     return <div style={{ padding: 16 }}>Conversation not found or has been deleted.</div>;

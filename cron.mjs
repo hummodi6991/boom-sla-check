@@ -386,14 +386,18 @@ for (const { id } of toCheck) {
         }) ||
         await resolveViaInternalEndpoint(lookupId);
 
-      const url = makeConversationLink({ uuid });
-      if (!url) {
-        logger?.warn?.({ convId }, 'skip alert: cannot resolve conversation link');
-        metrics?.increment?.('alerts.skipped_missing_uuid');
-        skipped.push(convId);
-        skippedCount++;
-        continue;
-      }
+      // Build a working link:
+      //  - If we have a UUID, use the canonical deep link (?conversation=<uuid>)
+      //  - If we *don't* have a UUID:
+      //      * numeric id → use ?legacyId=<id> (CS page will resolve → UUID and update URL)
+      //      * non-numeric slug → use the short redirect (/r/conversation/<id>)
+      const base = (process.env.APP_URL || 'https://app.boomnow.com').replace(/\/+$/,'');
+      const isNumericId = /^\d+$/.test(String(lookupId));
+      const url =
+        makeConversationLink({ uuid }) ||
+        (isNumericId
+          ? `${base}/dashboard/guest-experience/cs?legacyId=${encodeURIComponent(String(lookupId))}`
+          : `${base}/r/conversation/${encodeURIComponent(String(lookupId))}`);
       const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
 
       try {
