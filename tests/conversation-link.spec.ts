@@ -56,3 +56,21 @@ test('mailer uses uuid when available', async () => {
   expect(emails[0].html).toContain(`?conversation=${uuid}`);
   expect(metricsArr).toContain('alerts.sent_with_uuid');
 });
+
+test('mailer falls back to /r/legacy when only legacyId is present', async () => {
+  const emails: any[] = [];
+  const metricsArr: string[] = [];
+  const logger = { warn: () => {} };
+  const verify = async (url: string) => url.includes('/r/legacy/456');
+  const orig = metrics.increment;
+  metrics.increment = (n: string) => metricsArr.push(n);
+  await simulateAlert({ legacyId: 456 }, {
+    sendAlertEmail: (x: any) => emails.push(x),
+    logger,
+    verify,
+  });
+  metrics.increment = orig;
+  expect(emails.length).toBe(1);
+  expect(emails[0].html).toContain('/r/legacy/456');
+  expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
+});
