@@ -22,6 +22,7 @@ jobs:
       SMTP_PASS:       ${{ secrets.SMTP_PASS }}
       ALERT_TO:        ${{ secrets.ALERT_TO }}
       ALERT_FROM_NAME: ${{ secrets.ALERT_FROM_NAME }}
+      LINK_SECRET:     ${{ secrets.LINK_SECRET }}
       BOOM_USER:       ${{ secrets.BOOM_USER }}
       BOOM_PASS:       ${{ secrets.BOOM_PASS }}
     steps:
