@@ -39,6 +39,44 @@ jobs:
           else
             npm install --no-fund --no-audit
           fi
+      - name: Debug conversations endpoint (with auth)
+        shell: bash
+        env:
+          CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
+          MESSAGES_URL: ${{ vars.MESSAGES_URL }}
+          BOOM_BEARER: ${{ secrets.BOOM_BEARER }}
+          BOOM_COOKIE: ${{ secrets.BOOM_COOKIE }}
+        run: |
+          set -euo pipefail
+          echo "CONVERSATIONS_URL=${CONVERSATIONS_URL}"
+          echo "MESSAGES_URL=${MESSAGES_URL}"
+          echo "--- RESPONSE STATUS + HEADERS ---"
+
+          # Build a single header string safely (no embedded quotes),
+          # and disable curl's URL globbing to avoid {} / [] issues.
+          HEADER=""
+          if [[ -n "${BOOM_BEARER:-}" ]]; then
+            HEADER="Authorization: Bearer ${BOOM_BEARER}"
+          elif [[ -n "${BOOM_COOKIE:-}" ]]; then
+            HEADER="Cookie: ${BOOM_COOKIE}"
+          fi
+
+          if [[ -n "$HEADER" ]]; then
+            curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$CONVERSATIONS_URL"
+          else
+            curl --globoff -sS -D - -o /dev/null "$CONVERSATIONS_URL"
+          fi
+
+          # Optional: also sanity-check the messages endpoint
+          if [[ -n "${MESSAGES_URL:-}" ]]; then
+            echo
+            if [[ -n "$HEADER" ]]; then
+              curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$MESSAGES_URL"
+            else
+              curl --globoff -sS -D - -o /dev/null "$MESSAGES_URL"
+            fi
+          fi
+
       - name: Run SLA checker
         working-directory: .
         run: node ./check.mjs
