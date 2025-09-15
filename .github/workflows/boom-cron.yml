@@ -82,11 +82,17 @@ jobs:
       - name: Normalize messages URL
         shell: bash
         run: |
-          if [[ "$MESSAGES_URL" != *"{{conversationId}}"* && "$MESSAGES_URL" != *"conversation="* ]]; then
-            echo "MESSAGES_URL=${MESSAGES_URL}?conversation={{conversationId}}" >> $GITHUB_ENV
-          else
-            echo "MESSAGES_URL=${MESSAGES_URL}" >> $GITHUB_ENV
+          set -euo pipefail
+          SAMPLE_ID="00000000-0000-0000-0000-000000000000"
+          NEW_VAL="${MESSAGES_URL:-}"
+          # Replace {{conversationId}} if present
+          NEW_VAL="${NEW_VAL//\{\{conversationId\}\}/$SAMPLE_ID}"
+          # If no conversation query at all, append one
+          if [[ "$NEW_VAL" != *conversation=* ]]; then
+            SEP='?'; [[ "$NEW_VAL" == *\?* ]] && SEP='&'
+            NEW_VAL="${NEW_VAL}${SEP}conversation=${SAMPLE_ID}"
           fi
+          echo "MESSAGES_URL=${NEW_VAL}" >> "$GITHUB_ENV"
       # Sanity-check the endpoint actually returns JSON with our auth
       - name: Debug conversations endpoint (with auth)
         run: |
@@ -94,7 +100,8 @@ jobs:
           echo "CONVERSATIONS_URL=$CONVERSATIONS_URL"
           echo "MESSAGES_URL=$MESSAGES_URL"
           echo "--- RESPONSE STATUS + HEADERS ---"
-          curl -sS -D - \
+          # --globoff prevents {} / [] URL globbing errors if someone leaves placeholders in MESSAGES_URL
+          curl --globoff -sS -D - \
             -H "Accept: application/json" \
             ${BOOM_BEARER:+-H "Authorization: Bearer $BOOM_BEARER"} \
             ${BOOM_COOKIE:+-H "Cookie: $BOOM_COOKIE"} \
