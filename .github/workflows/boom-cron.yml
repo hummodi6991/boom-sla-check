@@ -95,21 +95,34 @@ jobs:
           echo "MESSAGES_URL=${NEW_VAL}" >> "$GITHUB_ENV"
       # Sanity-check the endpoint actually returns JSON with our auth
       - name: Debug conversations endpoint (with auth)
+        shell: bash
         run: |
           set -euo pipefail
-          echo "CONVERSATIONS_URL=$CONVERSATIONS_URL"
-          echo "MESSAGES_URL=$MESSAGES_URL"
+          echo "CONVERSATIONS_URL=${CONVERSATIONS_URL}"
+          echo "MESSAGES_URL=${MESSAGES_URL}"
           echo "--- RESPONSE STATUS + HEADERS ---"
-          # --globoff prevents {} / [] URL globbing errors if someone leaves placeholders in MESSAGES_URL
-          curl --globoff -sS -D - \
-            -H "Accept: application/json" \
-            ${BOOM_BEARER:+-H "Authorization: Bearer $BOOM_BEARER"} \
-            ${BOOM_COOKIE:+-H "Cookie: $BOOM_COOKIE"} \
-            "$CONVERSATIONS_URL" \
-            -o /tmp/body.json | head -n 40
-          echo
-          echo "--- FIRST 400 BYTES OF BODY ---"
-          head -c 400 /tmp/body.json || true; echo
+          unset AUTH_HEADER || true
+          HEADER=""
+          if [[ -n "${BOOM_BEARER:-}" ]]; then
+            BB=$(printf '%s' "${BOOM_BEARER}" | tr -d '\r\n')
+            HEADER="Authorization: Bearer ${BB}"
+          elif [[ -n "${BOOM_COOKIE:-}" ]]; then
+            CK=$(printf '%s' "${BOOM_COOKIE}" | tr -d '\r\n')
+            HEADER="Cookie: ${CK}"
+          fi
+          if [[ -n "$HEADER" ]]; then
+            curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$CONVERSATIONS_URL"
+          else
+            curl --globoff -sS -D - -o /dev/null "$CONVERSATIONS_URL"
+          fi
+          if [[ -n "${MESSAGES_URL:-}" ]]; then
+            echo
+            if [[ -n "$HEADER" ]]; then
+              curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$MESSAGES_URL"
+            else
+              curl --globoff -sS -D - -o /dev/null "$MESSAGES_URL"
+            fi
+          fi
 
       - name: Run SLA checker
         working-directory: .
