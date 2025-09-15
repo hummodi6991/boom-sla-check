@@ -27,12 +27,11 @@ export default function GuestExperience({ initialConversationId }: { initialConv
   if (error) return <InlineError message="Failed to load conversation." />;
   if (!s && initialConversationId) return null;
 
-  // Harden against partially shaped data
-  const safe = s ?? { related_reservations: [] as any[] };
+  // SAFETY: shape the data so property reads never throw on slower browsers
+  const safe = s ?? ({ related_reservations: [] } as any);
   const related_reservations = Array.isArray(safe?.related_reservations)
     ? safe.related_reservations
     : [];
-
   const hasRelated = (related_reservations.length ?? 0) > 0;
 
   return (
