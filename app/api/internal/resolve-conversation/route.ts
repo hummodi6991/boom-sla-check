@@ -4,9 +4,88 @@ import { prisma } from '../../../../lib/db';
 
 const RESOLVE_SECRET = process.env.RESOLVE_SECRET || '';
 const MAX_SKEW_MS = 2 * 60 * 1000; // 2 minutes
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
 function hmac(data: string) {
   return crypto.createHmac('sha256', RESOLVE_SECRET).update(data).digest('hex');
+}
+
+function normalizeUuid(uuid: string | null | undefined) {
+  return uuid && UUID_RE.test(uuid) ? uuid.toLowerCase() : null;
+}
+
+async function resolveLegacyId(legacyId: number) {
+  try {
+    const alias = await prisma.conversation_aliases.findUnique({ where: { legacy_id: legacyId } });
+    const fromAlias = normalizeUuid(alias?.uuid);
+    if (fromAlias) return fromAlias;
+  } catch {}
+
+  try {
+    const row = await prisma.conversation.findFirst({ where: { legacyId } });
+    const uuid = normalizeUuid(row?.uuid);
+    if (uuid) {
+      const slug = typeof row?.slug === 'string' ? row.slug : undefined;
+      await prisma.conversation_aliases.upsert({
+        where: { legacy_id: legacyId },
+        create: { legacy_id: legacyId, uuid, ...(slug !== undefined ? { slug } : {}) },
+        update: { uuid, ...(slug !== undefined ? { slug } : {}), last_seen_at: new Date() },
+      }).catch(() => {});
+      return uuid;
+    }
+  } catch {}
+  return null;
+}
+
+async function resolveSlug(slug: string) {
+  try {
+    const row = await prisma.conversation.findFirst({ where: { slug } });
+    const uuid = normalizeUuid(row?.uuid);
+    if (uuid) {
+      const legacyId = Number.isInteger(row?.legacyId) ? Number(row?.legacyId) : undefined;
+      if (legacyId !== undefined) {
+        await prisma.conversation_aliases
+          .upsert({
+            where: { legacy_id: legacyId },
+            create: { legacy_id: legacyId, uuid, slug },
+            update: { uuid, slug, last_seen_at: new Date() },
+          })
+          .catch(() => {});
+      }
+      return uuid;
+    }
+  } catch {}
+  return null;
+}
+
+async function resolveUuid(uuid: string) {
+  if (!UUID_RE.test(uuid)) return null;
+  try {
+    const row = await prisma.conversation.findUnique?.({ where: { uuid: uuid.toLowerCase() } });
+    return normalizeUuid(row?.uuid);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveAny(id: string) {
+  const raw = (id || '').trim();
+  if (!raw) return null;
+
+  if (UUID_RE.test(raw)) {
+    const hit = await resolveUuid(raw.toLowerCase());
+    if (hit) return hit;
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const legacyId = Number(raw);
+    if (Number.isInteger(legacyId)) {
+      const fromLegacy = await resolveLegacyId(legacyId);
+      if (fromLegacy) return fromLegacy;
+    }
+  }
+
+  return resolveSlug(raw);
 }
 
 export async function GET(req: Request) {
@@ -30,27 +109,19 @@ export async function GET(req: Request) {
 
   const payload = `id=${id}&ts=${ts}&nonce=${nonce}`;
   const expect = hmac(payload);
-  if (!crypto.timingSafeEqual(Buffer.from(expect), Buffer.from(sig))) {
+  const expectedBuf = Buffer.from(expect);
+  const sigBuf = Buffer.from(sig);
+  if (expectedBuf.length !== sigBuf.length || !crypto.timingSafeEqual(expectedBuf, sigBuf)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  // Resolve by uuid, legacyId, or slug
-  const n = Number(id);
-  const uuidLike = /^[0-9a-f-]{36}$/i.test(id);
-  let row = null;
-  if (uuidLike) {
-    row = await prisma.conversation.findFirst({ where: { uuid: id.toLowerCase() }, select: { uuid: true } });
-  }
-  if (!row && Number.isInteger(n)) {
-    row = await prisma.conversation.findFirst({ where: { legacyId: n }, select: { uuid: true } });
-  }
-  if (!row) {
-    row = await prisma.conversation.findFirst({ where: { slug: id }, select: { uuid: true } });
-  }
-
-  if (!row?.uuid) {
+  const uuid = await resolveAny(id);
+  if (!uuid) {
     return NextResponse.json({ error: 'not_found' }, { status: 404 });
   }
 
-  return NextResponse.json({ uuid: row.uuid.toLowerCase() }, { status: 200, headers: { 'Cache-Control': 'no-store' } });
+  return NextResponse.json(
+    { uuid },
+    { status: 200, headers: { 'Cache-Control': 'no-store' } }
+  );
 }
