@@ -162,9 +162,11 @@ export async function tryResolveConversationUuid(idOrUuid, opts = {}) {
   }
 
   // NEW: Redirect probe (public route resolves legacy id/slug → uuid)
-  attempted.push('redirect-probe');
-  const probed = await probeRedirectForUuid(raw);
-  if (probed) return probed;
+  if (!opts.skipRedirectProbe) {
+    attempted.push('redirect-probe');
+    const probed = await probeRedirectForUuid(raw);
+    if (probed) return probed;
+  }
 
   // Optional: expose attempted paths for caller logging (if desired)
   opts.onDebug && opts.onDebug({ convId: raw, attempted });
