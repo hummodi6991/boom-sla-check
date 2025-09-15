@@ -1,4 +1,4 @@
-import { makeConversationLink, appUrl } from '../../shared/lib/links';
+import { makeConversationLink } from '../../shared/lib/links';
 import { verifyConversationLink } from '../../shared/lib/verifyLink';
 import { metrics } from '../../../lib/metrics';
 
@@ -10,11 +10,10 @@ export async function buildAlertEmail(
   // Prefer a proper UUID deep-link
   let url = makeConversationLink({ uuid });
   // Fallback: shortlink that resolves server-side
-  if (!url && event?.legacyId != null && String(event.legacyId).trim() !== '') {
+  if (!url && event?.legacyId != null) {
     const raw = String(event.legacyId).trim();
-    const base = appUrl();
-    const isNum = /^\d+$/.test(raw);
-    url = `${base}${isNum ? '/r/legacy/' : '/r/conversation/'}${encodeURIComponent(raw)}`;
+    const base = (process.env.APP_URL || 'https://app.boomnow.com').replace(/\/+$/,'');
+    url = `${base}${/^\d+$/.test(raw) ? '/r/legacy/' : '/r/conversation/'}${encodeURIComponent(raw)}`;
   }
   if (!url) {
     deps?.logger?.warn({ event }, 'skip alert: missing resolvable id (uuid/legacyId)');
