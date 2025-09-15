@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server.js';
 import { prisma } from '../../../lib/db';
 import { conversationDeepLinkFromUuid, appUrl } from '../../../apps/shared/lib/links';
-import { tryResolveConversationUuid } from '../../../apps/server/lib/conversations';
+// Use robust JS resolver (supports legacyId/slug/redirect probe)
+import { tryResolveConversationUuid } from '../../../apps/server/lib/conversations.js';
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const raw = params.id;

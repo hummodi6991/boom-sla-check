@@ -5,6 +5,6 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   const { id } = params;
-  // Always include safe defaults so client code can render without errors.
+  // Always include safe defaults so client code never crashes on slow/partial data
   return NextResponse.json({ id, related_reservations: [] });
 }
