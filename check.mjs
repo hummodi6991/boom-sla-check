@@ -1,6 +1,7 @@
 import fs from "fs";
 import { sendAlert } from "./lib/email.js";
-import { conversationDeepLinkFromUuid, conversationIdDisplay } from "./lib/links.js";
+import { conversationDeepLinkFromUuid, conversationIdDisplay, appUrl } from "./lib/links.js";
+import { makeLinkToken } from "./lib/linkToken.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
@@ -751,11 +752,24 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
-    const url = conversationDeepLinkFromUuid(uuid);
+    // Prefer a signed short token that always 302s and survives tracking wrappers
+    const base = appUrl().replace(/\/+$/, "");
+    const exp  = Math.floor(Date.now() / 1000) + 7 * 24 * 3600; // 7 days
+    let url;
+    try {
+      const tok = makeLinkToken({ uuid, exp });
+      url = `${base}/r/t/${tok}`;
+    } catch {
+      // Fallback (shouldn't happen if LINK_SECRET is configured)
+      url = conversationDeepLinkFromUuid(uuid);
+    }
     const idDisplay = conversationIdDisplay({ uuid, id: convId });
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${idDisplay}\nOpen: ${url}`;
-    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p><p>Conversation: <strong>${idDisplay}</strong></p><p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p><p style="font-size:12px;color:#666">If the link doesn’t work, copy & paste this URL:<br>${url}</p>`;
+    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>
+      <p>Conversation: <strong>${idDisplay}</strong></p>
+      <p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p>
+      <p style="font-size:12px;color:#666">If the link doesn’t work, copy & paste this URL:<br>${url}</p>`;
     const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
     const key = dedupeKey(convId, lastGuestTs);
     const { dup, state } = isDuplicateAlert(convId, lastGuestTs);
