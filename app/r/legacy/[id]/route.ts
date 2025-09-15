@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server.js';
 import { prisma } from '../../../../lib/db';
-import { appUrl, makeConversationLink } from '../../../../apps/shared/lib/links';
+import { appUrl } from '../../../../apps/shared/lib/links';
 import { isUuid } from '../../../../apps/shared/lib/uuid';
 
 async function resolveUuid(legacyIdStr: string) {
@@ -25,7 +25,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const uuid = await resolveUuid(params.id);
 
   const target = uuid
-    ? makeConversationLink({ uuid }) ?? `${base}/conversation-not-found`
+    ? `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
     : `${base}/conversation-not-found`;
 
   const html = `<!doctype html>
