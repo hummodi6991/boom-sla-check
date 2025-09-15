@@ -1,4 +1,5 @@
 import { makeConversationLink } from '../../shared/lib/links';
+import { makeLinkToken } from '../../shared/lib/linkToken';
 import { verifyConversationLink } from '../../shared/lib/verifyLink';
 import { metrics } from '../../../lib/metrics';
 
@@ -7,8 +8,22 @@ export async function buildAlertEmail(
   deps?: { logger?: any; verify?: (url: string) => Promise<boolean> }
 ) {
   const uuid = event?.conversation_uuid;
-  // Prefer a proper UUID deep-link
-  let url = makeConversationLink({ uuid });
+  let url: string | null = null;
+
+  if (uuid) {
+    try {
+      const base = (process.env.APP_URL || 'https://app.boomnow.com').replace(/\/+$/, '');
+      const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 3600; // 7 days
+      const token = makeLinkToken({ uuid, exp });
+      url = `${base}/r/t/${token}`;
+    } catch (err) {
+      deps?.logger?.warn({ uuid, err }, 'link_token_generation_failed');
+    }
+  }
+
+  if (!url) {
+    url = makeConversationLink({ uuid });
+  }
   // Fallback: shortlink that resolves server-side
   if (!url && event?.legacyId != null) {
     const raw = String(event.legacyId).trim();

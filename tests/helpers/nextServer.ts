@@ -12,6 +12,7 @@ export async function startTestServer(): Promise<StartedServer> {
   const server = http.createServer((req, res) => handle(req, res));
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const port = (server.address() as any).port as number;
+  process.env.APP_URL = `http://localhost:${port}`;
   return { server, port };
 }
 
