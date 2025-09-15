@@ -12,7 +12,7 @@ export default function CsPage() {
   const [uuid, setUuid] = useState<string | null>(
     conversation && UUID_RE.test(conversation) ? conversation.toLowerCase() : null
   );
-  // Treat ?conversation=<number> exactly like ?legacyId=<number>
+  // Treat ?conversation=<number> as a legacy id and auto-resolve it
   const numericConversation =
     conversation && !UUID_RE.test(conversation) && /^\d+$/.test(conversation) ? conversation : null;
   const [resolving, setResolving] = useState(false);
@@ -39,7 +39,7 @@ export default function CsPage() {
             setUuid(u.toLowerCase());
             const sp = new URLSearchParams(window.location.search);
             sp.delete('legacyId');
-            if (numericConversation) sp.delete('conversation');
+            if (numericConversation) sp.delete('conversation'); // prevent loops
             sp.set('conversation', u.toLowerCase());
             window.history.replaceState({}, '', `${window.location.pathname}?${sp.toString()}`);
           } else if (!data) {
