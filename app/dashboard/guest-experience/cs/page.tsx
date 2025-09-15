@@ -12,11 +12,9 @@ export default function CsPage() {
   const [uuid, setUuid] = useState<string | null>(
     conversation && UUID_RE.test(conversation) ? conversation.toLowerCase() : null
   );
-  // NEW: treat ?conversation=<number> as a legacy id to auto-resolve
+  // Treat ?conversation=<number> exactly like ?legacyId=<number>
   const numericConversation =
-    conversation && !UUID_RE.test(conversation) && /^\d+$/.test(conversation)
-      ? conversation
-      : null;
+    conversation && !UUID_RE.test(conversation) && /^\d+$/.test(conversation) ? conversation : null;
   const [resolving, setResolving] = useState(false);
   const [notFound, setNotFound] = useState(false);
 
