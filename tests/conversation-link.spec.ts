@@ -6,9 +6,24 @@ import { metrics } from '../lib/metrics';
 
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
+const ORIGINAL_LINK_SECRET = process.env.LINK_SECRET;
+
+function ensureLinkSecret() {
+  if (!process.env.LINK_SECRET) {
+    process.env.LINK_SECRET = 'test-secret';
+  }
+}
 
 test.beforeEach(() => {
-  process.env.LINK_SECRET = 'test-secret';
+  ensureLinkSecret();
+});
+
+test.afterEach(() => {
+  if (ORIGINAL_LINK_SECRET !== undefined) {
+    process.env.LINK_SECRET = ORIGINAL_LINK_SECRET;
+  } else {
+    delete process.env.LINK_SECRET;
+  }
 });
 
 test('makeConversationLink builds ?conversation when uuid provided', () => {
@@ -49,6 +64,7 @@ test('mailer uses uuid when available', async () => {
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
   const verify = async (url: string) => {
+    if (!url.includes('/r/t/')) return false;
     const match = url.match(/\/r\/t\/([^/?#]+)/);
     if (!match) return false;
     const res = verifyLinkToken(match[1]);
@@ -63,6 +79,7 @@ test('mailer uses uuid when available', async () => {
   });
   metrics.increment = orig;
   expect(emails.length).toBe(1);
+  expect(emails[0].html).toContain('/r/t/');
   const href = emails[0].html.match(/href="([^"]+)"/i)?.[1];
   expect(href).toBeDefined();
   const parsed = href ? new URL(href) : null;
