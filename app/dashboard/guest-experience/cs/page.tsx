@@ -55,7 +55,7 @@ export default function CsPage() {
     return <div style={{ padding: 16 }}>Conversation not found or has been deleted.</div>;
   }
 
-  if (!uuid && (legacyId || resolving)) {
+  if (!uuid && (legacyId || numericConversation || resolving)) {
     return <div style={{ padding: 16 }}>Opening conversation…</div>;
   }
 
