@@ -7,6 +7,8 @@ import { metrics } from '../lib/metrics';
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
 const ORIGINAL_LINK_SECRET = process.env.LINK_SECRET;
+const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
+const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
 
 function ensureLinkSecret() {
   if (!process.env.LINK_SECRET) {
@@ -23,6 +25,16 @@ test.afterEach(() => {
     process.env.LINK_SECRET = ORIGINAL_LINK_SECRET;
   } else {
     delete process.env.LINK_SECRET;
+  }
+  if (ORIGINAL_RESOLVE_SECRET !== undefined) {
+    process.env.RESOLVE_SECRET = ORIGINAL_RESOLVE_SECRET;
+  } else {
+    delete process.env.RESOLVE_SECRET;
+  }
+  if (ORIGINAL_RESOLVE_BASE_URL !== undefined) {
+    process.env.RESOLVE_BASE_URL = ORIGINAL_RESOLVE_BASE_URL;
+  } else {
+    delete process.env.RESOLVE_BASE_URL;
   }
 });
 
@@ -120,4 +132,53 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
   expect(href).toBeDefined();
   expect(href).toContain('/r/t/');
   expect(metricsArr).toContain('alerts.sent_with_uuid');
+});
+
+test('mailer falls back to legacy shortlink when uuid unavailable', async () => {
+  delete process.env.RESOLVE_SECRET;
+  delete process.env.RESOLVE_BASE_URL;
+  const emails: any[] = [];
+  const metricsArr: string[] = [];
+  const logger = { warn: () => {} };
+  const expected = `${BASE}/r/legacy/789`;
+  const verify = async (url: string) => {
+    expect(url).toBe(expected);
+    return true;
+  };
+  const orig = metrics.increment;
+  metrics.increment = (n: string) => metricsArr.push(n);
+  await simulateAlert({ legacyId: 789 }, {
+    sendAlertEmail: (x: any) => emails.push(x),
+    logger,
+    verify,
+  });
+  metrics.increment = orig;
+  expect(emails.length).toBe(1);
+  expect(emails[0].html).toContain(expected);
+  expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
+});
+
+test('mailer falls back to conversation slug when numeric id absent', async () => {
+  delete process.env.RESOLVE_SECRET;
+  delete process.env.RESOLVE_BASE_URL;
+  const slug = 'my-convo';
+  const expected = `${BASE}/r/conversation/${encodeURIComponent(slug)}`;
+  const emails: any[] = [];
+  const metricsArr: string[] = [];
+  const logger = { warn: () => {} };
+  const verify = async (url: string) => {
+    expect(url).toBe(expected);
+    return true;
+  };
+  const orig = metrics.increment;
+  metrics.increment = (n: string) => metricsArr.push(n);
+  await simulateAlert({ slug }, {
+    sendAlertEmail: (x: any) => emails.push(x),
+    logger,
+    verify,
+  });
+  metrics.increment = orig;
+  expect(emails.length).toBe(1);
+  expect(emails[0].html).toContain(expected);
+  expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
 });
