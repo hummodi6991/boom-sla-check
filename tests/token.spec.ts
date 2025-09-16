@@ -39,3 +39,16 @@ test('GET /r/t/:token redirects', async () => {
   expect(res.status).toBe(302);
   expect(res.headers.get('location')).toBe(conversationDeepLinkFromUuid(uuid));
 });
+
+test('GET /r/t/:token prefers request origin for localhost', async () => {
+  setSecret();
+  process.env.APP_URL = 'https://app.boomnow.com';
+  const tok = makeLinkToken({ uuid, exp: Math.floor(Date.now() / 1000) + 60 });
+  const req = new Request(`http://localhost:9999/r/t/${tok}`);
+  const res = await tokenRoute(req, { params: { token: tok } });
+  expect(res.status).toBe(302);
+  expect(res.headers.get('location')).toBe(
+    conversationDeepLinkFromUuid(uuid, { baseUrl: 'http://localhost:9999' })
+  );
+  delete process.env.APP_URL;
+});
