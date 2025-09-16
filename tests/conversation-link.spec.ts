@@ -44,6 +44,12 @@ test('makeConversationLink builds ?conversation when uuid provided', () => {
   );
 });
 
+test('makeConversationLink accepts baseUrl override', () => {
+  expect(
+    makeConversationLink({ uuid, baseUrl: 'http://localhost:4321' })
+  ).toBe('http://localhost:4321/dashboard/guest-experience/cs?conversation=123e4567-e89b-12d3-a456-426614174000');
+});
+
 test('makeConversationLink returns null when uuid missing', () => {
   expect(makeConversationLink({})).toBeNull();
 });
