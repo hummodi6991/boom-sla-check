@@ -8,6 +8,7 @@ import { makeConversationLink, conversationIdDisplay, appUrl } from "./lib/links
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
+import { signResolve } from "./apps/shared/lib/resolveSign.js";
 const logger = console;
 const metrics = { increment: () => {} };
 const RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL || process.env.APP_URL || 'https://app.boomnow.com';
@@ -17,9 +18,9 @@ export async function resolveViaInternalEndpoint(idOrSlug) {
   if (!RESOLVE_SECRET) return null;
   const ts = Date.now();
   const nonce = crypto.randomBytes(8).toString('hex');
-  const params = new URLSearchParams({ id: String(idOrSlug), ts: String(ts), nonce });
-  const payload = `id=${idOrSlug}&ts=${ts}&nonce=${nonce}`;
-  const sig = crypto.createHmac('sha256', RESOLVE_SECRET).update(payload).digest('hex');
+  const id = String(idOrSlug);
+  const params = new URLSearchParams({ id, ts: String(ts), nonce });
+  const sig = signResolve(id, ts, nonce, RESOLVE_SECRET);
   params.set('sig', sig);
   const base = RESOLVE_BASE_URL.endsWith('/') ? RESOLVE_BASE_URL.slice(0, -1) : RESOLVE_BASE_URL;
   const url = `${base}/api/internal/resolve-conversation?${params.toString()}`;

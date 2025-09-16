@@ -1,14 +1,10 @@
 import { NextResponse } from 'next/server.js';
-import crypto from 'node:crypto';
 import { prisma } from '../../../../lib/db';
+import { verifyResolveSignature } from '../../../../apps/shared/lib/resolveSign';
 
 const RESOLVE_SECRET = process.env.RESOLVE_SECRET || '';
 const MAX_SKEW_MS = 2 * 60 * 1000; // 2 minutes
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
-
-function hmac(data: string) {
-  return crypto.createHmac('sha256', RESOLVE_SECRET).update(data).digest('hex');
-}
 
 function normalizeUuid(uuid: string | null | undefined) {
   return uuid && UUID_RE.test(uuid) ? uuid.toLowerCase() : null;
@@ -107,11 +103,15 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'stale' }, { status: 400 });
   }
 
-  const payload = `id=${id}&ts=${ts}&nonce=${nonce}`;
-  const expect = hmac(payload);
-  const expectedBuf = Buffer.from(expect);
-  const sigBuf = Buffer.from(sig);
-  if (expectedBuf.length !== sigBuf.length || !crypto.timingSafeEqual(expectedBuf, sigBuf)) {
+  if (
+    !verifyResolveSignature({
+      id,
+      ts,
+      nonce,
+      sig,
+      secret: RESOLVE_SECRET,
+    })
+  ) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
