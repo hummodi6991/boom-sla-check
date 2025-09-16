@@ -3,6 +3,7 @@ import { sendAlert } from "./lib/email.js";
 import { conversationDeepLinkFromUuid, conversationIdDisplay, appUrl } from "./lib/links.js";
 import { makeLinkToken } from "./lib/linkToken.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
+import { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
@@ -696,7 +697,10 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    const uuid = await tryResolveConversationUuid(convId, { inlineThread });
+    let uuid = await tryResolveConversationUuid(convId, { inlineThread });
+    if (!uuid) {
+      uuid = await resolveViaInternalEndpoint(convId);
+    }
     if (!uuid) {
       logger.warn({ convId }, 'skip alert: cannot resolve conversation UUID');
       metrics.increment('alerts.skipped_producer_violation');
