@@ -565,18 +565,30 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   let lastGuestTs = null;
   for (const item of list) {
     const role = item.role;
+    const aiStatus = item.aiStatus;
     if (role === "internal") continue;
-    if (role === "ai" && !COUNT_AI_AS_AGENT) {
+
+    const isAiMessage = aiStatus && aiStatus !== "none";
+    const isApprovedAi = aiStatus === "approved";
+    const aiCountsAsAgent = COUNT_AI_AS_AGENT || isApprovedAi;
+
+    if (role === "ai" && !aiCountsAsAgent) {
       // treat unapproved AI suggestions as noise
       continue;
     }
+
+    if (role === "agent" && isAiMessage && !aiCountsAsAgent) {
+      // AI generated drafts shouldn't satisfy the SLA clock until approved
+      continue;
+    }
+
     if (role === "guest") {
       if (await isClosingStatement(item.m)) {
         continue;
       }
       // start or reset the SLA window
       lastGuestTs = item.ts;
-    } else if (role === "agent" || (role === "ai" && COUNT_AI_AS_AGENT)) {
+    } else if (role === "agent" || (role === "ai" && aiCountsAsAgent)) {
       // An agent response clears the SLA if it comes after the guest message
       if (lastGuestTs && item.ts >= lastGuestTs) {
         lastGuestTs = null;
@@ -602,7 +614,8 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   return { ok: false, reason: "guest_unanswered", minsSinceAgent: completedMins, lastGuestTs };
 }
 
-(async () => {
+if (typeof globalThis.__CHECK_TEST__ === "undefined") {
+  (async () => {
   // Skip GitHub Actions "schedule" events.  The workflow that invokes this
   // script on a cron (e.g. every 5 minutes) causes redundant alerts.  By
   // checking the GITHUB_EVENT_NAME environment variable we can abort
@@ -722,7 +735,10 @@ async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   } else {
     console.log("No alert sent.");
   }
-})().catch(e => {
-  console.error(e);
-  process.exit(1);
-});
+  })().catch(e => {
+    console.error(e);
+    process.exit(1);
+  });
+}
+
+export { aiMessageStatus, classifyMessage, evaluate };
