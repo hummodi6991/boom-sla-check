@@ -15,6 +15,12 @@ export async function buildAlertEmail(
   // 1) Prefer UUID present on the event
   let uuid = typeof event?.conversation_uuid === 'string' ? event.conversation_uuid : null;
 
+  const fallbackRaw = (() => {
+    if (event?.legacyId != null) return String(event.legacyId).trim();
+    if (typeof event?.slug === 'string') return event.slug.trim();
+    return '';
+  })();
+
   // 2) If missing, resolve at *send time* via internal signed endpoint
   async function resolveUuid(idOrSlug: string): Promise<string | null> {
     const raw = (idOrSlug || '').trim();
@@ -38,30 +44,39 @@ export async function buildAlertEmail(
     }
   }
 
-  if (!uuid) {
-    const candidate = event?.legacyId != null ? String(event.legacyId) : (event?.slug ?? '');
-    if (candidate) uuid = await resolveUuid(candidate);
+  if (!uuid && fallbackRaw) {
+    uuid = await resolveUuid(fallbackRaw);
   }
 
-  // 3) If still no UUID, *skip sending* instead of emitting fragile /r/legacy links
-  if (!uuid) {
+  if (!uuid && !fallbackRaw) {
     logger?.warn?.({ event }, 'skip alert: missing resolvable uuid');
     metrics.increment('alerts.skipped_missing_uuid');
     return null;
   }
 
-  // 4) Mint a short token link that is self-contained and DB-independent on click
+  const fallbackUrl = fallbackRaw
+    ? `${base}${/^[0-9]+$/.test(fallbackRaw) ? '/r/legacy/' : '/r/conversation/'}${encodeURIComponent(fallbackRaw)}`
+    : null;
+
+  // 3) Mint a short token link that is self-contained and DB-independent on click
   let url: string | null = null;
   try {
     const exp = Math.floor(Date.now() / 1000) + 7 * 24 * 3600; // 7 days
-    const token = makeLinkToken({ uuid, exp });
-    url = `${base}/r/t/${token}`;
+    if (uuid) {
+      const token = makeLinkToken({ uuid, exp });
+      url = `${base}/r/t/${token}`;
+    }
   } catch (err) {
     logger?.warn?.({ uuid, err }, 'link_token_generation_failed');
   }
-  if (!url) url = makeConversationLink({ uuid });
+  if (!url && uuid) url = makeConversationLink({ uuid });
+  let legacyFallback = false;
+  if (!url && fallbackUrl) {
+    url = fallbackUrl;
+    legacyFallback = true;
+  }
   if (!url) {
-    logger?.warn?.({ uuid }, 'skip alert: unable to build link');
+    logger?.warn?.({ event }, 'skip alert: unable to build link');
     metrics.increment('alerts.skipped_link_preflight');
     return null;
   }
@@ -72,6 +87,6 @@ export async function buildAlertEmail(
     metrics.increment('alerts.skipped_link_preflight');
     return null;
   }
-  metrics.increment('alerts.sent_with_uuid');
+  metrics.increment(legacyFallback ? 'alerts.sent_with_legacy_shortlink' : 'alerts.sent_with_uuid');
   return `<p>Alert for conversation <a href="${url}">${url}</a></p>`;
 }
