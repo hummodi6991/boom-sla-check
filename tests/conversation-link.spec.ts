@@ -91,11 +91,21 @@ test('mailer uses uuid when available', async () => {
   expect(metricsArr).toContain('alerts.sent_with_uuid');
 });
 
-test('mailer falls back to /r/legacy when only legacyId is present', async () => {
+test('mailer resolves legacyId via internal endpoint and emits token link', async () => {
+  process.env.RESOLVE_SECRET = 'secret';
+  process.env.RESOLVE_BASE_URL = BASE;
   const emails: any[] = [];
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
-  const verify = async (url: string) => url.includes('/r/legacy/456');
+  const oldFetch = global.fetch;
+  // Stub internal resolver
+  global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid }) } as any);
+  const verify = async (url: string) => {
+    const m = url.match(/\/r\/t\/([^/?#]+)/);
+    if (!m) return false;
+    const decoded = verifyLinkToken(m[1]);
+    return 'uuid' in decoded && decoded.uuid === uuid;
+  };
   const orig = metrics.increment;
   metrics.increment = (n: string) => metricsArr.push(n);
   await simulateAlert({ legacyId: 456 }, {
@@ -104,7 +114,10 @@ test('mailer falls back to /r/legacy when only legacyId is present', async () =>
     verify,
   });
   metrics.increment = orig;
+  global.fetch = oldFetch;
   expect(emails.length).toBe(1);
-  expect(emails[0].html).toContain('/r/legacy/456');
-  expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
+  const href = emails[0].html.match(/href="([^"]+)"/i)?.[1];
+  expect(href).toBeDefined();
+  expect(href).toContain('/r/t/');
+  expect(metricsArr).toContain('alerts.sent_with_uuid');
 });
