@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
@@ -15,13 +15,36 @@ export default function CsPage() {
   // Treat ?conversation=<number> as a legacy id and auto-resolve it
   const numericConversation =
     conversation && !UUID_RE.test(conversation) && /^\d+$/.test(conversation) ? conversation : null;
+  const numericLegacyId = legacyId && /^\d+$/.test(legacyId) ? legacyId : null;
   const [resolving, setResolving] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const previousParams = useRef<{ conversation: string | null; legacyId: string | null }>({
+    conversation,
+    legacyId,
+  });
 
   useEffect(() => {
-    const leg = numericConversation || legacyId;
-    if (!uuid && leg && /^\d+$/.test(leg)) {
+    const prev = previousParams.current;
+    if (prev.conversation !== conversation || prev.legacyId !== legacyId) {
+      setNotFound(false);
+      previousParams.current = { conversation, legacyId };
+    }
+  }, [conversation, legacyId]);
+
+  useEffect(() => {
+    if (conversation && UUID_RE.test(conversation)) {
+      const normalized = conversation.toLowerCase();
+      setUuid((current) => (current === normalized ? current : normalized));
+    } else {
+      setUuid((current) => (current === null ? current : null));
+    }
+  }, [conversation]);
+
+  useEffect(() => {
+    const leg = numericConversation || numericLegacyId;
+    if (!uuid && leg) {
       setResolving(true);
+      setNotFound(false);
       fetch(`/api/resolve/conversation?legacyId=${encodeURIComponent(leg)}`, {
         method: 'GET',
         credentials: 'include',
@@ -36,20 +59,28 @@ export default function CsPage() {
         .then((data) => {
           const u = data?.uuid;
           if (u && UUID_RE.test(u)) {
-            setUuid(u.toLowerCase());
+            const normalized = u.toLowerCase();
+            setUuid(normalized);
             const sp = new URLSearchParams(window.location.search);
             sp.delete('legacyId');
             if (numericConversation) sp.delete('conversation');
-            sp.set('conversation', u.toLowerCase());
-            window.history.replaceState({}, '', `${window.location.pathname}?${sp.toString()}`);
-          } else if (!data) {
+            sp.set('conversation', normalized);
+            const nextQuery = sp.toString();
+            const nextUrl = nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname;
+            router.replace(nextUrl, { scroll: false });
+            setNotFound(false);
+          } else {
             setNotFound(true);
+            setUuid(null);
           }
         })
-        .catch(() => setNotFound(true))
+        .catch(() => {
+          setNotFound(true);
+          setUuid(null);
+        })
         .finally(() => setResolving(false));
     }
-  }, [legacyId, numericConversation, uuid]);
+  }, [numericLegacyId, numericConversation, router, uuid]);
 
   if (notFound) {
     return <div style={{ padding: 16 }}>Conversation not found or has been deleted.</div>;
