@@ -223,10 +223,12 @@ function unwrapUrl(urlStr) {
 }
 
 function firstUrlLike(s) {
-  const m = String(s||"").match(/https?:\/\/\S+/);
+  const m = String(s || "").match(/https?:\/\/[^\s<>"]+/);
   if (!m) return "";
-  // strip trailing punctuation that often rides along in emails
-  return m[0].replace(/[>),.;!]+$/, "");
+  // strip trailing punctuation that often rides along in emails. Include quotes
+  // because URLs embedded in HTML attributes frequently end with either '"'
+  // or "'" before the closing tag, which would otherwise produce invalid URLs.
+  return m[0].replace(/[>),.;!'"`]+$/, "");
 }
 
 function extractConversationId(input) {
