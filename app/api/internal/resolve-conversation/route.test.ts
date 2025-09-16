@@ -83,6 +83,23 @@ test('resolves via alias when legacy conversation missing', async () => {
   await expect(res.json()).resolves.toEqual({ uuid });
 });
 
+test('alias lookup bumps last_seen_at timestamp', async () => {
+  const { GET } = await import('./route');
+  const ts = Date.now();
+  const nonce = 'bump';
+  const id = '556';
+  const legacyId = 556;
+  const old = new Date('2020-01-01T00:00:00Z');
+  aliases.set(legacyId, { legacy_id: legacyId, uuid, last_seen_at: old });
+  const sig = signResolve(id, ts, nonce, process.env.RESOLVE_SECRET!);
+  const res = await GET(new Request(makeUrl(id, ts, nonce, sig)));
+  expect(res.status).toBe(200);
+  const alias = await prisma.conversation_aliases.findUnique({ where: { legacy_id: legacyId } });
+  expect(alias?.uuid).toBe(uuid);
+  expect(alias?.last_seen_at).toBeInstanceOf(Date);
+  expect(alias?.last_seen_at?.getTime()).toBeGreaterThan(old.getTime());
+});
+
 test('resolves slug and caches alias', async () => {
   const { GET } = await import('./route');
   const ts = Date.now();
