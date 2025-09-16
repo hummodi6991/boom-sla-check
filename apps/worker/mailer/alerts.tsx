@@ -1,6 +1,7 @@
 import { makeConversationLink } from '../../shared/lib/links';
 import { makeLinkToken } from '../../shared/lib/linkToken';
 import { verifyConversationLink } from '../../shared/lib/verifyLink';
+import { signResolve } from '../../shared/lib/resolveSign';
 import { metrics } from '../../../lib/metrics';
 import crypto from 'node:crypto';
 
@@ -30,8 +31,7 @@ export async function buildAlertEmail(
     if (!secret) return null;
     const ts = Date.now();
     const nonce = crypto.randomBytes(8).toString('hex');
-    const payload = `id=${raw}&ts=${ts}&nonce=${nonce}`;
-    const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+    const sig = signResolve(raw, ts, nonce, secret);
     const url = `${host}/api/internal/resolve-conversation?id=${encodeURIComponent(raw)}&ts=${ts}&nonce=${nonce}&sig=${sig}`;
     try {
       const res = await fetch(url, { method: 'GET' });
