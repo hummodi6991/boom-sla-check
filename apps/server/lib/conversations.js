@@ -6,10 +6,70 @@ const UUID_RE =
 
 const appUrl = () => (process.env.APP_URL ?? 'https://app.boomnow.com').replace(/\/+$/,'');
 
+const normalizeUuid = (value) => (typeof value === 'string' && isUuid(value) ? value.toLowerCase() : null);
+
+function normalizeSlugCandidate(value) {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  return null;
+}
+
 function findUuidInString(s) {
   if (!s) return null;
   const m = String(s).match(UUID_RE);
   return m ? m[0].toLowerCase() : null;
+}
+
+async function findUuidByAliasLegacyId(legacyId) {
+  if (!Number.isInteger(legacyId)) return null;
+  try {
+    const alias = await prisma?.conversation_aliases?.findUnique?.({
+      where: { legacy_id: legacyId },
+      select: { uuid: true },
+    });
+    return normalizeUuid(alias?.uuid);
+  } catch {}
+  return null;
+}
+
+async function findUuidByLegacyId(legacyId) {
+  if (!Number.isInteger(legacyId)) return null;
+  try {
+    const row = await prisma?.conversation?.findFirst?.({
+      where: { legacyId },
+      select: { uuid: true },
+    });
+    return normalizeUuid(row?.uuid);
+  } catch {}
+  return null;
+}
+
+async function findUuidByAliasSlug(slug) {
+  const normalized = normalizeSlugCandidate(slug);
+  if (!normalized) return null;
+  try {
+    const alias = await prisma?.conversation_aliases?.findFirst?.({
+      where: { slug: normalized },
+      select: { uuid: true },
+    });
+    return normalizeUuid(alias?.uuid);
+  } catch {}
+  return null;
+}
+
+async function findUuidBySlug(slug) {
+  const normalized = normalizeSlugCandidate(slug);
+  if (!normalized) return null;
+  try {
+    const row = await prisma?.conversation?.findFirst?.({
+      where: { slug: normalized },
+      select: { uuid: true },
+    });
+    return normalizeUuid(row?.uuid);
+  } catch {}
+  return null;
 }
 
 async function probeRedirectForUuid(idOrSlug) {
@@ -76,6 +136,28 @@ async function tryUuidFromInlineThread(inlineThread) {
   const directHit = findUuidInString(String(direct || ''));
   if (directHit) return directHit;
 
+  const idSet = new Set();
+  const addCandidate = (value) => {
+    if (value == null) return;
+    if (typeof value === 'number' || typeof value === 'bigint') {
+      idSet.add(String(value));
+      return;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) idSet.add(trimmed);
+    }
+  };
+
+  addCandidate(inlineThread.conversation?.id);
+  addCandidate(inlineThread.conversation?.slug);
+  addCandidate(inlineThread.conversation_id);
+  addCandidate(inlineThread.conversationId);
+  addCandidate(inlineThread.conversation_slug);
+  addCandidate(inlineThread.conversationSlug);
+  addCandidate(inlineThread.id);
+  addCandidate(inlineThread.slug);
+
   const msgs =
     (Array.isArray(inlineThread.messages) && inlineThread.messages) ||
     (Array.isArray(inlineThread.thread) && inlineThread.thread) ||
@@ -91,6 +173,20 @@ async function tryUuidFromInlineThread(inlineThread) {
       const hit = findUuidInString(String(c || ''));
       if (hit) return hit;
     }
+    const ids = [
+      m?.conversation?.id,
+      m?.conversation?.slug,
+      m?.conversation_id,
+      m?.conversationId,
+      m?.conversation_slug,
+      m?.conversationSlug,
+      m?.meta?.conversation_id,
+      m?.meta?.conversation_slug,
+      m?.headers?.conversation_id,
+      m?.headers?.conversation_slug,
+      m?.slug,
+    ];
+    for (const cand of ids) addCandidate(cand);
     for (const s of textFields(m)) {
       const q = s.match(/conversation=([0-9a-fA-F-]{36})/);
       if (q && UUID_RE.test(q[1])) return q[1].toLowerCase();
@@ -99,24 +195,18 @@ async function tryUuidFromInlineThread(inlineThread) {
     }
   }
 
-  // map numeric/slug ids found in messages via DB
-  const idSet = new Set();
-  for (const m of msgs) {
-    const vals = [m?.conversation?.id, m?.conversation_id, m?.meta?.conversation_id, m?.headers?.conversation_id]
-      .filter(v => v != null);
-    for (const v of vals) idSet.add(String(v));
-  }
   for (const v of idSet) {
     if (/^\d+$/.test(v)) {
-      try {
-        const row = await prisma?.conversation?.findFirst?.({ where: { legacyId: Number(v) }, select: { uuid: true }});
-        if (row?.uuid && isUuid(row.uuid)) return row.uuid.toLowerCase();
-      } catch {}
+      const num = Number(v);
+      const aliasHit = await findUuidByAliasLegacyId(num);
+      if (aliasHit) return aliasHit;
+      const byNum = await findUuidByLegacyId(num);
+      if (byNum) return byNum;
     }
-    try {
-      const bySlug = await prisma?.conversation?.findFirst?.({ where: { slug: v }, select: { uuid: true }});
-      if (bySlug?.uuid && isUuid(bySlug.uuid)) return bySlug.uuid.toLowerCase();
-    } catch {}
+    const aliasBySlug = await findUuidByAliasSlug(v);
+    if (aliasBySlug) return aliasBySlug;
+    const bySlug = await findUuidBySlug(v);
+    if (bySlug) return bySlug;
   }
   return null;
 }
@@ -135,21 +225,20 @@ export async function tryResolveConversationUuid(idOrUuid, opts = {}) {
     const n = Number(raw);
     if (Number.isInteger(n)) {
       attempted.push('alias-legacyId');
-      const alias = await prisma?.conversation_aliases?.findUnique?.({
-        where: { legacy_id: n },
-      });
-      if (alias?.uuid && isUuid(alias.uuid)) return alias.uuid.toLowerCase();
+      const aliasLegacy = await findUuidByAliasLegacyId(n);
+      if (aliasLegacy) return aliasLegacy;
 
       attempted.push('db-legacyId');
-      const byNum = await prisma?.conversation?.findFirst?.({
-        where: { legacyId: n },
-        select: { uuid: true },
-      });
-      if (byNum?.uuid && isUuid(byNum.uuid)) return byNum.uuid.toLowerCase();
+      const byNum = await findUuidByLegacyId(n);
+      if (byNum) return byNum;
     }
+    attempted.push('alias-slug');
+    const aliasSlug = await findUuidByAliasSlug(raw);
+    if (aliasSlug) return aliasSlug;
+
     attempted.push('db-slug');
-    const bySlug = await prisma?.conversation?.findFirst?.({ where: { slug: raw }, select: { uuid: true }});
-    if (bySlug?.uuid && isUuid(bySlug.uuid)) return bySlug.uuid.toLowerCase();
+    const bySlug = await findUuidBySlug(raw);
+    if (bySlug) return bySlug;
   } catch {}
 
   // Inline thread mining
