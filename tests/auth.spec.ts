@@ -14,12 +14,32 @@ test('GET /inbox/conversations/123 -> 308 cs deep link', async () => {
   );
 });
 
+test('GET /inbox/conversations/123?cid=456 keeps extras but drops cid', async () => {
+  const req = new NextRequest(
+    'https://app.boomnow.com/inbox/conversations/123?cid=456&foo=bar'
+  );
+  const res = await middleware(req);
+  expect(res.status).toBe(308);
+  expect(res.headers.get('location')).toBe(
+    'https://app.boomnow.com/dashboard/guest-experience/cs?foo=bar&conversation=123'
+  );
+});
+
 test('middleware redirects legacy /inbox?cid=uuid to /c', async () => {
   const req = new NextRequest(`https://app.boomnow.com/inbox?cid=${uuid}`);
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
     `https://app.boomnow.com/dashboard/guest-experience/cs?conversation=${uuid}`
+  );
+});
+
+test('middleware retains extra params when redirecting legacy inbox', async () => {
+  const req = new NextRequest(`https://app.boomnow.com/inbox?cid=${uuid}&foo=bar`);
+  const res = await middleware(req);
+  expect(res.status).toBe(308);
+  expect(res.headers.get('location')).toBe(
+    `https://app.boomnow.com/dashboard/guest-experience/cs?foo=bar&conversation=${uuid}`
   );
 });
 
