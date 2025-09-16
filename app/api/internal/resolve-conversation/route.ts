@@ -14,7 +14,17 @@ async function resolveLegacyId(legacyId: number) {
   try {
     const alias = await prisma.conversation_aliases.findUnique({ where: { legacy_id: legacyId } });
     const fromAlias = normalizeUuid(alias?.uuid);
-    if (fromAlias) return fromAlias;
+    if (fromAlias) {
+      const slug = typeof alias?.slug === 'string' ? alias.slug : undefined;
+      await prisma.conversation_aliases
+        .upsert({
+          where: { legacy_id: legacyId },
+          create: { legacy_id: legacyId, uuid: fromAlias, ...(slug !== undefined ? { slug } : {}) },
+          update: { uuid: fromAlias, ...(slug !== undefined ? { slug } : {}), last_seen_at: new Date() },
+        })
+        .catch(() => {});
+      return fromAlias;
+    }
   } catch {}
 
   try {
