@@ -6,6 +6,7 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       # Secrets & vars available to all steps
       BOOM_USER: ${{ secrets.BOOM_USER }}
@@ -51,47 +52,51 @@ jobs:
           CONVERSATIONS_URL: ${{ vars.CONVERSATIONS_URL }}
           MESSAGES_URL: ${{ vars.MESSAGES_URL }}
         run: |
-          # don't fail the job even if this probe 401s
-          set -uo pipefail
-          # Prefer conversations URL, fall back to messages, then a sane default
-          base="${CONVERSATIONS_URL:-${MESSAGES_URL:-https://app.boomnow.com/api/conversations/all}}"
-          base="$(printf '%s' "$base" | tr -d '\r' | xargs)"
-          # Only add ?all=true if there's no query AND the path ends with /all
-          url="$base"
-          if [[ "$base" != *\?* && "$base" == */all ]]; then
-            url="${base}?all=true"
+          # Don't fail the job even if this probe 401s
+          set -euo pipefail
+          echo "CONVERSATIONS_URL=${CONVERSATIONS_URL}"
+          echo "MESSAGES_URL=${MESSAGES_URL}"
+          echo "--- RESPONSE STATUS + HEADERS ---"
+
+          # Normalise URLs to avoid stray CR/whitespace from repo variables
+          conv="$(printf '%s' "${CONVERSATIONS_URL:-}" | tr -d '\r' | xargs)"
+          msgs="$(printf '%s' "${MESSAGES_URL:-}" | tr -d '\r' | xargs)"
+
+          # Prefer conversations URL, then messages, then a sane default
+          if [[ -z "$conv" ]]; then
+            conv="$msgs"
           fi
-          echo "Hitting (sanitized): $url"
-          hdrs=(-H 'Accept: application/json' -H 'User-Agent: curl/7' -H 'Referer: https://app.boomnow.com/' -H 'X-Requested-With: XMLHttpRequest')
+          if [[ -z "$conv" ]]; then
+            conv="https://app.boomnow.com/api/conversations/all"
+          fi
+          if [[ "$conv" != *\?* && "$conv" == */all ]]; then
+            conv="${conv}?all=true"
+          fi
+
           # Ignore any pre-set AUTH_HEADER; it causes arg-splitting in curl
           unset AUTH_HEADER || true
-          HEADER=""
+          header=""
           if [[ -n "${BOOM_BEARER:-}" ]]; then
             echo "Using Bearer auth"
-            BB=$(printf '%s' "${BOOM_BEARER}" | tr -d '\r\n')
-            HEADER="Authorization: Bearer ${BB}"
+            bb=$(printf '%s' "${BOOM_BEARER}" | tr -d '\r\n')
+            header="Authorization: Bearer ${bb}"
           elif [[ -n "${BOOM_COOKIE:-}" ]]; then
             echo "Using Cookie auth"
-            CK=$(printf '%s' "${BOOM_COOKIE}" | tr -d '\r\n')
-            HEADER="Cookie: ${CK}"
+            ck=$(printf '%s' "${BOOM_COOKIE}" | tr -d '\r\n')
+            header="Cookie: ${ck}"
           else
             echo "No auth provided; expect 401"
           fi
-          if [[ -n "$HEADER" ]]; then
-            hdrs+=(-H "$HEADER")
+
+          hdrs=(-H "Accept: application/json" -H "User-Agent: curl/7" -H "Referer: https://app.boomnow.com/" -H "X-Requested-With: XMLHttpRequest")
+          if [[ -n "$header" ]]; then
+            hdrs+=(-H "$header")
           fi
-          # never fail the job here, even on 401
-          code=$(curl -sS --globoff -o /tmp/resp.json -w '%{http_code}' "${hdrs[@]}" "$url" || true) || true
-          echo "HTTP $code"
-          head -c 400 /tmp/resp.json || true
-          if [[ -n "${MESSAGES_URL:-}" ]]; then
+
+          curl --globoff -sS -D - -o /dev/null "${hdrs[@]}" "$conv" || true
+          if [[ -n "$msgs" ]]; then
             echo
-            echo "Probing messages endpoint headers"
-            if [[ -n "$HEADER" ]]; then
-              curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$MESSAGES_URL"
-            else
-              curl --globoff -sS -D - -o /dev/null "$MESSAGES_URL"
-            fi
+            curl --globoff -sS -D - -o /dev/null "${hdrs[@]}" "$msgs" || true
           fi
 
       - name: Build conversation id & messages URL
