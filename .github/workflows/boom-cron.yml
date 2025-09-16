@@ -92,6 +92,8 @@ jobs:
             SEP='?'; [[ "$NEW_VAL" == *\?* ]] && SEP='&'
             NEW_VAL="${NEW_VAL}${SEP}conversation=${SAMPLE_ID}"
           fi
+          # Strip CRs and surrounding whitespace (prevents curl “URL rejected”)
+          NEW_VAL="$(printf '%s' "$NEW_VAL" | tr -d '\r' | xargs)"
           echo "MESSAGES_URL=${NEW_VAL}" >> "$GITHUB_ENV"
       # Sanity-check the endpoint actually returns JSON with our auth
       - name: Debug conversations endpoint (with auth)
@@ -101,6 +103,10 @@ jobs:
           echo "CONVERSATIONS_URL=${CONVERSATIONS_URL}"
           echo "MESSAGES_URL=${MESSAGES_URL}"
           echo "--- RESPONSE STATUS + HEADERS ---"
+          # Normalise URLs to avoid hidden CR/whitespace from repo variables
+          conv="$(printf '%s' "${CONVERSATIONS_URL:-}" | tr -d '\r' | xargs)"
+          msgs="$(printf '%s' "${MESSAGES_URL:-}" | tr -d '\r' | xargs)"
+          # Ignore any pre-set AUTH_HEADER; it causes arg-splitting
           unset AUTH_HEADER || true
           HEADER=""
           if [[ -n "${BOOM_BEARER:-}" ]]; then
@@ -110,18 +116,14 @@ jobs:
             CK=$(printf '%s' "${BOOM_COOKIE}" | tr -d '\r\n')
             HEADER="Cookie: ${CK}"
           fi
+          hdrs=(-H 'Accept: application/json' -H 'User-Agent: curl/7' -H 'X-Requested-With: XMLHttpRequest')
           if [[ -n "$HEADER" ]]; then
-            curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$CONVERSATIONS_URL"
-          else
-            curl --globoff -sS -D - -o /dev/null "$CONVERSATIONS_URL"
+            hdrs+=(-H "$HEADER")
           fi
-          if [[ -n "${MESSAGES_URL:-}" ]]; then
+          curl --globoff -sS -D - -o /dev/null "${hdrs[@]}" "$conv"
+          if [[ -n "$msgs" ]]; then
             echo
-            if [[ -n "$HEADER" ]]; then
-              curl --globoff -sS -D - -o /dev/null -H "$HEADER" "$MESSAGES_URL"
-            else
-              curl --globoff -sS -D - -o /dev/null "$MESSAGES_URL"
-            fi
+            curl --globoff -sS -D - -o /dev/null "${hdrs[@]}" "$msgs"
           fi
 
       - name: Run SLA checker
