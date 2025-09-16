@@ -17,3 +17,24 @@ test('legacy redirect sends to conversation-not-found when uuid missing', async 
   expect(res.headers.get('location')).toBe('https://app.boomnow.com/conversation-not-found')
 })
 
+test('legacy redirect resolves via alias when conversation missing', async () => {
+  const uuid = '123e4567-e89b-12d3-a456-426614174111'
+  const legacyId = 4321
+  prisma.conversation_aliases._data.set(legacyId, {
+    legacy_id: legacyId,
+    uuid,
+    last_seen_at: new Date(),
+  })
+
+  const res = await GET(new Request(`http://test/r/legacy/${legacyId}`), {
+    params: { id: String(legacyId) },
+  })
+
+  expect(res.status).toBe(302)
+  expect(res.headers.get('location')).toBe(
+    `https://app.boomnow.com/dashboard/guest-experience/cs?conversation=${uuid}`
+  )
+
+  prisma.conversation_aliases._data.delete(legacyId)
+})
+

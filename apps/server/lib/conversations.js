@@ -134,8 +134,17 @@ export async function tryResolveConversationUuid(idOrUuid, opts = {}) {
   try {
     const n = Number(raw);
     if (Number.isInteger(n)) {
+      attempted.push('alias-legacyId');
+      const alias = await prisma?.conversation_aliases?.findUnique?.({
+        where: { legacy_id: n },
+      });
+      if (alias?.uuid && isUuid(alias.uuid)) return alias.uuid.toLowerCase();
+
       attempted.push('db-legacyId');
-      const byNum = await prisma?.conversation?.findFirst?.({ where: { legacyId: n }, select: { uuid: true }});
+      const byNum = await prisma?.conversation?.findFirst?.({
+        where: { legacyId: n },
+        select: { uuid: true },
+      });
       if (byNum?.uuid && isUuid(byNum.uuid)) return byNum.uuid.toLowerCase();
     }
     attempted.push('db-slug');
