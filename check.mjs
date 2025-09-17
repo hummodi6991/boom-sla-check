@@ -1,7 +1,7 @@
 import fs from "fs";
 import { sendAlert } from "./lib/email.js";
-import { conversationDeepLinkFromUuid, conversationIdDisplay, appUrl } from "./lib/links.js";
-import { makeLinkToken } from "./lib/linkToken.js";
+import { conversationIdDisplay, appUrl } from "./lib/links.js";
+import { buildUniversalConversationLink } from "./lib/alertLink.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
 import { prisma } from "./lib/db.js";
@@ -706,17 +706,14 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
-    // Prefer a signed short token that always 302s and survives tracking wrappers
+    // Build a **verified** link (token -> deep link -> hosted shortlink), else skip sending.
     const base = appUrl().replace(/\/+$/, "");
-    const exp  = Math.floor(Date.now() / 1000) + 7 * 24 * 3600; // 7 days
-    let url;
-    try {
-      const tok = makeLinkToken({ uuid, exp });
-      url = `${base}/r/t/${tok}`;
-    } catch {
-      // Fallback (shouldn't happen if LINK_SECRET is configured)
-      url = conversationDeepLinkFromUuid(uuid);
+    const built = await buildUniversalConversationLink({ uuid }, { baseUrl: base });
+    if (!built) {
+      console.log("Skip alert: unable to build a verified conversation link.");
+      return;
     }
+    const url = built.url;
     const idDisplay = conversationIdDisplay({ uuid, id: convId });
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${idDisplay}\nOpen: ${url}`;
