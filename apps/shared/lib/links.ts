@@ -1,10 +1,8 @@
-const trim = (s: string) => s.replace(/\/+$/, '')
-// Remove ASCII control chars and stray whitespace to prevent broken links in emails
-const stripCtlAndTrim = (value: unknown) =>
-  String(value ?? '').replace(/[\u0000-\u001F\u007F]/g, '').trim()
-
+const trim = (s: string) => s.replace(/\/+$/, '');
+const stripCtlAndTrim = (s: string) =>
+  String(s ?? '').replace(/[\u0000-\u001F\u007F]/g, '').trim();
 export const appUrl = () =>
-  trim(stripCtlAndTrim(process.env.APP_URL ?? 'https://app.boomnow.com'))
+  trim(stripCtlAndTrim(process.env.APP_URL ?? 'https://app.boomnow.com'));
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
 
@@ -16,12 +14,14 @@ const normalizeBaseUrl = (input?: string | URL): string => {
 }
 
 export function makeConversationLink({ uuid, baseUrl }: ConversationLinkArgs) {
-  const base = normalizeBaseUrl(baseUrl)
-  if (uuid && UUID_RE.test(String(uuid)))
+  const base = normalizeBaseUrl(baseUrl);
+  if (uuid && UUID_RE.test(String(uuid))) {
+    // Deep-link to the All page instead of CS
     return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(
-      String(uuid).toLowerCase()
-    )}`
-  return null
+      String(uuid).toLowerCase(),
+    )}`;
+  }
+  return null;
 }
 
 export function conversationDeepLinkFromUuid(
