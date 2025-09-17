@@ -11,10 +11,12 @@ test('legacy redirect resolves to uuid deep link', async () => {
   expect(res.headers.get('location')).toBe(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`)
 })
 
-test('legacy redirect sends to conversation-not-found when uuid missing', async () => {
+test('legacy redirect sends to dashboard filter when uuid missing', async () => {
   const res = await GET(new Request('http://test/r/legacy/999'), { params: { id: '999' } })
   expect(res.status).toBe(302)
-  expect(res.headers.get('location')).toBe('https://app.boomnow.com/conversation-not-found')
+  expect(res.headers.get('location')).toBe(
+    'https://app.boomnow.com/dashboard/guest-experience/all?legacyId=999',
+  )
 })
 
 test('legacy redirect resolves via alias when conversation missing', async () => {

@@ -17,7 +17,7 @@ test('APP_URL with CR/LF produces clean, single-line links', async () => {
   const deep = makeConversationLink({ uuid });
   expect(deep).toBe('https://app.boomnow.com/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000');
   const fallback = buildSafeDeepLink('991130', null);
-  expect(fallback).toBe('https://app.boomnow.com/r/legacy/991130');
+  expect(fallback).toBe('https://app.boomnow.com/dashboard/guest-experience/all?legacyId=991130');
 
   if (OLD !== undefined) process.env.APP_URL = OLD; else delete process.env.APP_URL;
 });

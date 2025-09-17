@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { conversationIdDisplay, appUrl } from "./lib/links.js";
+import { conversationIdDisplay, appUrl, makeConversationLink } from "./lib/links.js";
 import { buildUniversalConversationLink } from "./lib/alertLink.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
@@ -14,15 +14,17 @@ const logger = console;
 const metrics = { increment: () => {} };
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
-// Build a safe user-facing link: prefer deep link with UUID, else shortlink that the app resolves.
+// Build a safe user-facing link: prefer deep link with UUID, else dashboard filters.
 export function buildSafeDeepLink(lookupId, uuid) {
-  const base = appUrl().replace(/\/+$/, "");
-  if (uuid) {
-    return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
-  }
-  const raw = String(lookupId || "").trim();
+  const deep = makeConversationLink({ uuid });
+  if (deep) return deep;
+  const raw = String(lookupId ?? "").trim();
+  const base = appUrl();
   if (!raw) return `${base}/dashboard/guest-experience/all`;
-  return `${base}${/^[0-9]+$/.test(raw) ? "/r/legacy/" : "/r/conversation/"}${encodeURIComponent(raw)}`;
+  if (/^\d+$/.test(raw)) {
+    return `${base}/dashboard/guest-experience/all?legacyId=${encodeURIComponent(raw)}`;
+  }
+  return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(raw)}`;
 }
 
 // ---------------------------
