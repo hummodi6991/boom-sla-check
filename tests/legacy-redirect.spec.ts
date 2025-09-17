@@ -8,7 +8,7 @@ test('legacy redirect resolves to uuid deep link', async () => {
   prisma.conversation._data.set(legacyId, { uuid, legacyId })
   const res = await GET(new Request(`http://test/r/legacy/${legacyId}`), { params: { id: String(legacyId) } })
   expect(res.status).toBe(302)
-  expect(res.headers.get('location')).toBe(`https://app.boomnow.com/dashboard/guest-experience/cs?conversation=${uuid}`)
+  expect(res.headers.get('location')).toBe(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`)
 })
 
 test('legacy redirect sends to conversation-not-found when uuid missing', async () => {
@@ -32,7 +32,7 @@ test('legacy redirect resolves via alias when conversation missing', async () =>
 
   expect(res.status).toBe(302)
   expect(res.headers.get('location')).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/cs?conversation=${uuid}`
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
   )
 
   prisma.conversation_aliases._data.delete(legacyId)

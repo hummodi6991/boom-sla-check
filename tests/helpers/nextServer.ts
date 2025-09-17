@@ -105,7 +105,7 @@ export async function startTestServer(): Promise<StartedServer> {
       return;
     }
 
-    if (req.method === 'GET' && requestUrl.pathname === '/dashboard/guest-experience/cs') {
+    if (req.method === 'GET' && requestUrl.pathname === '/dashboard/guest-experience/all') {
       res.statusCode = 200;
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.end(HTML);

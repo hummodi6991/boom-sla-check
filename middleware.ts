@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server.js';
 
 function redirectToConversation(url: URL, conversation: string) {
   const dest = new URL(url);
-  dest.pathname = '/dashboard/guest-experience/cs';
+  dest.pathname = '/dashboard/guest-experience/all';
   dest.searchParams.delete('cid');
   dest.searchParams.set('conversation', conversation);
   return NextResponse.redirect(dest, { status: 308 });

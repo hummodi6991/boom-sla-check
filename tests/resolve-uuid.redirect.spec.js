@@ -9,7 +9,7 @@ test('redirect-probe: 302 Location header', async () => {
   global.fetch = async (_u, _o) => ({
     headers: new Map([[
       'location',
-      'https://app.boomnow.com/dashboard/guest-experience/cs?conversation=123e4567-e89b-12d3-a456-426614174000'
+      'https://app.boomnow.com/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000'
     ]]),
     text: async () => '',
   });
@@ -26,7 +26,7 @@ test('redirect-probe: 200 meta-refresh body', async () => {
     }
     return {
       headers: new Map(),
-      text: async () => '<meta http-equiv="refresh" content="0; url=/dashboard/guest-experience/cs?conversation=123e4567-e89b-12d3-a456-426614174000">',
+      text: async () => '<meta http-equiv="refresh" content="0; url=/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000">',
     };
   };
   const got = await tryResolveConversationUuid('991130', {});
@@ -42,7 +42,7 @@ test('redirect-probe: 200 location.replace body', async () => {
     }
     return {
       headers: new Map(),
-      text: async () => '<script>location.replace("https://app.boomnow.com/dashboard/guest-experience/cs?conversation=123e4567-e89b-12d3-a456-426614174000")</script>',
+      text: async () => '<script>location.replace("https://app.boomnow.com/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000")</script>',
     };
   };
   const got = await tryResolveConversationUuid('991130', {});
