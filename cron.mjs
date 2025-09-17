@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { makeConversationLink, conversationIdDisplay, appUrl } from "./lib/links.js";
+import { conversationIdDisplay, appUrl } from "./lib/links.js";
 import { buildUniversalConversationLink } from "./lib/alertLink.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
@@ -16,14 +16,13 @@ const metrics = { increment: () => {} };
 
 // Build a safe user-facing link: prefer deep link with UUID, else shortlink that the app resolves.
 export function buildSafeDeepLink(lookupId, uuid) {
-  const deep = makeConversationLink({ uuid });
-  if (deep) return deep;
-  const raw = String(lookupId ?? "").trim();
-  const base = appUrl();
-  const path = /^\d+$/.test(raw)
-    ? `/r/legacy/${encodeURIComponent(raw)}`
-    : `/r/conversation/${encodeURIComponent(raw)}`;
-  return `${base}${path}`;
+  const base = appUrl().replace(/\/+$/, "");
+  if (uuid) {
+    return `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`;
+  }
+  const raw = String(lookupId || "").trim();
+  if (!raw) return `${base}/dashboard/guest-experience/cs`;
+  return `${base}${/^[0-9]+$/.test(raw) ? "/r/legacy/" : "/r/conversation/"}${encodeURIComponent(raw)}`;
 }
 
 // ---------------------------
