@@ -82,13 +82,20 @@ export default function CsPage() {
     }
   }, [numericLegacyId, numericConversation, router, uuid]);
 
+  useEffect(() => {
+    if (uuid) {
+      const url = `/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+      router.replace(url, { scroll: false });
+    }
+  }, [uuid, router]);
+
   if (notFound) {
     return <div style={{ padding: 16 }}>Conversation not found or has been deleted.</div>;
   }
 
-  if (!uuid && (legacyId || numericConversation || resolving)) {
-    return <div style={{ padding: 16 }}>Opening conversation…</div>;
-  }
-
-  return <div data-uuid={uuid ?? ''}>Conversation {uuid}</div>;
+  return (
+    <div style={{ padding: 16 }}>
+      {resolving || legacyId || numericConversation ? 'Opening conversation…' : 'Conversation'}
+    </div>
+  );
 }
