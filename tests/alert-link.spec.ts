@@ -93,7 +93,7 @@ test('buildUniversalConversationLink falls back to deep link when token mint fai
   expect(calls.length).toBeGreaterThanOrEqual(2);
 });
 
-test('buildUniversalConversationLink returns legacy shortlink when uuid unavailable', async () => {
+test('buildUniversalConversationLink returns dashboard link when uuid unavailable', async () => {
   process.env.LINK_SECRET = 'test-secret';
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
@@ -102,27 +102,37 @@ test('buildUniversalConversationLink returns legacy shortlink when uuid unavaila
     {
       baseUrl: BASE,
       verify: async (url) => {
-        expect(url).toBe(`${BASE}/r/legacy/456`);
+        expect(url).toBe(
+          `${BASE}/dashboard/guest-experience/all?legacyId=456`
+        );
         return true;
       },
     }
   );
-  expect(res).toEqual({ url: `${BASE}/r/legacy/456`, kind: 'legacy' });
+  expect(res).toEqual({
+    url: `${BASE}/dashboard/guest-experience/all?legacyId=456`,
+    kind: 'legacy',
+  });
 });
 
-test('buildUniversalConversationLink uses slug when numeric id missing', async () => {
+test('buildUniversalConversationLink uses slug query when numeric id missing', async () => {
   process.env.LINK_SECRET = 'test-secret';
   const res = await buildUniversalConversationLink(
     { slug: 'my-convo' },
     {
       baseUrl: BASE,
       verify: async (url) => {
-        expect(url).toBe(`${BASE}/r/conversation/my-convo`);
+        expect(url).toBe(
+          `${BASE}/dashboard/guest-experience/all?conversation=my-convo`
+        );
         return true;
       },
     }
   );
-  expect(res).toEqual({ url: `${BASE}/r/conversation/my-convo`, kind: 'legacy' });
+  expect(res).toEqual({
+    url: `${BASE}/dashboard/guest-experience/all?conversation=my-convo`,
+    kind: 'legacy',
+  });
 });
 
 test('buildUniversalConversationLink resolves identifiers via internal endpoint', async () => {

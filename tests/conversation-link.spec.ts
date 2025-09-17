@@ -140,13 +140,13 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
   expect(metricsArr).toContain('alerts.sent_with_uuid');
 });
 
-test('mailer falls back to legacy shortlink when uuid unavailable', async () => {
+test('mailer falls back to dashboard link when uuid unavailable', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const emails: any[] = [];
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
-  const expected = `${BASE}/r/legacy/789`;
+  const expected = `${BASE}/dashboard/guest-experience/all?legacyId=789`;
   const verify = async (url: string) => {
     expect(url).toBe(expected);
     return true;
@@ -164,11 +164,13 @@ test('mailer falls back to legacy shortlink when uuid unavailable', async () => 
   expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
 });
 
-test('mailer falls back to conversation slug when numeric id absent', async () => {
+test('mailer falls back to conversation slug query when numeric id absent', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const slug = 'my-convo';
-  const expected = `${BASE}/r/conversation/${encodeURIComponent(slug)}`;
+  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(
+    slug
+  )}`;
   const emails: any[] = [];
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
