@@ -39,7 +39,8 @@ jobs:
       BACKFILL_CONCURRENCY:       ${{ vars.BACKFILL_CONCURRENCY }}
       TOTAL_CONVERSATIONS_ESTIMATE: ${{ vars.TOTAL_CONVERSATIONS_ESTIMATE }}
       MAX_CONCURRENCY:            ${{ vars.MAX_CONCURRENCY }}
-      APP_URL: https://app.boomnow.com
+      APP_URL: ${{ vars.APP_URL }}
+      RESOLVE_BASE_URL: ${{ vars.RESOLVE_BASE_URL }}
       RESOLVE_SECRET: ${{ secrets.RESOLVE_SECRET }}
       LIST_SORT_FIELD:            ${{ vars.LIST_SORT_FIELD }}
       LIST_SORT_ORDER_RECENT:     ${{ vars.LIST_SORT_ORDER_RECENT }}

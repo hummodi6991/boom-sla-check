@@ -15,7 +15,8 @@ jobs:
       SLA_MINUTES:     ${{ vars.SLA_MINUTES }}
       DEBUG:           ${{ vars.DEBUG }}
       DEBUG_MESSAGES:  ${{ vars.DEBUG_MESSAGES }}
-      APP_URL: https://app.boomnow.com
+      APP_URL: ${{ vars.APP_URL }}
+      RESOLVE_BASE_URL: ${{ vars.RESOLVE_BASE_URL }}
       SMTP_HOST:       ${{ secrets.SMTP_HOST }}
       SMTP_PORT:       ${{ secrets.SMTP_PORT }}
       SMTP_USER:       ${{ secrets.SMTP_USER }}
