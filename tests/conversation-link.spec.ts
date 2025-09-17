@@ -74,7 +74,7 @@ test('mailer skips when conversation_uuid missing', async () => {
   });
   metrics.increment = orig;
   expect(emails.length).toBe(0);
-  expect(metricsArr).toContain('alerts.skipped_missing_uuid');
+  expect(metricsArr).toContain('alerts.skipped_link_preflight');
 });
 
 test('mailer uses uuid when available', async () => {
