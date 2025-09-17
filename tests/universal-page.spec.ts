@@ -17,7 +17,7 @@ test('legacyId resolves to conversation uuid on page', async ({ page }) => {
       headers: { 'Cache-Control': 'no-store' },
     });
   });
-  await page.goto(`http://localhost:${port}/dashboard/guest-experience/cs?legacyId=456`);
+  await page.goto(`http://localhost:${port}/dashboard/guest-experience/all?legacyId=456`);
   await expect(page.locator('[data-uuid]')).toHaveAttribute('data-uuid', uuid, { timeout: 15000 });
   await stopTestServer(server);
 });

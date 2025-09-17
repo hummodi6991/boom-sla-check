@@ -1,24 +1,33 @@
-const trim = (s: string) => s.trim().replace(/\/+$/, '')
+const trim = (s: string) => s.replace(/\/+$/, '')
+// Remove ASCII control chars and stray whitespace to prevent broken links in emails
+const stripCtlAndTrim = (value: unknown) =>
+  String(value ?? '').replace(/[\u0000-\u001F\u007F]/g, '').trim()
 
-export const appUrl = () => trim(process.env.APP_URL ?? 'https://app.boomnow.com')
+export const appUrl = () =>
+  trim(stripCtlAndTrim(process.env.APP_URL ?? 'https://app.boomnow.com'))
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i
 
 type ConversationLinkArgs = { uuid?: string | null; baseUrl?: string | URL }
 
 const normalizeBaseUrl = (input?: string | URL): string => {
-  if (!input) return appUrl()
-  return trim(String(input))
+  const raw = input ? String(input) : appUrl()
+  return trim(stripCtlAndTrim(raw))
 }
 
 export function makeConversationLink({ uuid, baseUrl }: ConversationLinkArgs) {
   const base = normalizeBaseUrl(baseUrl)
   if (uuid && UUID_RE.test(String(uuid)))
-    return `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(String(uuid).toLowerCase())}`
+    return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(
+      String(uuid).toLowerCase()
+    )}`
   return null
 }
 
-export function conversationDeepLinkFromUuid(uuid: string, opts?: { baseUrl?: string | URL }): string {
+export function conversationDeepLinkFromUuid(
+  uuid: string,
+  opts?: { baseUrl?: string | URL }
+): string {
   const link = makeConversationLink({ uuid, baseUrl: opts?.baseUrl })
   if (!link) throw new Error('conversationDeepLinkFromUuid: valid UUID required')
   return link

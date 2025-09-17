@@ -18,10 +18,10 @@ const metrics = { increment: () => {} };
 export function buildSafeDeepLink(lookupId, uuid) {
   const base = appUrl().replace(/\/+$/, "");
   if (uuid) {
-    return `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`;
+    return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
   }
   const raw = String(lookupId || "").trim();
-  if (!raw) return `${base}/dashboard/guest-experience/cs`;
+  if (!raw) return `${base}/dashboard/guest-experience/all`;
   return `${base}${/^[0-9]+$/.test(raw) ? "/r/legacy/" : "/r/conversation/"}${encodeURIComponent(raw)}`;
 }
 

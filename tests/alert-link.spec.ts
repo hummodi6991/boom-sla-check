@@ -77,7 +77,7 @@ test('buildUniversalConversationLink falls back to deep link when token mint fai
       verify: async (url) => {
         calls.push(url);
         expect(url).toBe(
-          `${BASE}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
+          `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
         );
         return true;
       },
@@ -88,7 +88,7 @@ test('buildUniversalConversationLink falls back to deep link when token mint fai
   );
   expect(res?.kind).toBe('uuid');
   expect(res?.url).toBe(
-    `${BASE}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
+    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
   );
   expect(calls.length).toBeGreaterThanOrEqual(2);
 });

@@ -16,7 +16,7 @@ test('verifyConversationLink accepts 303/307/308 to login or deep link', async (
 
     global.fetch = fake(
       307,
-      'https://app.boomnow.com/dashboard/guest-experience/cs?conversation=123e4567-e89b-12d3-a456-426614174000',
+      'https://app.boomnow.com/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000',
     );
     await expect(verifyConversationLink('https://example.com/x')).resolves.toBe(true);
 

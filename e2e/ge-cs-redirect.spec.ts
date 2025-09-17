@@ -5,12 +5,12 @@ import { startTestServer, stopTestServer } from '../tests/helpers/nextServer';
 test('cs route loads directly without redirect', async ({ page }) => {
   const { server, port } = await startTestServer();
   const q = 'conversation=test-123';
-  await page.goto(`http://localhost:${port}/dashboard/guest-experience/cs?${q}`, {
+  await page.goto(`http://localhost:${port}/dashboard/guest-experience/all?${q}`, {
     waitUntil: 'domcontentloaded',
   });
 
   const url = new URL(page.url());
-  expect(url.pathname).toBe('/dashboard/guest-experience/cs');
+  expect(url.pathname).toBe('/dashboard/guest-experience/all');
   expect(url.searchParams.get('conversation')).toBe('test-123');
 
   await stopTestServer(server);

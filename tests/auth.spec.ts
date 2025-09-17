@@ -10,7 +10,7 @@ test('GET /inbox/conversations/123 -> 308 cs deep link', async () => {
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    'https://app.boomnow.com/dashboard/guest-experience/cs?conversation=123'
+    'https://app.boomnow.com/dashboard/guest-experience/all?conversation=123'
   );
 });
 
@@ -21,7 +21,7 @@ test('GET /inbox/conversations/123?cid=456 keeps extras but drops cid', async ()
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    'https://app.boomnow.com/dashboard/guest-experience/cs?foo=bar&conversation=123'
+    'https://app.boomnow.com/dashboard/guest-experience/all?foo=bar&conversation=123'
   );
 });
 
@@ -30,7 +30,7 @@ test('middleware redirects legacy /inbox?cid=uuid to /c', async () => {
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/cs?conversation=${uuid}`
+    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
   );
 });
 
@@ -39,12 +39,12 @@ test('middleware retains extra params when redirecting legacy inbox', async () =
   const res = await middleware(req);
   expect(res.status).toBe(308);
   expect(res.headers.get('location')).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/cs?foo=bar&conversation=${uuid}`
+    `https://app.boomnow.com/dashboard/guest-experience/all?foo=bar&conversation=${uuid}`
   );
 });
 
 test('POST /api/login with next=dashboard link -> 303 to that path', async () => {
-  const next = `/dashboard/guest-experience/cs?conversation=${uuid}`;
+  const next = `/dashboard/guest-experience/all?conversation=${uuid}`;
   const body = new URLSearchParams({
     email: 'test@example.com',
     password: 'x',

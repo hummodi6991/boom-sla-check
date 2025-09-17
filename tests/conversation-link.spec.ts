@@ -40,14 +40,14 @@ test.afterEach(() => {
 
 test('makeConversationLink builds ?conversation when uuid provided', () => {
   expect(makeConversationLink({ uuid })).toBe(
-    `${BASE}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(uuid)}`
+    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
   );
 });
 
 test('makeConversationLink accepts baseUrl override', () => {
   expect(
     makeConversationLink({ uuid, baseUrl: 'http://localhost:4321' })
-  ).toBe('http://localhost:4321/dashboard/guest-experience/cs?conversation=123e4567-e89b-12d3-a456-426614174000');
+  ).toBe('http://localhost:4321/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000');
 });
 
 test('makeConversationLink returns null when uuid missing', () => {
