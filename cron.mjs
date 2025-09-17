@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 import { makeConversationLink, conversationIdDisplay, appUrl } from "./lib/links.js";
+import { buildUniversalConversationLink } from "./lib/alertLink.js";
 import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
@@ -377,19 +378,23 @@ for (const { id } of toCheck) {
         }) ||
         await resolveViaInternalEndpoint(lookupId);
 
-      const url = buildSafeDeepLink(lookupId, uuid);
-      const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
-
-      try {
-        const pre = await fetch(url, { method: 'GET', redirect: 'manual' });
-        if (!(pre.ok || (pre.status >= 300 && pre.status < 400))) throw new Error(String(pre.status));
-      } catch {
-        logger?.warn?.({ convId, url }, 'skip alert: link did not pass preflight');
+      const input = uuid
+        ? { uuid }
+        : (/^[0-9]+$/.test(String(lookupId))
+            ? { legacyId: lookupId }
+            : { slug: String(lookupId) });
+      const base = appUrl().replace(/\/+$/, "");
+      const built = await buildUniversalConversationLink(input, { baseUrl: base });
+      if (!built) {
+        logger?.warn?.({ convId, input }, 'skip alert: link did not pass preflight');
         metrics?.increment?.('alerts.skipped_link_preflight');
         skipped.push(convId);
         skippedCount++;
         continue;
       }
+
+      const url = built.url;
+      const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url}`
