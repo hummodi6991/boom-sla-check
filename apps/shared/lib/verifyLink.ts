@@ -5,10 +5,10 @@ export async function verifyConversationLink(url: string): Promise<boolean> {
       // Direct deep link rendered (SPA shell)
       return true;
     }
-    if (res.status !== 302) return false;
-    const loc = res.headers.get('location') ?? '';
-    if (loc.includes('/login') || loc.includes('/dashboard/guest-experience/cs')) {
-      return true;
+    // Accept any 3xx; verify Location header points to our login or deep link path
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location') ?? '';
+      return /\/login\b|\/dashboard\/guest-experience\/cs\b/.test(loc);
     }
     return false;
   } catch {
