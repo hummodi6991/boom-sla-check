@@ -7,6 +7,7 @@ const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
 const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
 const ORIGINAL_APP_URL = process.env.APP_URL;
 const ORIGINAL_FETCH = global.fetch;
+const ORIGINAL_TRY_RESOLVE = (globalThis as any).tryResolveConversationUuid;
 
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
 
@@ -35,6 +36,11 @@ function restoreEnv() {
     global.fetch = ORIGINAL_FETCH;
   } else {
     delete (global as any).fetch;
+  }
+  if (ORIGINAL_TRY_RESOLVE) {
+    (globalThis as any).tryResolveConversationUuid = ORIGINAL_TRY_RESOLVE;
+  } else {
+    delete (globalThis as any).tryResolveConversationUuid;
   }
 }
 
@@ -156,6 +162,43 @@ test('buildUniversalConversationLink resolves identifiers via internal endpoint'
   );
   expect(res?.kind).toBe('uuid');
   expect(fetchCalls[0]).toContain('id=abc');
+});
+
+test('buildUniversalConversationLink falls back to internal resolver when resolve API fails', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  process.env.RESOLVE_SECRET = 'resolve';
+  process.env.RESOLVE_BASE_URL = 'https://resolve.test';
+  const fetchCalls: string[] = [];
+  global.fetch = async (url: any) => {
+    fetchCalls.push(String(url));
+    return { ok: false } as any;
+  };
+  const tryResolveCalls: Array<{ raw: string; opts: Record<string, unknown> }> = [];
+  (globalThis as any).tryResolveConversationUuid = async (
+    raw: string,
+    opts: Record<string, unknown>
+  ) => {
+    tryResolveCalls.push({ raw, opts });
+    return uuid;
+  };
+  const res = await buildUniversalConversationLink(
+    { slug: 'needs-fallback' },
+    {
+      baseUrl: BASE,
+      verify: async (url) => {
+        expect(url.startsWith(`${BASE}/r/t/`)).toBe(true);
+        return true;
+      },
+    }
+  );
+  expect(res?.kind).toBe('uuid');
+  expect(fetchCalls).toHaveLength(1);
+  expect(tryResolveCalls).toEqual([
+    {
+      raw: 'needs-fallback',
+      opts: expect.objectContaining({ skipRedirectProbe: true }),
+    },
+  ]);
 });
 
 test('buildUniversalConversationLink returns null when verification fails', async () => {

@@ -152,6 +152,8 @@ test('mailer falls back to dashboard link when uuid unavailable', async () => {
     return true;
   };
   const orig = metrics.increment;
+  const originalTryResolve = (globalThis as any).tryResolveConversationUuid;
+  (globalThis as any).tryResolveConversationUuid = async () => null;
   metrics.increment = (n: string) => metricsArr.push(n);
   await simulateAlert({ legacyId: 789 }, {
     sendAlertEmail: (x: any) => emails.push(x),
@@ -159,6 +161,11 @@ test('mailer falls back to dashboard link when uuid unavailable', async () => {
     verify,
   });
   metrics.increment = orig;
+  if (originalTryResolve) {
+    (globalThis as any).tryResolveConversationUuid = originalTryResolve;
+  } else {
+    delete (globalThis as any).tryResolveConversationUuid;
+  }
   expect(emails.length).toBe(1);
   expect(emails[0].html).toContain(expected);
   expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
@@ -179,6 +186,8 @@ test('mailer falls back to conversation slug query when numeric id absent', asyn
     return true;
   };
   const orig = metrics.increment;
+  const originalTryResolve = (globalThis as any).tryResolveConversationUuid;
+  (globalThis as any).tryResolveConversationUuid = async () => null;
   metrics.increment = (n: string) => metricsArr.push(n);
   await simulateAlert({ slug }, {
     sendAlertEmail: (x: any) => emails.push(x),
@@ -186,6 +195,11 @@ test('mailer falls back to conversation slug query when numeric id absent', asyn
     verify,
   });
   metrics.increment = orig;
+  if (originalTryResolve) {
+    (globalThis as any).tryResolveConversationUuid = originalTryResolve;
+  } else {
+    delete (globalThis as any).tryResolveConversationUuid;
+  }
   expect(emails.length).toBe(1);
   expect(emails[0].html).toContain(expected);
   expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
