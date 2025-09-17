@@ -1,4 +1,4 @@
-const trim = (s: string) => s.replace(/\/+$/, '')
+const trim = (s: string) => s.trim().replace(/\/+$/, '')
 
 export const appUrl = () => trim(process.env.APP_URL ?? 'https://app.boomnow.com')
 
