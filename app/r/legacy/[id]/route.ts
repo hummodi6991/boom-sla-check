@@ -15,6 +15,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     uuid = null;
   }
 
-  const to = uuid ? conversationDeepLinkFromUuid(uuid, { baseUrl: base }) : `${base}/conversation-not-found`;
+  const to = uuid
+    ? conversationDeepLinkFromUuid(uuid, { baseUrl: base })
+    : `${base}/dashboard/guest-experience/all?legacyId=${encodeURIComponent(params.id)}`;
   return NextResponse.redirect(to, 302);
 }
