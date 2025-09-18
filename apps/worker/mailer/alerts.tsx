@@ -10,11 +10,11 @@ export async function buildAlertEmail(
   const base = appUrl();
   const built = await buildUniversalConversationLink(
     { uuid: event?.conversation_uuid, legacyId: event?.legacyId, slug: event?.slug },
-    { baseUrl: base, verify: deps?.verify }
+    { baseUrl: base, verify: deps?.verify, strictUuid: true }
   );
   if (!built) {
     logger?.warn?.({ event }, 'skip alert: unable to build verified link');
-    metrics.increment('alerts.skipped_link_preflight');
+    metrics.increment('alerts.skipped_no_uuid');
     return null;
   }
   metrics.increment(
