@@ -385,10 +385,11 @@ for (const { id } of toCheck) {
             ? { legacyId: lookupId }
             : { slug: String(lookupId) });
       const base = appUrl().replace(/\/+$/, "");
-      const built = await buildUniversalConversationLink(input, { baseUrl: base });
+      // Strict mode to guarantee deep-link correctness
+      const built = await buildUniversalConversationLink(input, { baseUrl: base, strictUuid: true });
       if (!built) {
-        logger?.warn?.({ convId, input }, 'skip alert: link did not pass preflight');
-        metrics?.increment?.('alerts.skipped_link_preflight');
+        logger?.warn?.({ convId, input }, 'skip alert: UUID not resolvable (strict mode)');
+        metrics?.increment?.('alerts.skipped_no_uuid');
         skipped.push(convId);
         skippedCount++;
         continue;
