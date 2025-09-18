@@ -708,7 +708,7 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
     }
     // Build a **verified** link (token -> deep link -> hosted shortlink), else skip sending.
     const base = appUrl().replace(/\/+$/, "");
-    const built = await buildUniversalConversationLink({ uuid }, { baseUrl: base });
+    const built = await buildUniversalConversationLink({ uuid }, { baseUrl: base, strictUuid: true });
     if (!built) {
       console.log("Skip alert: unable to build a verified conversation link.");
       return;
