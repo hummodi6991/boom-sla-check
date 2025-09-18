@@ -74,7 +74,7 @@ test('mailer skips when conversation_uuid missing', async () => {
   });
   metrics.increment = orig;
   expect(emails.length).toBe(0);
-  expect(metricsArr).toContain('alerts.skipped_link_preflight');
+  expect(metricsArr).toContain('alerts.skipped_no_uuid');
 });
 
 test('mailer uses uuid when available', async () => {
@@ -140,17 +140,13 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
   expect(metricsArr).toContain('alerts.sent_with_uuid');
 });
 
-test('mailer falls back to dashboard link when uuid unavailable', async () => {
+test('mailer skips when uuid cannot be resolved (strict mode)', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const emails: any[] = [];
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
-  const expected = `${BASE}/dashboard/guest-experience/all?legacyId=789`;
-  const verify = async (url: string) => {
-    expect(url).toBe(expected);
-    return true;
-  };
+  const verify = async () => true;
   const orig = metrics.increment;
   const originalTryResolve = (globalThis as any).tryResolveConversationUuid;
   (globalThis as any).tryResolveConversationUuid = async () => null;
@@ -166,25 +162,18 @@ test('mailer falls back to dashboard link when uuid unavailable', async () => {
   } else {
     delete (globalThis as any).tryResolveConversationUuid;
   }
-  expect(emails.length).toBe(1);
-  expect(emails[0].html).toContain(expected);
-  expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
+  expect(emails.length).toBe(0);
+  expect(metricsArr).toContain('alerts.skipped_no_uuid');
 });
 
-test('mailer falls back to conversation slug query when numeric id absent', async () => {
+test('mailer skips when slug cannot resolve to uuid', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const slug = 'my-convo';
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(
-    slug
-  )}`;
   const emails: any[] = [];
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
-  const verify = async (url: string) => {
-    expect(url).toBe(expected);
-    return true;
-  };
+  const verify = async () => true;
   const orig = metrics.increment;
   const originalTryResolve = (globalThis as any).tryResolveConversationUuid;
   (globalThis as any).tryResolveConversationUuid = async () => null;
@@ -200,7 +189,6 @@ test('mailer falls back to conversation slug query when numeric id absent', asyn
   } else {
     delete (globalThis as any).tryResolveConversationUuid;
   }
-  expect(emails.length).toBe(1);
-  expect(emails[0].html).toContain(expected);
-  expect(metricsArr).toContain('alerts.sent_with_legacy_shortlink');
+  expect(emails.length).toBe(0);
+  expect(metricsArr).toContain('alerts.skipped_no_uuid');
 });
