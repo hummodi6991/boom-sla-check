@@ -14,7 +14,7 @@ export default function Page({ searchParams }: { searchParams: { conversation?: 
       ? searchParams.legacyId
       : undefined;
 
-  // If legacyId is present, or conversation is not a UUID, use the client-side resolver.
+  // Forward non-UUID/legacy to the client-side resolver to avoid redirect loops.
   if (legacyId) redirect(`/dashboard/guest-experience/cs?legacyId=${encodeURIComponent(legacyId)}`);
   if (conversation && !UUID_RE.test(conversation)) {
     redirect(`/dashboard/guest-experience/cs?conversation=${encodeURIComponent(conversation)}`);
