@@ -13,6 +13,9 @@ const logger = console;
 const metrics = { increment: () => {} };
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
+// Accept a canonical UUID (v1–v5)
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+
 // Build a safe user-facing link: prefer deep link with UUID, else dashboard filters.
 export function buildSafeDeepLink(lookupId, uuid) {
   const deep = makeConversationLink({ uuid });
@@ -34,6 +37,10 @@ function buildMessagesUrl(conversationId) {
   if (!base) throw new Error("MESSAGES_URL is not set");
   if (base.includes("{{conversationId}}")) {
     return base.replace("{{conversationId}}", encodeURIComponent(conversationId));
+  }
+  // Avoid double-appending if caller configured a static conversation param
+  if (/\bconversation(?:_id|Id)?=/i.test(base)) {
+    return base;
   }
   const sep = base.includes("?") ? "&" : "?";
   return `${base}${sep}conversation=${encodeURIComponent(conversationId)}`;
@@ -86,30 +93,52 @@ function normalizeMessages(raw) {
 // Helpers: fetch with retry
 // ---------------------------
 async function fetchMessagesWithRetry(conversationId, headers, { attempts = 3, baseDelayMs = 300 } = {}) {
-  const url = buildMessagesUrl(conversationId);
-  let lastErr;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const res = await fetch(url, { headers, redirect: "manual" });
-      if (res.ok) {
-        const json = await res.json().catch(() => ({}));
-        const msgs = normalizeMessages(json);
-        return { ok: true, status: res.status, messages: msgs, raw: json };
+  // Primary URL from env, plus safe fallbacks (same strategy as check.mjs)
+  const primary = buildMessagesUrl(conversationId);
+  const origin = (() => {
+    try { return new URL(primary).origin; } catch {}
+    try { return new URL(appUrl()).origin; } catch {}
+    return "https://app.boomnow.com";
+  })();
+  const convUrl = `${origin}/api/conversations/${encodeURIComponent(conversationId)}/messages`;
+  const ge1     = `${origin}/api/guest-experience/messages?conversation=${encodeURIComponent(conversationId)}`;
+  const ge2     = `${origin}/api/guest-experience/messages?conversation_id=${encodeURIComponent(conversationId)}`;
+  const isUuid  = UUID_RE.test(String(conversationId));
+  const candidates = [primary, ...(isUuid ? [convUrl, ge1, ge2] : [ge1, ge2, convUrl])];
+
+  let lastErr, lastStatus = 0, usedUrl = "";
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  for (const url of candidates) {
+    usedUrl = url;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await fetch(url, { headers, redirect: "manual" });
+        lastStatus = res.status;
+        if (res.ok) {
+          const json = await res.json().catch(() => ({}));
+          const msgs = normalizeMessages(json);
+          return { ok: true, url, status: res.status, messages: msgs, raw: json };
+        }
+        if (res.status >= 500 && res.status < 600) {
+          lastErr = new Error(`HTTP ${res.status}`);
+          const delay = baseDelayMs * Math.pow(2, i);
+          await sleep(delay);
+          continue;
+        }
+        // 4xx or other -> try next candidate
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (i < attempts - 1) {
+          const delay = baseDelayMs * Math.pow(2, i);
+          await sleep(delay);
+          continue;
+        }
       }
-      // Retry on 5xx; otherwise stop
-      if (res.status >= 500 && res.status < 600) {
-        lastErr = new Error(`HTTP ${res.status}`);
-      } else {
-        return { ok: false, status: res.status };
-      }
-    } catch (e) {
-      lastErr = e;
     }
-    // backoff
-    const delay = baseDelayMs * Math.pow(2, i);
-    await new Promise(r => setTimeout(r, delay));
   }
-  return { ok: false, error: lastErr };
+  return { ok: false, url: usedUrl, status: lastStatus, error: lastErr };
 }
 
 // ---------------------------
@@ -333,14 +362,27 @@ for (const { id } of toCheck) {
     msgs = conv.thread;
     log(`conv ${id}: using inline thread (${msgs.length} msgs)`);
   } else {
-    // NEW: try messages endpoint instead of skipping
+    // Prefer fetching by UUID when possible (numeric ids often 500 if the API requires a uuid)
+    let idForFetch = id;
+    if (!UUID_RE.test(String(idForFetch))) {
+      try {
+        const maybeUuid = await resolveConversationUuid(String(idForFetch), { skipRedirectProbe: false });
+        if (maybeUuid && UUID_RE.test(maybeUuid)) idForFetch = maybeUuid.toLowerCase();
+      } catch {}
+    }
+    // NEW: try messages endpoint(s) instead of skipping
     const headers = authHeaders();
-    const r = await fetchMessagesWithRetry(id, headers);
-    if (r.ok) {
+    const idsToTry = idForFetch === id ? [idForFetch] : [idForFetch, id];
+    let r;
+    for (const candidate of idsToTry) {
+      r = await fetchMessagesWithRetry(candidate, headers);
+      if (r.ok) break;
+    }
+    if (r?.ok) {
       msgs = r.messages;
-      console.log(`conv ${id}: fetched ${msgs.length} via messages endpoint`);
+      console.log(`conv ${id}: fetched ${msgs.length} via ${r.url || "messages endpoint"}`);
     } else {
-      const detail = r.status ? `status ${r.status}` : (r.error?.message || "unknown error");
+      const detail = r?.status ? `status ${r.status}` : (r?.error?.message || "unknown error");
       console.warn(`conv ${id}: no inline thread; messages fetch failed (${detail}); skipping`);
       skippedCount++;
       continue;
