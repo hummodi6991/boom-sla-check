@@ -2,8 +2,7 @@ import fs from "fs";
 import { sendAlert } from "./lib/email.js";
 import { conversationIdDisplay, appUrl } from "./lib/links.js";
 import { buildUniversalConversationLink } from "./lib/alertLink.js";
-import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
-import { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
+import { resolveConversationUuid } from "./apps/shared/lib/conversationUuid.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
@@ -697,10 +696,8 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    let uuid = await tryResolveConversationUuid(convId, { inlineThread });
-    if (!uuid) {
-      uuid = await resolveViaInternalEndpoint(convId);
-    }
+    // Unified resolver: DB/alias → internal endpoint → deterministic mint
+    const uuid = await resolveConversationUuid(convId, { inlineThread });
     if (!uuid) {
       logger.warn({ convId }, 'skip alert: cannot resolve conversation UUID');
       metrics.increment('alerts.skipped_producer_violation');
