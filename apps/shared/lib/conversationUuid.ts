@@ -1,5 +1,6 @@
 import { tryResolveConversationUuid } from '../../server/lib/conversations.js';
 import { resolveViaInternalEndpoint } from '../../../lib/internalResolve.js';
+import { mintUuidFromRaw } from './canonicalConversationUuid.js';
 
 export type ResolveConversationOpts = {
   inlineThread?: unknown;
@@ -21,6 +22,12 @@ export async function resolveConversationUuid(
   try {
     const viaInternal = await resolveViaInternalEndpoint(raw);
     return viaInternal ? viaInternal.toLowerCase() : null;
+  } catch {
+    // fall through to minting
+  }
+  try {
+    const minted = mintUuidFromRaw(raw);
+    return minted ? minted.toLowerCase() : null;
   } catch {
     return null;
   }
