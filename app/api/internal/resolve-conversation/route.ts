@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server.js';
 import { prisma } from '../../../../lib/db';
 import { verifyResolveSignature } from '../../../../apps/shared/lib/resolveSign';
+import { mintUuidFromRaw } from '../../../../apps/shared/lib/canonicalConversationUuid';
 
 const RESOLVE_SECRET = process.env.RESOLVE_SECRET || '';
 const MAX_SKEW_MS = 2 * 60 * 1000; // 2 minutes
@@ -127,7 +128,42 @@ export async function GET(req: Request) {
 
   const uuid = await resolveAny(id);
   if (!uuid) {
-    return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    const minted = mintUuidFromRaw(id);
+    if (!minted) {
+      return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    }
+
+    if (/^\d+$/.test(id)) {
+      const legacyId = Number(id);
+      try {
+        await prisma.conversation_aliases.upsert({
+          where: { legacy_id: legacyId },
+          create: { legacy_id: legacyId, uuid: minted },
+          update: { uuid: minted, last_seen_at: new Date() },
+        });
+      } catch {
+        // ignore cache errors
+      }
+    } else {
+      try {
+        const row = await prisma.conversation.findFirst({ where: { slug: id } });
+        const legacyId = Number((row as any)?.legacyId);
+        if (Number.isInteger(legacyId)) {
+          await prisma.conversation_aliases.upsert({
+            where: { legacy_id: legacyId },
+            create: { legacy_id: legacyId, uuid: minted, slug: id },
+            update: { uuid: minted, slug: id, last_seen_at: new Date() },
+          });
+        }
+      } catch {
+        // ignore cache errors
+      }
+    }
+
+    return NextResponse.json(
+      { uuid: minted },
+      { status: 200, headers: { 'Cache-Control': 'no-store' } }
+    );
   }
 
   return NextResponse.json(
