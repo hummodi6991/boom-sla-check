@@ -7,6 +7,7 @@ export type ResolveConversationOpts = {
   fetchFirstMessage?: (idOrSlug: string) => Promise<unknown> | unknown;
   skipRedirectProbe?: boolean;
   onDebug?: (d: unknown) => void;
+  allowMintFallback?: boolean;
 };
 
 export async function resolveConversationUuid(
@@ -21,14 +22,17 @@ export async function resolveConversationUuid(
   } catch {}
   try {
     const viaInternal = await resolveViaInternalEndpoint(raw);
-    return viaInternal ? viaInternal.toLowerCase() : null;
+    if (viaInternal) return viaInternal.toLowerCase();
   } catch {
     // fall through to minting
   }
-  try {
-    const minted = mintUuidFromRaw(raw);
-    return minted ? minted.toLowerCase() : null;
-  } catch {
-    return null;
+  if (opts.allowMintFallback !== false) {
+    try {
+      const minted = mintUuidFromRaw(raw);
+      return minted ? minted.toLowerCase() : null;
+    } catch {
+      return null;
+    }
   }
+  return null;
 }
