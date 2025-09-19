@@ -10,6 +10,6 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const base = appUrlFromRequest(req);
   const to = uuid
     ? conversationDeepLinkFromUuid(uuid, { baseUrl: base })
-    : `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(raw)}`;
+    : `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(raw)}`;
   return NextResponse.redirect(to, 302);
 }
