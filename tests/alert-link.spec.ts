@@ -79,6 +79,29 @@ test('buildUniversalConversationLink returns token link for uuid', async () => {
   expect('uuid' in decoded ? decoded.uuid : null).toBe(uuid);
 });
 
+test('buildUniversalConversationLink degrades to deep link when token verification fails', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  const calls: string[] = [];
+  const deep = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  const res = await buildUniversalConversationLink(
+    { uuid },
+    {
+      baseUrl: BASE,
+      verify: async (url) => {
+        calls.push(url);
+        if (url.startsWith(`${BASE}/r/t/`)) return false;
+        if (url === deep) return true;
+        return false;
+      },
+    }
+  );
+  expect(res?.kind).toBe('uuid');
+  expect(res?.url).toBe(deep);
+  expect(calls).toHaveLength(2);
+  expect(calls[0]?.startsWith(`${BASE}/r/t/`)).toBe(true);
+  expect(calls[1]).toBe(deep);
+});
+
 test('buildUniversalConversationLink falls back to deep link when token mint fails', async () => {
   delete process.env.LINK_SECRET;
   const calls: unknown[] = [];
