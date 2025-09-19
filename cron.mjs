@@ -5,10 +5,9 @@ import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 import { conversationIdDisplay, appUrl, makeConversationLink } from "./lib/links.js";
 import { buildUniversalConversationLink } from "./lib/alertLink.js";
-import { tryResolveConversationUuid } from "./apps/server/lib/conversations.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
-import { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
+import { resolveConversationUuid } from "./apps/shared/lib/conversationUuid.js";
 export { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
 const logger = console;
 const metrics = { increment: () => {} };
@@ -367,17 +366,15 @@ for (const { id } of toCheck) {
       // Build a universal conversation link
       const lookupId = conv?.uuid ?? conv?.id ?? id;
       const convId = id;
-      const uuid =
-        await tryResolveConversationUuid(lookupId, {
-          inlineThread,
-          fetchFirstMessage: async (idOrSlug) => {
-            const headers = authHeaders();
-            const r = await fetchMessagesWithRetry(idOrSlug, headers, { attempts: 1 });
-            return r.ok ? r.messages[0] : null;
-          },
-          onDebug: (d) => logger?.debug?.({ convId, ...d }, 'uuid resolution attempted'),
-        }) ||
-        await resolveViaInternalEndpoint(lookupId);
+      const uuid = await resolveConversationUuid(lookupId, {
+        inlineThread,
+        fetchFirstMessage: async (idOrSlug) => {
+          const headers = authHeaders();
+          const r = await fetchMessagesWithRetry(idOrSlug, headers, { attempts: 1 });
+          return r.ok ? r.messages[0] : null;
+        },
+        onDebug: (d) => logger?.debug?.({ convId, ...d }, 'uuid resolution attempted'),
+      });
 
       const input = uuid
         ? { uuid }
