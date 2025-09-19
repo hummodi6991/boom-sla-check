@@ -4,14 +4,20 @@ import GuestExperience from './GuestExperience';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-export default function Page({ searchParams }: { searchParams: { conversation?: string } }) {
+export default function Page({ searchParams }: { searchParams: { conversation?: string; legacyId?: string } }) {
   const conversation =
     typeof searchParams.conversation === 'string' && searchParams.conversation.length > 0
       ? searchParams.conversation
       : undefined;
+  const legacyId =
+    typeof searchParams.legacyId === 'string' && searchParams.legacyId.length > 0
+      ? searchParams.legacyId
+      : undefined;
 
+  // If legacyId is present, or conversation is not a UUID, use the client-side resolver.
+  if (legacyId) redirect(`/dashboard/guest-experience/cs?legacyId=${encodeURIComponent(legacyId)}`);
   if (conversation && !UUID_RE.test(conversation)) {
-    redirect(`/c/${encodeURIComponent(conversation)}`);
+    redirect(`/dashboard/guest-experience/cs?conversation=${encodeURIComponent(conversation)}`);
   }
 
   return <GuestExperience initialConversationId={conversation} />;
