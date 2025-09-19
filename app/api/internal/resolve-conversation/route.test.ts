@@ -24,7 +24,7 @@ function makeUrl(id: string, ts: number, nonce: string, sig: string) {
   return `https://example.com/api/internal/resolve-conversation?id=${id}&ts=${ts}&nonce=${nonce}&sig=${sig}`;
 }
 
-test('valid signature + known legacyId -> 200 { uuid }', async () => {
+test('valid signature + known legacyId -> 200 { uuid, minted: false }', async () => {
   const { GET } = await import('./route');
   const ts = Date.now();
   const nonce = 'abc';
@@ -33,7 +33,7 @@ test('valid signature + known legacyId -> 200 { uuid }', async () => {
   conversations.set(123, { uuid, legacyId: 123 });
   const res = await GET(new Request(makeUrl(id, ts, nonce, sig)));
   expect(res.status).toBe(200);
-  await expect(res.json()).resolves.toEqual({ uuid });
+  await expect(res.json()).resolves.toEqual({ uuid, minted: false });
 });
 
 test('invalid signature -> 401', async () => {
@@ -68,6 +68,7 @@ test('not found -> deterministic minted uuid (200)', async () => {
   const json = await res.json();
   expect(typeof json.uuid).toBe('string');
   expect(json.uuid).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(json.minted).toBe(true);
 });
 
 test('resolves via alias when legacy conversation missing', async () => {
@@ -83,7 +84,7 @@ test('resolves via alias when legacy conversation missing', async () => {
   const sig = signResolve(id, ts, nonce, process.env.RESOLVE_SECRET!);
   const res = await GET(new Request(makeUrl(id, ts, nonce, sig)));
   expect(res.status).toBe(200);
-  await expect(res.json()).resolves.toEqual({ uuid });
+  await expect(res.json()).resolves.toEqual({ uuid, minted: false });
 });
 
 test('alias lookup bumps last_seen_at timestamp', async () => {
@@ -112,7 +113,7 @@ test('resolves slug and caches alias', async () => {
   const sig = signResolve(slug, ts, nonce, process.env.RESOLVE_SECRET!);
   const res = await GET(new Request(makeUrl(slug, ts, nonce, sig)));
   expect(res.status).toBe(200);
-  await expect(res.json()).resolves.toEqual({ uuid });
+  await expect(res.json()).resolves.toEqual({ uuid, minted: false });
   const alias = await prisma.conversation_aliases.findUnique({ where: { legacy_id: 99 } });
   expect(alias).toMatchObject({ uuid, slug });
 });
@@ -125,5 +126,5 @@ test('resolves uuid directly when conversation exists', async () => {
   const sig = signResolve(uuid, ts, nonce, process.env.RESOLVE_SECRET!);
   const res = await GET(new Request(makeUrl(uuid, ts, nonce, sig)));
   expect(res.status).toBe(200);
-  await expect(res.json()).resolves.toEqual({ uuid });
+  await expect(res.json()).resolves.toEqual({ uuid, minted: false });
 });

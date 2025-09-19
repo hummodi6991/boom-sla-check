@@ -204,6 +204,52 @@ test('buildUniversalConversationLink resolves identifiers via internal endpoint'
   expect(resolveCalls).toEqual(['abc']);
 });
 
+test('buildUniversalConversationLink falls back to legacy link when resolver mints uuid for legacyId', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  process.env.RESOLVE_SECRET = 'resolve';
+  process.env.RESOLVE_BASE_URL = 'https://resolve.test';
+  global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
+  const seen: string[] = [];
+  const res = await buildUniversalConversationLink(
+    { legacyId: 987 },
+    {
+      baseUrl: BASE,
+      verify: async (url) => {
+        seen.push(url);
+        return true;
+      },
+    }
+  );
+  expect(res).toEqual({
+    kind: 'legacy',
+    url: `${BASE}/dashboard/guest-experience/all?legacyId=987`,
+  });
+  expect(seen).toEqual([`${BASE}/dashboard/guest-experience/all?legacyId=987`]);
+});
+
+test('buildUniversalConversationLink falls back to slug deep link when resolver mints uuid for slug', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  process.env.RESOLVE_SECRET = 'resolve';
+  process.env.RESOLVE_BASE_URL = 'https://resolve.test';
+  global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
+  const seen: string[] = [];
+  const res = await buildUniversalConversationLink(
+    { slug: 'sluggy' },
+    {
+      baseUrl: BASE,
+      verify: async (url) => {
+        seen.push(url);
+        return true;
+      },
+    }
+  );
+  expect(res).toEqual({
+    kind: 'legacy',
+    url: `${BASE}/dashboard/guest-experience/all?conversation=sluggy`,
+  });
+  expect(seen).toEqual([`${BASE}/dashboard/guest-experience/all?conversation=sluggy`]);
+});
+
 test('buildUniversalConversationLink falls back to internal resolver when resolve API fails', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
@@ -273,4 +319,26 @@ test('buildUniversalConversationLink falls back to deep link when token verifica
   );
   expect(res?.kind).toBe('uuid');
   expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`);
+});
+
+test('buildUniversalConversationLink prefers token link when minted uuid but strict mode disabled', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  process.env.RESOLVE_SECRET = 'resolve';
+  process.env.RESOLVE_BASE_URL = 'https://resolve.test';
+  global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
+  const seen: string[] = [];
+  const res = await buildUniversalConversationLink(
+    { legacyId: 654 },
+    {
+      baseUrl: BASE,
+      strictUuid: false,
+      verify: async (url) => {
+        seen.push(url);
+        return true;
+      },
+    }
+  );
+  expect(res?.kind).toBe('uuid');
+  expect(res?.url?.startsWith(`${BASE}/r/t/`)).toBe(true);
+  expect(seen[0]?.startsWith(`${BASE}/r/t/`)).toBe(true);
 });
