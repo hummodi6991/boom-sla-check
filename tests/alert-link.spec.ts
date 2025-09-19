@@ -253,8 +253,24 @@ test('buildUniversalConversationLink returns null when verification fails', asyn
     { uuid },
     {
       baseUrl: BASE,
-      verify: async () => false,
+      verify: async () => false, // both token and deep link fail -> null
     }
   );
   expect(res).toBeNull();
+});
+
+test('buildUniversalConversationLink falls back to deep link when token verification fails', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  const res = await buildUniversalConversationLink(
+    { uuid },
+    {
+      baseUrl: BASE,
+      verify: async (url) => {
+        // Simulate prod: /r/t/... does NOT redirect (fail), but deep link works.
+        return !/\/r\/t\//.test(url);
+      },
+    }
+  );
+  expect(res?.kind).toBe('uuid');
+  expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`);
 });
