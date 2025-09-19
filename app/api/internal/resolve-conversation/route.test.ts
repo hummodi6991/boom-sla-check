@@ -57,14 +57,17 @@ test('stale ts -> 400', async () => {
   expect(res.status).toBe(400);
 });
 
-test('not found -> 404', async () => {
+test('not found -> deterministic minted uuid (200)', async () => {
   const { GET } = await import('./route');
   const ts = Date.now();
   const nonce = 'abc';
   const id = '123';
   const sig = signResolve(id, ts, nonce, process.env.RESOLVE_SECRET!);
   const res = await GET(new Request(makeUrl(id, ts, nonce, sig)));
-  expect(res.status).toBe(404);
+  expect(res.status).toBe(200);
+  const json = await res.json();
+  expect(typeof json.uuid).toBe('string');
+  expect(json.uuid).toMatch(/^[0-9a-f-]{36}$/i);
 });
 
 test('resolves via alias when legacy conversation missing', async () => {
