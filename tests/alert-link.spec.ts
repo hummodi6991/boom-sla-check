@@ -8,6 +8,7 @@ const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
 const ORIGINAL_APP_URL = process.env.APP_URL;
 const ORIGINAL_FETCH = global.fetch;
 const ORIGINAL_TRY_RESOLVE = (globalThis as any).tryResolveConversationUuid;
+const ORIGINAL_RESOLVE_CONVERSATION = (globalThis as any).resolveConversationUuid;
 
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
 
@@ -41,6 +42,11 @@ function restoreEnv() {
     (globalThis as any).tryResolveConversationUuid = ORIGINAL_TRY_RESOLVE;
   } else {
     delete (globalThis as any).tryResolveConversationUuid;
+  }
+  if (ORIGINAL_RESOLVE_CONVERSATION) {
+    (globalThis as any).resolveConversationUuid = ORIGINAL_RESOLVE_CONVERSATION;
+  } else {
+    delete (globalThis as any).resolveConversationUuid;
   }
 }
 
@@ -119,10 +125,42 @@ test('buildUniversalConversationLink uses resolver(s) to obtain uuid; returns nu
   expect(res).toBeNull();
 });
 
+test('buildUniversalConversationLink uses resolveConversationUuid when available', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  const resolveCalls: Array<{ raw: string }> = [];
+  (globalThis as any).resolveConversationUuid = async (raw: string) => {
+    resolveCalls.push({ raw });
+    return uuid;
+  };
+  const fetchCalls: string[] = [];
+  global.fetch = async (url: any) => {
+    fetchCalls.push(String(url));
+    return {} as any;
+  };
+  const res = await buildUniversalConversationLink(
+    { slug: 'via-hook' },
+    {
+      baseUrl: BASE,
+      verify: async (url) => {
+        expect(url.startsWith(`${BASE}/r/t/`)).toBe(true);
+        return true;
+      },
+    }
+  );
+  expect(resolveCalls).toEqual([{ raw: 'via-hook' }]);
+  expect(fetchCalls).toHaveLength(0);
+  expect(res?.kind).toBe('uuid');
+});
+
 test('buildUniversalConversationLink resolves identifiers via internal endpoint', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
+  const resolveCalls: string[] = [];
+  (globalThis as any).resolveConversationUuid = async (raw: string) => {
+    resolveCalls.push(raw);
+    return null;
+  };
   const fetchCalls: string[] = [];
   global.fetch = async (url: any) => {
     fetchCalls.push(String(url));
@@ -140,12 +178,18 @@ test('buildUniversalConversationLink resolves identifiers via internal endpoint'
   );
   expect(res?.kind).toBe('uuid');
   expect(fetchCalls[0]).toContain('id=abc');
+  expect(resolveCalls).toEqual(['abc']);
 });
 
 test('buildUniversalConversationLink falls back to internal resolver when resolve API fails', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
+  const resolveCalls: string[] = [];
+  (globalThis as any).resolveConversationUuid = async (raw: string) => {
+    resolveCalls.push(raw);
+    return null;
+  };
   const fetchCalls: string[] = [];
   global.fetch = async (url: any) => {
     fetchCalls.push(String(url));
@@ -171,6 +215,7 @@ test('buildUniversalConversationLink falls back to internal resolver when resolv
   );
   expect(res?.kind).toBe('uuid');
   expect(fetchCalls).toHaveLength(1);
+  expect(resolveCalls).toEqual(['needs-fallback']);
   expect(tryResolveCalls).toEqual([
     {
       raw: 'needs-fallback',
