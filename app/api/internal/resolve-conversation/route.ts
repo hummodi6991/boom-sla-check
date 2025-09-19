@@ -161,13 +161,13 @@ export async function GET(req: Request) {
     }
 
     return NextResponse.json(
-      { uuid: minted },
-      { status: 200, headers: { 'Cache-Control': 'no-store' } }
+      { uuid: minted, minted: true },
+      { status: 200, headers: { 'Cache-Control': 'no-store', 'X-Boom-Minted': '1' } }
     );
   }
 
   return NextResponse.json(
-    { uuid },
-    { status: 200, headers: { 'Cache-Control': 'no-store' } }
+    { uuid, minted: false },
+    { status: 200, headers: { 'Cache-Control': 'no-store', 'X-Boom-Minted': '0' } }
   );
 }
