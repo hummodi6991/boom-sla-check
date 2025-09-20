@@ -1,8 +1,7 @@
 import fs from "fs";
 import { sendAlert } from "./lib/email.js";
 import { appUrl } from "./lib/links.js";
-import { buildAlertConversationLink } from "./lib/conversationLink.js";
-import { resolveConversationUuid } from "./apps/shared/lib/conversationUuid.js";
+import { ensureAlertConversationLink } from "./lib/alertConversation.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
@@ -696,24 +695,22 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
   // 4) Alert if needed
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
-    // Unified resolver: DB/alias → internal endpoint → deterministic mint
-    const uuid = await resolveConversationUuid(convId, { inlineThread });
-    if (!uuid) {
+    const base = appUrl().replace(/\/+$/, "");
+    const link = await ensureAlertConversationLink(
+      {
+        primary: convId,
+        additional: uniqKeys,
+        inlineThread,
+      },
+      { baseUrl: base, strictUuid: true },
+    );
+    if (!link) {
       logger.warn({ convId }, 'skip alert: cannot resolve conversation UUID');
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
-    // Build a **verified** link (token -> deep link). If the uuid was minted for the
-    // original id/slug, the builder will degrade to a legacy-safe link.
-    const base = appUrl().replace(/\/+$/, "");
-    const linkInput = { uuid, id: convId };
-    const built = await buildAlertConversationLink(linkInput, { baseUrl: base, strictUuid: true });
-    if (!built) {
-      console.log("Skip alert: unable to build a verified conversation link.");
-      return;
-    }
-    const url = built.url;
-    const idDisplay = built.idDisplay || uuid || String(convId);
+    const url = link.url;
+    const idDisplay = link.idDisplay || link.uuid || String(convId);
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${idDisplay}\nOpen: ${url}`;
     const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>
