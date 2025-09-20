@@ -16,6 +16,8 @@ export default function CsPage() {
   const numericConversation =
     conversation && !UUID_RE.test(conversation) && /^\d+$/.test(conversation) ? conversation : null;
   const numericLegacyId = legacyId && /^\d+$/.test(legacyId) ? legacyId : null;
+  const slugConversation =
+    conversation && !UUID_RE.test(conversation) && !/^\d+$/.test(conversation) ? conversation : null;
   const [resolving, setResolving] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const previousParams = useRef<{ conversation: string | null; legacyId: string | null }>({
@@ -41,11 +43,15 @@ export default function CsPage() {
   }, [conversation]);
 
   useEffect(() => {
-    const leg = numericConversation || numericLegacyId;
-    if (!uuid && leg) {
+    const idToResolve = numericConversation || numericLegacyId || slugConversation;
+    if (!uuid && idToResolve) {
       setResolving(true);
       setNotFound(false);
-      fetch(`/api/resolve/conversation?legacyId=${encodeURIComponent(leg)}`, {
+      const endpoint =
+        slugConversation
+          ? `/api/resolve/any?id=${encodeURIComponent(idToResolve)}`
+          : `/api/resolve/conversation?legacyId=${encodeURIComponent(idToResolve)}`;
+      fetch(endpoint, {
         method: 'GET',
         credentials: 'include',
       })
@@ -62,8 +68,9 @@ export default function CsPage() {
             const normalized = u.toLowerCase();
             setUuid(normalized);
             const sp = new URLSearchParams(window.location.search);
-            sp.delete('legacyId');
-            if (numericConversation) sp.delete('conversation');
+            // Clean up the original param we resolved from
+            if (numericLegacyId) sp.delete('legacyId');
+            if (numericConversation || slugConversation) sp.delete('conversation');
             sp.set('conversation', normalized);
             const nextQuery = sp.toString();
             const nextUrl = nextQuery ? `${window.location.pathname}?${nextQuery}` : window.location.pathname;
@@ -80,7 +87,7 @@ export default function CsPage() {
         })
         .finally(() => setResolving(false));
     }
-  }, [numericLegacyId, numericConversation, router, uuid]);
+  }, [numericLegacyId, numericConversation, slugConversation, router, uuid]);
 
   useEffect(() => {
     if (uuid) {
