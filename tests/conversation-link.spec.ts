@@ -3,6 +3,10 @@ import { makeConversationLink } from '../apps/shared/lib/links';
 import { verifyLinkToken } from '../apps/shared/lib/linkToken';
 import { buildAlertEmail } from '../apps/worker/mailer/alerts';
 import { metrics } from '../lib/metrics';
+import {
+  buildAlertConversationLink,
+  normalizeAlertLinkInput,
+} from '../lib/conversationLink.js';
 
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
 const uuid = '01890b14-b4cd-7eef-b13e-bb8c083bad60';
@@ -52,6 +56,26 @@ test('makeConversationLink accepts baseUrl override', () => {
 
 test('makeConversationLink returns null when uuid missing', () => {
   expect(makeConversationLink({})).toBeNull();
+});
+
+test('normalizeAlertLinkInput extracts identifiers from event payload', () => {
+  const normalized = normalizeAlertLinkInput({
+    conversation_uuid: uuid,
+    legacyId: 123,
+    conversation: { slug: 'guest-slug' },
+  });
+  expect(normalized).toEqual(
+    expect.objectContaining({ uuid: uuid.toLowerCase(), legacyId: '123', slug: 'guest-slug' })
+  );
+});
+
+test('buildAlertConversationLink produces verified link with id display', async () => {
+  const built = await buildAlertConversationLink(
+    { conversation_uuid: uuid },
+    { baseUrl: BASE, verify: async () => true, strictUuid: true }
+  );
+  expect(built?.url).toMatch(/\/r\/(t|conversation)\/|conversation=/);
+  expect(built?.idDisplay).toBe(uuid.toLowerCase());
 });
 
 async function simulateAlert(event: any, deps: any) {

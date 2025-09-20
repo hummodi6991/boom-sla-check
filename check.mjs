@@ -1,7 +1,7 @@
 import fs from "fs";
 import { sendAlert } from "./lib/email.js";
-import { conversationIdDisplay, appUrl } from "./lib/links.js";
-import { buildUniversalConversationLink } from "./lib/alertLink.js";
+import { appUrl } from "./lib/links.js";
+import { buildAlertConversationLink } from "./lib/conversationLink.js";
 import { resolveConversationUuid } from "./apps/shared/lib/conversationUuid.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
@@ -706,17 +706,14 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
     // Build a **verified** link (token -> deep link). If the uuid was minted for the
     // original id/slug, the builder will degrade to a legacy-safe link.
     const base = appUrl().replace(/\/+$/, "");
-    const inputForBuilder =
-      /^\d+$/.test(String(convId))
-        ? { uuid, legacyId: String(convId) }
-        : { uuid, slug: String(convId) };
-    const built = await buildUniversalConversationLink(inputForBuilder, { baseUrl: base, strictUuid: true });
+    const linkInput = { uuid, id: convId };
+    const built = await buildAlertConversationLink(linkInput, { baseUrl: base, strictUuid: true });
     if (!built) {
       console.log("Skip alert: unable to build a verified conversation link.");
       return;
     }
     const url = built.url;
-    const idDisplay = conversationIdDisplay({ uuid, id: convId });
+    const idDisplay = built.idDisplay || uuid || String(convId);
     const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
     const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${idDisplay}\nOpen: ${url}`;
     const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>
