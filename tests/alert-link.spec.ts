@@ -305,6 +305,34 @@ test('buildUniversalConversationLink returns null when verification fails', asyn
   expect(res).toBeNull();
 });
 
+test('buildUniversalConversationLink degrades to legacy link when resolver indicates minted uuid', async () => {
+  process.env.LINK_SECRET = 'test-secret';
+  process.env.RESOLVE_SECRET = 'resolve';
+  process.env.RESOLVE_BASE_URL = 'https://resolve.test';
+  const originalFetch = global.fetch;
+  global.fetch = async (url: any) => {
+    const href = String(url);
+    if (href.includes('/api/internal/resolve-conversation') && href.includes('id=12345')) {
+      return { ok: true, json: async () => ({ uuid, minted: true }) } as any;
+    }
+    return { ok: true, json: async () => ({}) } as any;
+  };
+  const res = await buildUniversalConversationLink(
+    { uuid, legacyId: '12345' },
+    {
+      baseUrl: BASE,
+      verify: async (href) => {
+        expect(href).toBe(`${BASE}/dashboard/guest-experience/all?legacyId=12345`);
+        return true;
+      },
+      strictUuid: true,
+    }
+  );
+  global.fetch = originalFetch as any;
+  expect(res?.kind).toBe('legacy');
+  expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?legacyId=12345`);
+});
+
 test('buildUniversalConversationLink falls back to deep link when token verification fails', async () => {
   process.env.LINK_SECRET = 'test-secret';
   const res = await buildUniversalConversationLink(
