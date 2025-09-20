@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { startTestServer, stopTestServer } from '../tests/helpers/nextServer';
 import { makeLinkToken } from '../apps/shared/lib/linkToken';
 
-const uuid = '123e4567-e89b-12d3-a456-426614174000';
+const uuid = '01890b14-b4cd-7eef-b13e-bb8c083bad60';
 
 test.use({ ignoreHTTPSErrors: true });
 
