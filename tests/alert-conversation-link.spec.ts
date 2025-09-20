@@ -59,10 +59,10 @@ test('ensureAlertConversationLink mints uuid for numeric identifier when resolve
   expect(calls).toEqual([String(legacyId)]);
   const expected = mintUuidFromRaw(String(legacyId));
   expect(link?.uuid).toBe(expected);
-  expect(link?.kind).toBe('resolver');
+  expect(link?.kind).toBe('deep-link');
   expect(link?.minted).toBe(true);
   expect(link?.url).toBe(
-    `${BASE}/r/legacy/${encodeURIComponent(String(legacyId))}`
+    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected)}`
   );
 });
 
@@ -85,10 +85,10 @@ test('ensureAlertConversationLink extracts slug from inline thread and mints whe
   );
   const expected = mintUuidFromRaw('inline-slug');
   expect(link?.uuid).toBe(expected);
-  expect(link?.kind).toBe('resolver');
+  expect(link?.kind).toBe('deep-link');
   expect(link?.minted).toBe(true);
   expect(link?.url).toBe(
-    `${BASE}/r/conversation/${encodeURIComponent('inline-slug')}`
+    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected)}`
   );
 });
 
