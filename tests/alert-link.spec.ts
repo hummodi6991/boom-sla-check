@@ -283,7 +283,7 @@ test('buildUniversalConversationLink falls back to internal resolver when resolv
     }
   );
   expect(res?.kind).toBe('uuid');
-  expect(fetchCalls).toHaveLength(1);
+  expect(fetchCalls).toHaveLength(2);
   expect(resolveCalls).toEqual(['needs-fallback']);
   expect(tryResolveCalls).toEqual([
     {
@@ -321,7 +321,7 @@ test('buildUniversalConversationLink falls back to deep link when token verifica
   expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`);
 });
 
-test('buildUniversalConversationLink prefers token link when minted uuid but strict mode disabled', async () => {
+test('buildUniversalConversationLink uses legacy link for minted identifiers even when strict mode disabled', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
@@ -338,7 +338,7 @@ test('buildUniversalConversationLink prefers token link when minted uuid but str
       },
     }
   );
-  expect(res?.kind).toBe('uuid');
-  expect(res?.url?.startsWith(`${BASE}/r/t/`)).toBe(true);
-  expect(seen[0]?.startsWith(`${BASE}/r/t/`)).toBe(true);
+  const legacy = `${BASE}/dashboard/guest-experience/all?legacyId=654`;
+  expect(res).toEqual({ kind: 'legacy', url: legacy });
+  expect(seen).toEqual([legacy]);
 });
