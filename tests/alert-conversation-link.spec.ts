@@ -43,8 +43,9 @@ test.beforeEach(() => {
 test('ensureAlertConversationLink mints uuid for numeric identifier when resolvers fail', async () => {
   process.env.APP_URL = BASE;
   const calls: string[] = [];
+  const legacyId = 456;
   const link = await ensureAlertConversationLink(
-    { primary: 456 },
+    { primary: legacyId },
     {
       baseUrl: BASE,
       strictUuid: true,
@@ -55,13 +56,13 @@ test('ensureAlertConversationLink mints uuid for numeric identifier when resolve
       },
     },
   );
-  expect(calls).toEqual(['456']);
-  const expected = mintUuidFromRaw('456');
+  expect(calls).toEqual([String(legacyId)]);
+  const expected = mintUuidFromRaw(String(legacyId));
   expect(link?.uuid).toBe(expected);
-  expect(link?.kind).toBe('deep-link');
+  expect(link?.kind).toBe('resolver');
   expect(link?.minted).toBe(true);
   expect(link?.url).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected ?? '')}`
+    `${BASE}/r/legacy/${encodeURIComponent(String(legacyId))}`
   );
 });
 
@@ -84,10 +85,10 @@ test('ensureAlertConversationLink extracts slug from inline thread and mints whe
   );
   const expected = mintUuidFromRaw('inline-slug');
   expect(link?.uuid).toBe(expected);
-  expect(link?.kind).toBe('deep-link');
+  expect(link?.kind).toBe('resolver');
   expect(link?.minted).toBe(true);
   expect(link?.url).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected ?? '')}`
+    `${BASE}/r/conversation/${encodeURIComponent('inline-slug')}`
   );
 });
 

@@ -153,13 +153,12 @@ test('buildUniversalConversationLink falls back to deep link when token mint fai
 
 test('buildUniversalConversationLink mints fallback uuid when strict mode enabled', async () => {
   const slug = 'no-alias';
-  const minted = mintUuidFromRaw(slug);
   const res = await buildUniversalConversationLink(
     { slug },
     { baseUrl: BASE, verify: async () => true, strictUuid: true }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted ?? '')}`;
-  expect(res?.kind).toBe('deep-link');
+  const expected = `${BASE}/r/conversation/${encodeURIComponent(slug)}`;
+  expect(res?.kind).toBe('resolver');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
 });
@@ -167,16 +166,15 @@ test('buildUniversalConversationLink mints fallback uuid when strict mode enable
 test('buildUniversalConversationLink uses resolver(s) to obtain uuid; mints when still unresolved', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
+  const legacyId = 456;
   const res = await buildUniversalConversationLink(
-    { legacyId: 456 },
+    { legacyId },
     { baseUrl: BASE, verify: async () => true, strictUuid: true }
   );
-  const minted = mintUuidFromRaw('456');
-  expect(res?.kind).toBe('deep-link');
+  const expected = `${BASE}/r/legacy/${encodeURIComponent(String(legacyId))}`;
+  expect(res?.kind).toBe('resolver');
   expect(res?.minted).toBe(true);
-  expect(res?.url).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted ?? '')}`,
-  );
+  expect(res?.url).toBe(expected);
 });
 
 test('buildUniversalConversationLink uses resolveConversationUuid when available', async () => {
@@ -238,8 +236,9 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
   const seen: string[] = [];
+  const legacyId = 987;
   const res = await buildUniversalConversationLink(
-    { legacyId: 987 },
+    { legacyId },
     {
       baseUrl: BASE,
       verify: async (url) => {
@@ -248,8 +247,8 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
-  expect(res?.kind).toBe('deep-link');
+  const expected = `${BASE}/r/legacy/${encodeURIComponent(String(legacyId))}`;
+  expect(res?.kind).toBe('resolver');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
   expect(seen).toEqual([expected]);
@@ -260,8 +259,9 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
   const seen: string[] = [];
+  const slug = 'sluggy';
   const res = await buildUniversalConversationLink(
-    { slug: 'sluggy' },
+    { slug },
     {
       baseUrl: BASE,
       verify: async (url) => {
@@ -270,8 +270,8 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
-  expect(res?.kind).toBe('deep-link');
+  const expected = `${BASE}/r/conversation/${encodeURIComponent(slug)}`;
+  expect(res?.kind).toBe('resolver');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
   expect(seen).toEqual([expected]);
@@ -294,8 +294,8 @@ test('buildUniversalConversationLink detects minted fallback without resolver de
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted ?? '')}`;
-  expect(res?.kind).toBe('deep-link');
+  const expected = `${BASE}/r/conversation/${encodeURIComponent(slug)}`;
+  expect(res?.kind).toBe('resolver');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
   expect(seen).toEqual([expected]);
@@ -365,9 +365,10 @@ test('buildUniversalConversationLink verifies resolver link when resolver indica
     }
     return { ok: true, json: async () => ({}) } as any;
   };
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  const legacyId = '12345';
+  const expected = `${BASE}/r/legacy/${encodeURIComponent(legacyId)}`;
   const res = await buildUniversalConversationLink(
-    { uuid, legacyId: '12345' },
+    { uuid, legacyId },
     {
       baseUrl: BASE,
       verify: async (href) => {
@@ -378,7 +379,7 @@ test('buildUniversalConversationLink verifies resolver link when resolver indica
     }
   );
   global.fetch = originalFetch as any;
-  expect(res?.kind).toBe('deep-link');
+  expect(res?.kind).toBe('resolver');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
 });
@@ -403,8 +404,9 @@ test('buildUniversalConversationLink uses resolver link for minted identifiers e
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
   const seen: string[] = [];
+  const legacyId = 654;
   const res = await buildUniversalConversationLink(
-    { legacyId: 654 },
+    { legacyId },
     {
       baseUrl: BASE,
       strictUuid: false,
@@ -414,8 +416,8 @@ test('buildUniversalConversationLink uses resolver link for minted identifiers e
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
-  expect(res?.kind).toBe('deep-link');
+  const expected = `${BASE}/r/legacy/${encodeURIComponent(String(legacyId))}`;
+  expect(res?.kind).toBe('resolver');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
   expect(seen).toEqual([expected]);
