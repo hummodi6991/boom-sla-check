@@ -21,8 +21,10 @@ export default function GuestExperience({ initialConversationId }: { initialConv
   const { data: s, isLoading, error } = useConversation(initialConversationId);
 
   const safe = useMemo(
-    () =>
-      s ?? normalizeConversation(undefined, { fallbackId: initialConversationId }),
+const safe = useMemo(
+  () => normalizeConversation(s ?? undefined, { fallbackId: initialConversationId }),
+  [s, initialConversationId]
+);
     [s, initialConversationId]
   );
 
