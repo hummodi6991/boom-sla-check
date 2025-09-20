@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 import { appUrl, makeConversationLink } from "./lib/links.js";
+import { mintUuidFromRaw } from "./apps/shared/lib/canonicalConversationUuid.js";
 import { buildAlertConversationLink } from "./lib/conversationLink.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
@@ -22,6 +23,13 @@ export function buildSafeDeepLink(lookupId, uuid) {
   if (deep) return deep;
   const raw = String(lookupId ?? "").trim();
   const base = appUrl();
+  if (raw) {
+    try {
+      const minted = mintUuidFromRaw(raw);
+      const mintedDeep = makeConversationLink({ uuid: minted });
+      if (mintedDeep) return mintedDeep;
+    } catch {}
+  }
   if (!raw) return `${base}/dashboard/guest-experience/all`;
   if (/^\d+$/.test(raw)) {
     return `${base}/dashboard/guest-experience/all?legacyId=${encodeURIComponent(raw)}`;
@@ -434,6 +442,7 @@ for (const { id } of toCheck) {
       }
 
       const url = built.url;
+      const backupUrl = built.backupUrl || url;
       const idDisplay = built.idDisplay || uuid || String(lookupId);
 
       console.log(
@@ -446,7 +455,15 @@ for (const { id } of toCheck) {
         log(`conv ${id}: duplicate alert suppressed`);
       } else {
         const key = dedupeKey(id, lastGuestMs);
+        const metricName = built.minted
+          ? 'alerts.sent_with_minted_link'
+          : built.kind === 'token'
+          ? 'alerts.sent_with_token_link'
+          : built.kind === 'legacy'
+          ? 'alerts.sent_with_legacy_shortlink'
+          : 'alerts.sent_with_deep_link';
         try {
+          metrics?.increment?.(metricName);
           await sendAlertEmail({
             to,
             subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${idDisplay}`,
@@ -454,11 +471,12 @@ for (const { id } of toCheck) {
     <p>Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).</p>
     <p>Conversation: <strong>${idDisplay}</strong></p>
     <p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p>
-    <p style="font-size:12px;color:#666">If the link doesn’t work, copy & paste this URL:<br>${url}</p>
+    <p style="font-size:12px;color:#666">If the token link fails, use this direct deep link:<br><a href="${backupUrl}" target="_blank" rel="noopener">${backupUrl}</a></p>
   `,
             text: `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
 Conversation: ${idDisplay}
-Open: ${url}`,
+Open: ${url}
+Backup deep link: ${backupUrl}`,
           });
           markAlerted(state, id, lastGuestMs);
           log(`dedupe_key=${key}`);

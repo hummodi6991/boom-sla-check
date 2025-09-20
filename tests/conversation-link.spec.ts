@@ -3,32 +3,40 @@ import { makeConversationLink } from '../apps/shared/lib/links';
 import { verifyLinkToken } from '../apps/shared/lib/linkToken';
 import { buildAlertEmail } from '../apps/worker/mailer/alerts';
 import { metrics } from '../lib/metrics';
+import { mintUuidFromRaw } from '../apps/shared/lib/canonicalConversationUuid.js';
 import {
   buildAlertConversationLink,
   normalizeAlertLinkInput,
 } from '../lib/conversationLink.js';
+import { setTestKeyEnv } from './helpers/testKeys';
 
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
 const uuid = '01890b14-b4cd-7eef-b13e-bb8c083bad60';
-const ORIGINAL_LINK_SECRET = process.env.LINK_SECRET;
+const ORIGINAL_PRIVATE_KEY = process.env.LINK_PRIVATE_KEY_PEM;
+const ORIGINAL_PUBLIC_KEY = process.env.LINK_PUBLIC_KEY_PEM;
+const ORIGINAL_SIGNING_KID = process.env.LINK_SIGNING_KID;
 const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
 const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
 
-function ensureLinkSecret() {
-  if (!process.env.LINK_SECRET) {
-    process.env.LINK_SECRET = 'test-secret';
-  }
-}
-
 test.beforeEach(() => {
-  ensureLinkSecret();
+  setTestKeyEnv();
 });
 
 test.afterEach(() => {
-  if (ORIGINAL_LINK_SECRET !== undefined) {
-    process.env.LINK_SECRET = ORIGINAL_LINK_SECRET;
+  if (ORIGINAL_PRIVATE_KEY !== undefined) {
+    process.env.LINK_PRIVATE_KEY_PEM = ORIGINAL_PRIVATE_KEY;
   } else {
-    delete process.env.LINK_SECRET;
+    delete process.env.LINK_PRIVATE_KEY_PEM;
+  }
+  if (ORIGINAL_PUBLIC_KEY !== undefined) {
+    process.env.LINK_PUBLIC_KEY_PEM = ORIGINAL_PUBLIC_KEY;
+  } else {
+    delete process.env.LINK_PUBLIC_KEY_PEM;
+  }
+  if (ORIGINAL_SIGNING_KID !== undefined) {
+    process.env.LINK_SIGNING_KID = ORIGINAL_SIGNING_KID;
+  } else {
+    delete process.env.LINK_SIGNING_KID;
   }
   if (ORIGINAL_RESOLVE_SECRET !== undefined) {
     process.env.RESOLVE_SECRET = ORIGINAL_RESOLVE_SECRET;
@@ -109,8 +117,8 @@ test('mailer uses uuid when available', async () => {
     if (!url.includes('/r/t/')) return false;
     const match = url.match(/\/r\/t\/([^/?#]+)/);
     if (!match) return false;
-    const res = verifyLinkToken(match[1]);
-    return 'uuid' in res && res.uuid === uuid;
+    const res = await verifyLinkToken(match[1]);
+    return res.payload?.conversation === uuid;
   };
   const orig = metrics.increment;
   metrics.increment = (n: string) => metricsArr.push(n);
@@ -128,9 +136,10 @@ test('mailer uses uuid when available', async () => {
   expect(parsed?.pathname.startsWith('/r/t/')).toBe(true);
   const token = parsed?.pathname.split('/').pop();
   if (!token) throw new Error('missing token in href');
-  const decoded = verifyLinkToken(token);
-  expect('uuid' in decoded ? decoded.uuid : null).toBe(uuid);
-  expect(metricsArr).toContain('alerts.sent_with_uuid');
+  const decoded = await verifyLinkToken(token);
+  expect(decoded.payload?.conversation).toBe(uuid);
+  expect(emails[0].html).toContain('Backup deep link');
+  expect(metricsArr).toContain('alerts.sent_with_token_link');
 });
 
 test('mailer resolves legacyId via internal endpoint and emits token link', async () => {
@@ -145,8 +154,8 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
   const verify = async (url: string) => {
     const m = url.match(/\/r\/t\/([^/?#]+)/);
     if (!m) return false;
-    const decoded = verifyLinkToken(m[1]);
-    return 'uuid' in decoded && decoded.uuid === uuid;
+    const decoded = await verifyLinkToken(m[1]);
+    return decoded.payload?.conversation === uuid;
   };
   const orig = metrics.increment;
   metrics.increment = (n: string) => metricsArr.push(n);
@@ -161,10 +170,10 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
   const href = emails[0].html.match(/href="([^"]+)"/i)?.[1];
   expect(href).toBeDefined();
   expect(href).toContain('/r/t/');
-  expect(metricsArr).toContain('alerts.sent_with_uuid');
+  expect(metricsArr).toContain('alerts.sent_with_token_link');
 });
 
-test('mailer skips when uuid cannot be resolved (strict mode)', async () => {
+test('mailer mints uuid when canonical mapping missing (strict mode)', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const emails: any[] = [];
@@ -186,11 +195,13 @@ test('mailer skips when uuid cannot be resolved (strict mode)', async () => {
   } else {
     delete (globalThis as any).tryResolveConversationUuid;
   }
-  expect(emails.length).toBe(0);
-  expect(metricsArr).toContain('alerts.skipped_no_uuid');
+  expect(emails.length).toBe(1);
+  const minted = mintUuidFromRaw('789');
+  expect(emails[0].html).toContain(`conversation=${encodeURIComponent(minted ?? '')}`);
+  expect(metricsArr).toContain('alerts.sent_with_minted_link');
 });
 
-test('mailer skips when slug cannot resolve to uuid', async () => {
+test('mailer mints uuid for slug when resolver unavailable', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const slug = 'my-convo';
@@ -213,6 +224,8 @@ test('mailer skips when slug cannot resolve to uuid', async () => {
   } else {
     delete (globalThis as any).tryResolveConversationUuid;
   }
-  expect(emails.length).toBe(0);
-  expect(metricsArr).toContain('alerts.skipped_no_uuid');
+  expect(emails.length).toBe(1);
+  const minted = mintUuidFromRaw(slug);
+  expect(emails[0].html).toContain(`conversation=${encodeURIComponent(minted ?? '')}`);
+  expect(metricsArr).toContain('alerts.sent_with_minted_link');
 });

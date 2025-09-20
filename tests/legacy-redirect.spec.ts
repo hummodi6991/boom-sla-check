@@ -2,21 +2,43 @@ import { test, expect } from '@playwright/test'
 import { GET } from '../app/r/legacy/[id]/route'
 import { prisma } from '../lib/db'
 
+function extractRedirect(err: unknown): string {
+  if (err && typeof err === 'object' && 'digest' in err && typeof (err as any).digest === 'string') {
+    const digest: string = (err as any).digest
+    const parts = digest.split(';')
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+      const candidate = parts[i]
+      if (!candidate) continue
+      if (candidate.startsWith('http://') || candidate.startsWith('https://') || candidate.startsWith('/')) {
+        return candidate
+      }
+    }
+  }
+  return ''
+}
+
 test('legacy redirect resolves to uuid deep link', async () => {
   const uuid = '123e4567-e89b-12d3-a456-426614174000'
   const legacyId = 1000576
   prisma.conversation._data.set(legacyId, { uuid, legacyId })
-  const res = await GET(new Request(`http://test/r/legacy/${legacyId}`), { params: { id: String(legacyId) } })
-  expect(res.status).toBe(302)
-  expect(res.headers.get('location')).toBe(`https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`)
+  let location = ''
+  try {
+    await GET(new Request(`http://test/r/legacy/${legacyId}`), { params: { id: String(legacyId) } })
+  } catch (err) {
+    location = extractRedirect(err)
+  }
+  expect(location).toBe(`http://test/dashboard/guest-experience/all?conversation=${uuid}`)
 })
 
-test('legacy redirect sends to dashboard filter when uuid missing', async () => {
-  const res = await GET(new Request('http://test/r/legacy/999'), { params: { id: '999' } })
-  expect(res.status).toBe(302)
-  expect(res.headers.get('location')).toBe(
-    'https://app.boomnow.com/dashboard/guest-experience/all?legacyId=999',
-  )
+test('legacy redirect mints deterministic uuid when mapping missing', async () => {
+  let location = ''
+  try {
+    await GET(new Request('http://test/r/legacy/999'), { params: { id: '999' } })
+  } catch (err) {
+    location = extractRedirect(err)
+  }
+  expect(location).toMatch(/conversation=/)
+  expect(location).toMatch(/^http:\/\/test\/dashboard\/guest-experience\/all\?conversation=/)
 })
 
 test('legacy redirect resolves via alias when conversation missing', async () => {
@@ -28,14 +50,16 @@ test('legacy redirect resolves via alias when conversation missing', async () =>
     last_seen_at: new Date(),
   })
 
-  const res = await GET(new Request(`http://test/r/legacy/${legacyId}`), {
-    params: { id: String(legacyId) },
-  })
+  let location = ''
+  try {
+    await GET(new Request(`http://test/r/legacy/${legacyId}`), {
+      params: { id: String(legacyId) },
+    })
+  } catch (err) {
+    location = extractRedirect(err)
+  }
 
-  expect(res.status).toBe(302)
-  expect(res.headers.get('location')).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${uuid}`
-  )
+  expect(location).toBe(`http://test/dashboard/guest-experience/all?conversation=${uuid}`)
 
   prisma.conversation_aliases._data.delete(legacyId)
 })
