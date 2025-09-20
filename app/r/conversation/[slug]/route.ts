@@ -8,9 +8,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: { slug: string } }) {
   const origin = new URL(req.url).origin;
-  const resolved = await resolveConversationUuid(params.id, {
+  const resolved = await resolveConversationUuid(params.slug, {
     allowMintFallback: true,
     skipRedirectProbe: true,
   });

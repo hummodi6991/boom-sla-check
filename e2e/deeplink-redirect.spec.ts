@@ -1,19 +1,20 @@
 import { test, expect } from '@playwright/test';
 import { startTestServer, stopTestServer } from '../tests/helpers/nextServer';
-import { makeLinkToken } from '../apps/shared/lib/linkToken';
+import { signLinkToken } from '../apps/shared/lib/linkToken';
+import { setTestKeyEnv } from '../tests/helpers/testKeys';
 
 const uuid = '01890b14-b4cd-7eef-b13e-bb8c083bad60';
 
 test.use({ ignoreHTTPSErrors: true });
 
 test.beforeEach(() => {
-  process.env.LINK_SECRET = 'test-secret';
+  setTestKeyEnv();
 });
 
 test('token shortlink redirects to deep link', async ({ page }) => {
   const { server, port } = await startTestServer();
   process.env.APP_URL = `http://localhost:${port}`;
-  const token = makeLinkToken({ uuid, exp: Math.floor(Date.now() / 1000) + 60 });
+  const token = await signLinkToken({ conversation: uuid }, '5m');
   await page.goto(`http://localhost:${port}/r/t/${token}?from=email`, {
     waitUntil: 'domcontentloaded',
   });

@@ -18,8 +18,15 @@ export async function buildAlertEmail(
     metrics.increment('alerts.skipped_no_uuid');
     return null;
   }
-  metrics.increment(
-    built.kind === 'legacy' ? 'alerts.sent_with_legacy_shortlink' : 'alerts.sent_with_uuid'
-  );
-  return `<p>Alert for conversation <a href="${built.url}">${built.url}</a></p>`;
+  const primary = built.url;
+  const backup = built.backupUrl || built.url;
+  const metric = built.minted
+    ? 'alerts.sent_with_minted_link'
+    : built.kind === 'token'
+    ? 'alerts.sent_with_token_link'
+    : built.kind === 'legacy'
+    ? 'alerts.sent_with_legacy_shortlink'
+    : 'alerts.sent_with_deep_link';
+  metrics.increment(metric);
+  return `<p>Alert for conversation <a href="${primary}">${primary}</a></p><p>Backup deep link: <a href="${backup}">${backup}</a></p>`;
 }

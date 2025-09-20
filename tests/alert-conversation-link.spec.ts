@@ -1,9 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { ensureAlertConversationLink } from '../lib/alertConversation.js';
 import { mintUuidFromRaw } from '../apps/shared/lib/canonicalConversationUuid.js';
+import { setTestKeyEnv } from './helpers/testKeys';
 
 const BASE = 'https://app.example.com';
 const ORIGINAL_APP_URL = process.env.APP_URL;
+const ORIGINAL_PRIVATE_KEY = process.env.LINK_PRIVATE_KEY_PEM;
+const ORIGINAL_PUBLIC_KEY = process.env.LINK_PUBLIC_KEY_PEM;
+const ORIGINAL_SIGNING_KID = process.env.LINK_SIGNING_KID;
 
 function restoreEnv() {
   if (ORIGINAL_APP_URL !== undefined) {
@@ -11,10 +15,29 @@ function restoreEnv() {
   } else {
     delete process.env.APP_URL;
   }
+  if (ORIGINAL_PRIVATE_KEY !== undefined) {
+    process.env.LINK_PRIVATE_KEY_PEM = ORIGINAL_PRIVATE_KEY;
+  } else {
+    delete process.env.LINK_PRIVATE_KEY_PEM;
+  }
+  if (ORIGINAL_PUBLIC_KEY !== undefined) {
+    process.env.LINK_PUBLIC_KEY_PEM = ORIGINAL_PUBLIC_KEY;
+  } else {
+    delete process.env.LINK_PUBLIC_KEY_PEM;
+  }
+  if (ORIGINAL_SIGNING_KID !== undefined) {
+    process.env.LINK_SIGNING_KID = ORIGINAL_SIGNING_KID;
+  } else {
+    delete process.env.LINK_SIGNING_KID;
+  }
 }
 
 test.afterEach(() => {
   restoreEnv();
+});
+
+test.beforeEach(() => {
+  setTestKeyEnv();
 });
 
 test('ensureAlertConversationLink mints uuid for numeric identifier when resolvers fail', async () => {
@@ -35,8 +58,11 @@ test('ensureAlertConversationLink mints uuid for numeric identifier when resolve
   expect(calls).toEqual(['456']);
   const expected = mintUuidFromRaw('456');
   expect(link?.uuid).toBe(expected);
-  expect(link?.kind).toBe('resolver');
-  expect(link?.url).toBe(`${BASE}/r/legacy/456`);
+  expect(link?.kind).toBe('deep-link');
+  expect(link?.minted).toBe(true);
+  expect(link?.url).toBe(
+    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected ?? '')}`
+  );
 });
 
 test('ensureAlertConversationLink extracts slug from inline thread and mints when needed', async () => {
@@ -58,8 +84,11 @@ test('ensureAlertConversationLink extracts slug from inline thread and mints whe
   );
   const expected = mintUuidFromRaw('inline-slug');
   expect(link?.uuid).toBe(expected);
-  expect(link?.kind).toBe('resolver');
-  expect(link?.url).toBe(`${BASE}/r/conversation/inline-slug`);
+  expect(link?.kind).toBe('deep-link');
+  expect(link?.minted).toBe(true);
+  expect(link?.url).toBe(
+    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected ?? '')}`
+  );
 });
 
 test('ensureAlertConversationLink prefers resolver-supplied uuid', async () => {
@@ -79,7 +108,7 @@ test('ensureAlertConversationLink prefers resolver-supplied uuid', async () => {
     },
   );
   expect(link?.uuid).toBe(uuid);
-  expect(link?.kind).toBe('uuid');
-  expect(link?.url).toBe(`${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`);
+  expect(link?.kind).toBe('token');
+  expect(link?.url).toContain('/r/t/');
   expect(verifyCalls.length).toBeGreaterThan(0);
 });

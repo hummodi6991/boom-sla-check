@@ -2,8 +2,12 @@ import { test, expect } from '@playwright/test';
 import { buildUniversalConversationLink } from '../lib/alertLink.js';
 import { verifyLinkToken } from '../apps/shared/lib/linkToken';
 import { mintUuidFromRaw } from '../apps/shared/lib/canonicalConversationUuid.js';
+import { setTestKeyEnv } from './helpers/testKeys';
 
-const ORIGINAL_LINK_SECRET = process.env.LINK_SECRET;
+const ORIGINAL_PRIVATE_KEY = process.env.LINK_PRIVATE_KEY_PEM;
+const ORIGINAL_PUBLIC_KEY = process.env.LINK_PUBLIC_KEY_PEM;
+const ORIGINAL_SIGNING_KID = process.env.LINK_SIGNING_KID;
+const ORIGINAL_JWKS_URL = process.env.LINK_JWKS_URL;
 const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
 const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
 const ORIGINAL_APP_URL = process.env.APP_URL;
@@ -14,10 +18,25 @@ const ORIGINAL_RESOLVE_CONVERSATION = (globalThis as any).resolveConversationUui
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
 
 function restoreEnv() {
-  if (ORIGINAL_LINK_SECRET !== undefined) {
-    process.env.LINK_SECRET = ORIGINAL_LINK_SECRET;
+  if (ORIGINAL_PRIVATE_KEY !== undefined) {
+    process.env.LINK_PRIVATE_KEY_PEM = ORIGINAL_PRIVATE_KEY;
   } else {
-    delete process.env.LINK_SECRET;
+    delete process.env.LINK_PRIVATE_KEY_PEM;
+  }
+  if (ORIGINAL_PUBLIC_KEY !== undefined) {
+    process.env.LINK_PUBLIC_KEY_PEM = ORIGINAL_PUBLIC_KEY;
+  } else {
+    delete process.env.LINK_PUBLIC_KEY_PEM;
+  }
+  if (ORIGINAL_SIGNING_KID !== undefined) {
+    process.env.LINK_SIGNING_KID = ORIGINAL_SIGNING_KID;
+  } else {
+    delete process.env.LINK_SIGNING_KID;
+  }
+  if (ORIGINAL_JWKS_URL !== undefined) {
+    process.env.LINK_JWKS_URL = ORIGINAL_JWKS_URL;
+  } else {
+    delete process.env.LINK_JWKS_URL;
   }
   if (ORIGINAL_RESOLVE_SECRET !== undefined) {
     process.env.RESOLVE_SECRET = ORIGINAL_RESOLVE_SECRET;
@@ -55,10 +74,13 @@ test.afterEach(() => {
   restoreEnv();
 });
 
+test.beforeEach(() => {
+  setTestKeyEnv();
+});
+
 const BASE = 'https://example.com';
 
 test('buildUniversalConversationLink returns token link for uuid', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   const res = await buildUniversalConversationLink(
     { uuid },
     {
@@ -69,19 +91,18 @@ test('buildUniversalConversationLink returns token link for uuid', async () => {
       },
     }
   );
-  expect(res?.kind).toBe('uuid');
+  expect(res?.kind).toBe('token');
   expect(res?.url).toBeDefined();
   const href = res?.url ?? '';
   const parsed = new URL(href);
   expect(parsed.pathname.startsWith('/r/t/')).toBe(true);
   const token = parsed.pathname.split('/').pop();
   expect(token).toBeTruthy();
-  const decoded = token ? verifyLinkToken(token) : { error: 'invalid' };
-  expect('uuid' in decoded ? decoded.uuid : null).toBe(uuid);
+  const decoded = token ? await verifyLinkToken(token) : null;
+  expect(decoded?.payload?.conversation).toBe(uuid);
 });
 
 test('buildUniversalConversationLink degrades to deep link when token verification fails', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   const calls: string[] = [];
   const deep = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
   const res = await buildUniversalConversationLink(
@@ -96,7 +117,7 @@ test('buildUniversalConversationLink degrades to deep link when token verificati
       },
     }
   );
-  expect(res?.kind).toBe('uuid');
+  expect(res?.kind).toBe('deep-link');
   expect(res?.url).toBe(deep);
   expect(calls).toHaveLength(2);
   expect(calls[0]?.startsWith(`${BASE}/r/t/`)).toBe(true);
@@ -104,7 +125,8 @@ test('buildUniversalConversationLink degrades to deep link when token verificati
 });
 
 test('buildUniversalConversationLink falls back to deep link when token mint fails', async () => {
-  delete process.env.LINK_SECRET;
+  delete process.env.LINK_PRIVATE_KEY_PEM;
+  delete process.env.LINK_PUBLIC_KEY_PEM;
   const calls: unknown[] = [];
   const res = await buildUniversalConversationLink(
     { uuid },
@@ -122,35 +144,42 @@ test('buildUniversalConversationLink falls back to deep link when token mint fai
       },
     }
   );
-  expect(res?.kind).toBe('uuid');
+  expect(res?.kind).toBe('deep-link');
   expect(res?.url).toBe(
     `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
   );
   expect(calls.length).toBeGreaterThanOrEqual(2);
 });
 
-test('buildUniversalConversationLink returns null when uuid unavailable (strict)', async () => {
-  delete process.env.LINK_SECRET;
+test('buildUniversalConversationLink mints fallback uuid when strict mode enabled', async () => {
+  const slug = 'no-alias';
+  const minted = mintUuidFromRaw(slug);
   const res = await buildUniversalConversationLink(
-    { slug: 'no-alias' },
+    { slug },
     { baseUrl: BASE, verify: async () => true, strictUuid: true }
   );
-  expect(res).toBeNull();
+  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted ?? '')}`;
+  expect(res?.kind).toBe('deep-link');
+  expect(res?.minted).toBe(true);
+  expect(res?.url).toBe(expected);
 });
 
-test('buildUniversalConversationLink uses resolver(s) to obtain uuid; returns null if still unresolved', async () => {
-  process.env.LINK_SECRET = 'test-secret';
+test('buildUniversalConversationLink uses resolver(s) to obtain uuid; mints when still unresolved', async () => {
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const res = await buildUniversalConversationLink(
     { legacyId: 456 },
     { baseUrl: BASE, verify: async () => true, strictUuid: true }
   );
-  expect(res).toBeNull();
+  const minted = mintUuidFromRaw('456');
+  expect(res?.kind).toBe('deep-link');
+  expect(res?.minted).toBe(true);
+  expect(res?.url).toBe(
+    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted ?? '')}`,
+  );
 });
 
 test('buildUniversalConversationLink uses resolveConversationUuid when available', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   const resolveCalls: Array<{ raw: string }> = [];
   (globalThis as any).resolveConversationUuid = async (raw: string) => {
     resolveCalls.push({ raw });
@@ -173,11 +202,10 @@ test('buildUniversalConversationLink uses resolveConversationUuid when available
   );
   expect(resolveCalls).toEqual([{ raw: 'via-hook' }]);
   expect(fetchCalls).toHaveLength(0);
-  expect(res?.kind).toBe('uuid');
+  expect(res?.kind).toBe('token');
 });
 
 test('buildUniversalConversationLink resolves identifiers via internal endpoint', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   const resolveCalls: string[] = [];
@@ -200,13 +228,12 @@ test('buildUniversalConversationLink resolves identifiers via internal endpoint'
       },
     }
   );
-  expect(res?.kind).toBe('uuid');
+  expect(res?.kind).toBe('token');
   expect(fetchCalls[0]).toContain('id=abc');
   expect(resolveCalls).toEqual(['abc']);
 });
 
 test('buildUniversalConversationLink uses resolver link when resolver mints uuid for legacyId', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
@@ -221,15 +248,14 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
       },
     }
   );
-  expect(res).toEqual({
-    kind: 'resolver',
-    url: `${BASE}/r/legacy/987`,
-  });
-  expect(seen).toEqual([`${BASE}/r/legacy/987`]);
+  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  expect(res?.kind).toBe('deep-link');
+  expect(res?.minted).toBe(true);
+  expect(res?.url).toBe(expected);
+  expect(seen).toEqual([expected]);
 });
 
 test('buildUniversalConversationLink uses resolver link when resolver mints uuid for slug', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
@@ -244,16 +270,15 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
       },
     }
   );
-  expect(res).toEqual({
-    kind: 'resolver',
-    url: `${BASE}/r/conversation/sluggy`,
-  });
-  expect(seen).toEqual([`${BASE}/r/conversation/sluggy`]);
+  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  expect(res?.kind).toBe('deep-link');
+  expect(res?.minted).toBe(true);
+  expect(res?.url).toBe(expected);
+  expect(seen).toEqual([expected]);
 });
 
 test('buildUniversalConversationLink detects minted fallback without resolver details', async () => {
   process.env.APP_URL = BASE;
-  process.env.LINK_SECRET = 'test-secret';
   delete process.env.RESOLVE_SECRET;
   delete process.env.RESOLVE_BASE_URL;
   const slug = 'fallback-slug';
@@ -269,15 +294,14 @@ test('buildUniversalConversationLink detects minted fallback without resolver de
       },
     }
   );
-  expect(res).toEqual({
-    kind: 'resolver',
-    url: `${BASE}/r/conversation/${slug}`,
-  });
-  expect(seen).toEqual([`${BASE}/r/conversation/${slug}`]);
+  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted ?? '')}`;
+  expect(res?.kind).toBe('deep-link');
+  expect(res?.minted).toBe(true);
+  expect(res?.url).toBe(expected);
+  expect(seen).toEqual([expected]);
 });
 
 test('buildUniversalConversationLink falls back to internal resolver when resolve API fails', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   const resolveCalls: string[] = [];
@@ -308,7 +332,7 @@ test('buildUniversalConversationLink falls back to internal resolver when resolv
       },
     }
   );
-  expect(res?.kind).toBe('uuid');
+  expect(res?.kind).toBe('token');
   expect(fetchCalls).toHaveLength(2);
   expect(resolveCalls).toEqual(['needs-fallback']);
   expect(tryResolveCalls).toEqual([
@@ -320,7 +344,6 @@ test('buildUniversalConversationLink falls back to internal resolver when resolv
 });
 
 test('buildUniversalConversationLink returns null when verification fails', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   const res = await buildUniversalConversationLink(
     { uuid },
     {
@@ -332,7 +355,6 @@ test('buildUniversalConversationLink returns null when verification fails', asyn
 });
 
 test('buildUniversalConversationLink verifies resolver link when resolver indicates minted uuid', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   const originalFetch = global.fetch;
@@ -343,7 +365,7 @@ test('buildUniversalConversationLink verifies resolver link when resolver indica
     }
     return { ok: true, json: async () => ({}) } as any;
   };
-  const expected = `${BASE}/r/legacy/12345`;
+  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
   const res = await buildUniversalConversationLink(
     { uuid, legacyId: '12345' },
     {
@@ -356,12 +378,12 @@ test('buildUniversalConversationLink verifies resolver link when resolver indica
     }
   );
   global.fetch = originalFetch as any;
-  expect(res?.kind).toBe('resolver');
+  expect(res?.kind).toBe('deep-link');
+  expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
 });
 
 test('buildUniversalConversationLink falls back to deep link when token verification fails', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   const res = await buildUniversalConversationLink(
     { uuid },
     {
@@ -372,12 +394,11 @@ test('buildUniversalConversationLink falls back to deep link when token verifica
       },
     }
   );
-  expect(res?.kind).toBe('uuid');
+  expect(res?.kind).toBe('deep-link');
   expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`);
 });
 
 test('buildUniversalConversationLink uses resolver link for minted identifiers even when strict mode disabled', async () => {
-  process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
   global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid, minted: true }) } as any);
@@ -393,7 +414,9 @@ test('buildUniversalConversationLink uses resolver link for minted identifiers e
       },
     }
   );
-  const resolverUrl = `${BASE}/r/legacy/654`;
-  expect(res).toEqual({ kind: 'resolver', url: resolverUrl });
-  expect(seen).toEqual([resolverUrl]);
+  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  expect(res?.kind).toBe('deep-link');
+  expect(res?.minted).toBe(true);
+  expect(res?.url).toBe(expected);
+  expect(seen).toEqual([expected]);
 });

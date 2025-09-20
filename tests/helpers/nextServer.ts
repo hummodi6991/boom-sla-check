@@ -2,6 +2,7 @@ import http from 'http';
 import { verifyLinkToken } from '../../apps/shared/lib/linkToken';
 import { conversationDeepLinkFromUuid, appUrlFromRequest } from '../../apps/shared/lib/links';
 import { metrics } from '../../lib/metrics';
+import { setTestKeyEnv } from './testKeys';
 
 type StartedServer = { server: http.Server; port: number };
 
@@ -70,6 +71,7 @@ const HTML = `<!DOCTYPE html>
 </html>`;
 
 export async function startTestServer(): Promise<StartedServer> {
+  setTestKeyEnv();
   const server = http.createServer(async (req, res) => {
     if (!req.url) {
       res.statusCode = 404;
@@ -86,20 +88,17 @@ export async function startTestServer(): Promise<StartedServer> {
         return;
       }
       try {
-        const result = verifyLinkToken(token);
-        if ('error' in result) {
-          metrics.increment(`link_token.${result.error}`);
-          res.statusCode = 400;
-          res.end('invalid token');
-          return;
-        }
+        const result = await verifyLinkToken(token);
+        const uuid = String(result.payload?.conversation || '');
+        if (!uuid) throw new Error('invalid token');
         const baseUrl = appUrlFromRequest({ url: requestUrl.toString() });
-        const location = conversationDeepLinkFromUuid(result.uuid, { baseUrl });
+        const location = conversationDeepLinkFromUuid(uuid, { baseUrl });
         res.statusCode = 302;
         res.setHeader('Location', location);
         res.end();
       } catch {
-        res.statusCode = 500;
+        metrics.increment('link_token.invalid');
+        res.statusCode = 400;
         res.end('invalid token');
       }
       return;
