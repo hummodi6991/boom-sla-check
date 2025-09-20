@@ -1,6 +1,6 @@
 import { tryResolveConversationUuid } from '../../server/lib/conversations.js';
 import { resolveViaInternalEndpoint } from '../../../lib/internalResolve.js';
-import { mintUuidFromRaw } from './canonicalConversationUuid.js';
+import { mintUuidFromRaw, isUuid } from './canonicalConversationUuid.js';
 
 export type ResolveConversationOpts = {
   inlineThread?: unknown;
@@ -26,7 +26,8 @@ export async function resolveConversationUuid(
   } catch {
     // fall through to minting
   }
-  if (opts.allowMintFallback !== false) {
+  // ULC-v2: do not mint when the raw value is already a UUID.
+  if (opts.allowMintFallback !== false && !isUuid(raw)) {
     try {
       const minted = mintUuidFromRaw(raw);
       return minted ? minted.toLowerCase() : null;
