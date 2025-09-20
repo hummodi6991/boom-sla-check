@@ -204,7 +204,7 @@ test('buildUniversalConversationLink resolves identifiers via internal endpoint'
   expect(resolveCalls).toEqual(['abc']);
 });
 
-test('buildUniversalConversationLink falls back to legacy link when resolver mints uuid for legacyId', async () => {
+test('buildUniversalConversationLink uses resolver link when resolver mints uuid for legacyId', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
@@ -221,13 +221,13 @@ test('buildUniversalConversationLink falls back to legacy link when resolver min
     }
   );
   expect(res).toEqual({
-    kind: 'legacy',
-    url: `${BASE}/dashboard/guest-experience/all?legacyId=987`,
+    kind: 'resolver',
+    url: `${BASE}/r/legacy/987`,
   });
-  expect(seen).toEqual([`${BASE}/dashboard/guest-experience/all?legacyId=987`]);
+  expect(seen).toEqual([`${BASE}/r/legacy/987`]);
 });
 
-test('buildUniversalConversationLink falls back to slug deep link when resolver mints uuid for slug', async () => {
+test('buildUniversalConversationLink uses resolver link when resolver mints uuid for slug', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
@@ -244,10 +244,10 @@ test('buildUniversalConversationLink falls back to slug deep link when resolver 
     }
   );
   expect(res).toEqual({
-    kind: 'legacy',
-    url: `${BASE}/dashboard/guest-experience/all?conversation=sluggy`,
+    kind: 'resolver',
+    url: `${BASE}/r/conversation/sluggy`,
   });
-  expect(seen).toEqual([`${BASE}/dashboard/guest-experience/all?conversation=sluggy`]);
+  expect(seen).toEqual([`${BASE}/r/conversation/sluggy`]);
 });
 
 test('buildUniversalConversationLink falls back to internal resolver when resolve API fails', async () => {
@@ -305,7 +305,7 @@ test('buildUniversalConversationLink returns null when verification fails', asyn
   expect(res).toBeNull();
 });
 
-test('buildUniversalConversationLink degrades to legacy link when resolver indicates minted uuid', async () => {
+test('buildUniversalConversationLink verifies resolver link when resolver indicates minted uuid', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
@@ -317,20 +317,21 @@ test('buildUniversalConversationLink degrades to legacy link when resolver indic
     }
     return { ok: true, json: async () => ({}) } as any;
   };
+  const expected = `${BASE}/r/legacy/12345`;
   const res = await buildUniversalConversationLink(
     { uuid, legacyId: '12345' },
     {
       baseUrl: BASE,
       verify: async (href) => {
-        expect(href).toBe(`${BASE}/dashboard/guest-experience/all?legacyId=12345`);
+        expect(href).toBe(expected);
         return true;
       },
       strictUuid: true,
     }
   );
   global.fetch = originalFetch as any;
-  expect(res?.kind).toBe('legacy');
-  expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?legacyId=12345`);
+  expect(res?.kind).toBe('resolver');
+  expect(res?.url).toBe(expected);
 });
 
 test('buildUniversalConversationLink falls back to deep link when token verification fails', async () => {
@@ -349,7 +350,7 @@ test('buildUniversalConversationLink falls back to deep link when token verifica
   expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`);
 });
 
-test('buildUniversalConversationLink uses legacy link for minted identifiers even when strict mode disabled', async () => {
+test('buildUniversalConversationLink uses resolver link for minted identifiers even when strict mode disabled', async () => {
   process.env.LINK_SECRET = 'test-secret';
   process.env.RESOLVE_SECRET = 'resolve';
   process.env.RESOLVE_BASE_URL = 'https://resolve.test';
@@ -366,7 +367,7 @@ test('buildUniversalConversationLink uses legacy link for minted identifiers eve
       },
     }
   );
-  const legacy = `${BASE}/dashboard/guest-experience/all?legacyId=654`;
-  expect(res).toEqual({ kind: 'legacy', url: legacy });
-  expect(seen).toEqual([legacy]);
+  const resolverUrl = `${BASE}/r/legacy/654`;
+  expect(res).toEqual({ kind: 'resolver', url: resolverUrl });
+  expect(seen).toEqual([resolverUrl]);
 });
