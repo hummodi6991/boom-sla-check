@@ -419,9 +419,11 @@ for (const { id } of toCheck) {
       });
 
       const input = uuid
-        ? { uuid }
+        ? (/^[0-9]+$/.test(String(lookupId))
+            ? { uuid, legacyId: String(lookupId) }
+            : { uuid, slug: String(lookupId) })
         : (/^[0-9]+$/.test(String(lookupId))
-            ? { legacyId: lookupId }
+            ? { legacyId: String(lookupId) }
             : { slug: String(lookupId) });
       const base = appUrl().replace(/\/+$/, "");
       // Strict mode to guarantee deep-link correctness
