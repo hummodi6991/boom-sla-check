@@ -135,7 +135,7 @@ function firstUrlLike(s) {
   if (!m) return "";
   return m[0].replace(/[>),.;!'"`]+$/, "");
 }
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 const SLUG_RE = /^[A-Za-z0-9_-]{8,64}$/;
 function extractConversationId(input) {
   const s = (input || "").trim();
