@@ -17,41 +17,64 @@ function openDrawer(id: string) {
   console.log('open drawer', id);
 }
 
+export type ConversationViewState = 'loading' | 'error' | 'not-found' | 'ready';
+
+export function conversationViewState(args: {
+  isLoading: boolean;
+  error?: Error | undefined;
+  hasData: boolean;
+  initialConversationId?: string;
+}): ConversationViewState {
+  if (args.isLoading) return 'loading';
+  if (args.error) return 'error';
+  if (!args.hasData && args.initialConversationId) return 'not-found';
+  return 'ready';
+}
+
 export default function GuestExperience({ initialConversationId }: { initialConversationId?: string }) {
-  const { data: s, isLoading, error } = useConversation(initialConversationId);
+  const { data, isLoading, error } = useConversation(initialConversationId);
 
   const safe = useMemo(
-const safe = useMemo(
-  () => normalizeConversation(s ?? undefined, { fallbackId: initialConversationId }),
-  [s, initialConversationId]
-);
-    [s, initialConversationId]
+    () => normalizeConversation(data ?? undefined, { fallbackId: initialConversationId }),
+    [data, initialConversationId]
   );
 
+  const state = conversationViewState({
+    isLoading,
+    error,
+    hasData: Boolean(data),
+    initialConversationId,
+  });
+
   useEffect(() => {
-    if (initialConversationId && s) openDrawer(initialConversationId);
-  }, [initialConversationId, s]);
+    if (initialConversationId && data) openDrawer(initialConversationId);
+  }, [initialConversationId, data]);
 
-  if (isLoading) return <SkeletonConversation />;
-  if (error) return <InlineError message="Failed to load conversation." />;
-  if (!s && initialConversationId) return null;
+  if (state === 'loading') return <SkeletonConversation />;
+  if (state === 'error') return <InlineError message="Failed to load conversation." />;
 
-  const related_reservations = safe.related_reservations ?? [];
-  const hasRelated = related_reservations.length > 0;
+  if (state === 'not-found') {
+    return (
+      <main style={{ padding: 24 }}>
+        <InlineError message="Conversation not found or has been deleted." />
+      </main>
+    );
+  }
+
+  const relatedReservations = safe.related_reservations ?? [];
+  const hasRelated = relatedReservations.length > 0;
 
   return (
     <main style={{ padding: 24 }}>
       Guest Experience {initialConversationId ? `(conversation ${initialConversationId})` : ''}
-      {safe && (
-        <div>
-          <h2>Related Reservations</h2>
-          {hasRelated ? (
-            related_reservations.map((r) => <div key={r.id}>{r.id}</div>)
-          ) : (
-            <div>No related reservations.</div>
-          )}
-        </div>
-      )}
+      <div>
+        <h2>Related Reservations</h2>
+        {hasRelated ? (
+          relatedReservations.map((r) => <div key={r.id}>{r.id}</div>)
+        ) : (
+          <div>No related reservations.</div>
+        )}
+      </div>
     </main>
   );
 }
