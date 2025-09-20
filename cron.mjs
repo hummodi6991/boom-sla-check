@@ -14,7 +14,7 @@ const metrics = { increment: () => {} };
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
 // Accept a canonical UUID (v1–v5)
-const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
 // Build a safe user-facing link: prefer deep link with UUID, else dashboard filters.
 export function buildSafeDeepLink(lookupId, uuid) {
