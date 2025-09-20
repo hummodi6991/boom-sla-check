@@ -5,7 +5,7 @@ import { buildAlertEmail } from '../apps/worker/mailer/alerts';
 import { metrics } from '../lib/metrics';
 
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
-const uuid = '123e4567-e89b-12d3-a456-426614174000';
+const uuid = '01890b14-b4cd-7eef-b13e-bb8c083bad60';
 const ORIGINAL_LINK_SECRET = process.env.LINK_SECRET;
 const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
 const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
@@ -47,7 +47,7 @@ test('makeConversationLink builds ?conversation when uuid provided', () => {
 test('makeConversationLink accepts baseUrl override', () => {
   expect(
     makeConversationLink({ uuid, baseUrl: 'http://localhost:4321' })
-  ).toBe('http://localhost:4321/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000');
+  ).toBe(`http://localhost:4321/dashboard/guest-experience/all?conversation=${uuid}`);
 });
 
 test('makeConversationLink returns null when uuid missing', () => {

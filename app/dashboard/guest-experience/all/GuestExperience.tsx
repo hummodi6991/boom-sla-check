@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
+import { normalizeConversation } from '../../../../src/conversation';
 import { useConversation } from './useConversation';
 
 function SkeletonConversation() {
@@ -19,6 +20,11 @@ function openDrawer(id: string) {
 export default function GuestExperience({ initialConversationId }: { initialConversationId?: string }) {
   const { data: s, isLoading, error } = useConversation(initialConversationId);
 
+  const safe = useMemo(
+    () => normalizeConversation(s, { fallbackId: initialConversationId }),
+    [s, initialConversationId]
+  );
+
   useEffect(() => {
     if (initialConversationId && s) openDrawer(initialConversationId);
   }, [initialConversationId, s]);
@@ -27,12 +33,8 @@ export default function GuestExperience({ initialConversationId }: { initialConv
   if (error) return <InlineError message="Failed to load conversation." />;
   if (!s && initialConversationId) return null;
 
-  // SAFETY: shape the data so property reads never throw on slower browsers
-  const safe = s ?? ({ related_reservations: [] } as any);
-  const related_reservations = Array.isArray(safe?.related_reservations)
-    ? safe.related_reservations
-    : [];
-  const hasRelated = (related_reservations.length ?? 0) > 0;
+  const related_reservations = safe.related_reservations ?? [];
+  const hasRelated = related_reservations.length > 0;
 
   return (
     <main style={{ padding: 24 }}>
@@ -41,7 +43,7 @@ export default function GuestExperience({ initialConversationId }: { initialConv
         <div>
           <h2>Related Reservations</h2>
           {hasRelated ? (
-            (related_reservations ?? []).map((r) => <div key={r.id}>{r.id}</div>)
+            related_reservations.map((r) => <div key={r.id}>{r.id}</div>)
           ) : (
             <div>No related reservations.</div>
           )}
