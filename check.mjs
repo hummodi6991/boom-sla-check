@@ -703,8 +703,8 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
-    // Build a **verified** link. If the uuid came from a minted fallback,
-    // the builder will degrade to a legacy-safe dashboard link.
+    // Build a **verified** link (token -> deep link). If the uuid was minted for the
+    // original id/slug, the builder will degrade to a legacy-safe link.
     const base = appUrl().replace(/\/+$/, "");
     const inputForBuilder =
       /^\d+$/.test(String(convId))
