@@ -3,8 +3,8 @@ import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { conversationIdDisplay, appUrl, makeConversationLink } from "./lib/links.js";
-import { buildUniversalConversationLink } from "./lib/alertLink.js";
+import { appUrl, makeConversationLink } from "./lib/links.js";
+import { buildAlertConversationLink } from "./lib/conversationLink.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
 import { resolveConversationUuid } from "./apps/shared/lib/conversationUuid.js";
@@ -418,18 +418,15 @@ for (const { id } of toCheck) {
         onDebug: (d) => logger?.debug?.({ convId, ...d }, 'uuid resolution attempted'),
       });
 
-      const input = uuid
-        ? (/^[0-9]+$/.test(String(lookupId))
-            ? { uuid, legacyId: String(lookupId) }
-            : { uuid, slug: String(lookupId) })
-        : (/^[0-9]+$/.test(String(lookupId))
-            ? { legacyId: String(lookupId) }
-            : { slug: String(lookupId) });
       const base = appUrl().replace(/\/+$/, "");
+      const linkInput = uuid ? { uuid, id: lookupId } : { id: lookupId };
       // Strict mode to guarantee deep-link correctness
-      const built = await buildUniversalConversationLink(input, { baseUrl: base, strictUuid: true });
+      const built = await buildAlertConversationLink(linkInput, {
+        baseUrl: base,
+        strictUuid: true,
+      });
       if (!built) {
-        logger?.warn?.({ convId, input }, 'skip alert: UUID not resolvable (strict mode)');
+        logger?.warn?.({ convId, input: linkInput }, 'skip alert: UUID not resolvable (strict mode)');
         metrics?.increment?.('alerts.skipped_no_uuid');
         skipped.push(convId);
         skippedCount++;
@@ -437,7 +434,7 @@ for (const { id } of toCheck) {
       }
 
       const url = built.url;
-      const idDisplay = conversationIdDisplay({ uuid, id: lookupId });
+      const idDisplay = built.idDisplay || uuid || String(lookupId);
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url}`
