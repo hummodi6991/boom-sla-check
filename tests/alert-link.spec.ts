@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { buildUniversalConversationLink } from '../lib/alertLink.js';
 import { verifyLinkToken } from '../apps/shared/lib/linkToken';
+import { mintUuidFromRaw } from '../apps/shared/lib/canonicalConversationUuid.js';
 
 const ORIGINAL_LINK_SECRET = process.env.LINK_SECRET;
 const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
@@ -248,6 +249,31 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
     url: `${BASE}/r/conversation/sluggy`,
   });
   expect(seen).toEqual([`${BASE}/r/conversation/sluggy`]);
+});
+
+test('buildUniversalConversationLink detects minted fallback without resolver details', async () => {
+  process.env.APP_URL = BASE;
+  process.env.LINK_SECRET = 'test-secret';
+  delete process.env.RESOLVE_SECRET;
+  delete process.env.RESOLVE_BASE_URL;
+  const slug = 'fallback-slug';
+  const minted = mintUuidFromRaw(slug);
+  const seen: string[] = [];
+  const res = await buildUniversalConversationLink(
+    { uuid: minted, slug },
+    {
+      baseUrl: BASE,
+      verify: async (url) => {
+        seen.push(url);
+        return true;
+      },
+    }
+  );
+  expect(res).toEqual({
+    kind: 'resolver',
+    url: `${BASE}/r/conversation/${slug}`,
+  });
+  expect(seen).toEqual([`${BASE}/r/conversation/${slug}`]);
 });
 
 test('buildUniversalConversationLink falls back to internal resolver when resolve API fails', async () => {
