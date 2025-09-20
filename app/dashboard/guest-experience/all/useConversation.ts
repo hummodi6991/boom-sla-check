@@ -18,7 +18,9 @@ export function useConversation(conversationId?: string) {
         return res.json();
       })
       .then((json) => {
-        if (!cancelled) setData(normalizeConversation(json));
+        if (!cancelled) {
+          setData(normalizeConversation(json, { fallbackId: conversationId }));
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err);
