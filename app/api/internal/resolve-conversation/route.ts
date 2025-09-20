@@ -128,6 +128,10 @@ export async function GET(req: Request) {
 
   const uuid = await resolveAny(id);
   if (!uuid) {
+    // If caller passed a UUID and we couldn't find it, do NOT mint – it's not real.
+    if (UUID_RE.test(id)) {
+      return NextResponse.json({ error: 'not_found' }, { status: 404 });
+    }
     const minted = mintUuidFromRaw(id);
     if (!minted) {
       return NextResponse.json({ error: 'not_found' }, { status: 404 });
