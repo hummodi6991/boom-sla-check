@@ -703,9 +703,14 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
-    // Build a **verified** link (token -> deep link -> hosted shortlink), else skip sending.
+    // Build a **verified** link. If the uuid came from a minted fallback,
+    // the builder will degrade to a legacy-safe dashboard link.
     const base = appUrl().replace(/\/+$/, "");
-    const built = await buildUniversalConversationLink({ uuid }, { baseUrl: base, strictUuid: true });
+    const inputForBuilder =
+      /^\d+$/.test(String(convId))
+        ? { uuid, legacyId: String(convId) }
+        : { uuid, slug: String(convId) };
+    const built = await buildUniversalConversationLink(inputForBuilder, { baseUrl: base, strictUuid: true });
     if (!built) {
       console.log("Skip alert: unable to build a verified conversation link.");
       return;
