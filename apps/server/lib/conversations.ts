@@ -10,6 +10,4 @@ export type ResolveOpts = {
   onDebug?: (d: unknown) => void;
 };
 
-// Runtime implementation (DB lookups, alias mining, redirect/message probes)
-// lives in the JS file and is shared by Node scripts and Next runtime.
-export { tryResolveConversationUuid } from './conversations.js';
+export { tryResolveConversationUuid } from '../../../packages/conversation-uuid/index.js';
