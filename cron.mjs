@@ -3,9 +3,9 @@ import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./lib/dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { appUrl, makeConversationLink, alertLinkBase, buildResolverLink } from "./lib/links.js";
+import { appUrl } from "./lib/links.js";
 import { mintUuidFromRaw } from "./apps/shared/lib/canonicalConversationUuid.js";
-import { buildAlertConversationLink } from "./lib/conversationLink.js";
+import { buildUniversalConversationLink } from "./lib/alertLink.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
 import { resolveConversationUuidHedged } from "./apps/shared/lib/conversationUuid.js";
@@ -21,18 +21,21 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{
 
 // Build a safe user-facing link: prefer deep link with UUID, else dashboard filters.
 export function buildSafeDeepLink(lookupId, uuid) {
-  const deep = makeConversationLink({ uuid });
-  if (deep) return deep;
+  const base = appUrl().replace(/\/+$/, "");
+  const canonicalFromUuid = (value) => {
+    const token = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (!token || !UUID_RE.test(token)) return null;
+    return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(token)}`;
+  };
+  const canonical = canonicalFromUuid(uuid);
+  if (canonical) return canonical;
   const raw = String(lookupId ?? "").trim();
-  const base = appUrl();
-  if (raw) {
-    try {
-      const minted = mintUuidFromRaw(raw);
-      const mintedDeep = makeConversationLink({ uuid: minted });
-      if (mintedDeep) return mintedDeep;
-    } catch {}
-  }
   if (!raw) return `${base}/dashboard/guest-experience/all`;
+  try {
+    const minted = mintUuidFromRaw(raw);
+    const mintedCanonical = canonicalFromUuid(minted);
+    if (mintedCanonical) return mintedCanonical;
+  } catch {}
   return `${base}/go/c/${encodeURIComponent(raw)}`;
 }
 
@@ -721,28 +724,67 @@ for (const { id } of toCheck) {
       });
 
       const base = appUrl().replace(/\/+$/, "");
-      const linkInput = uuid ? { uuid, id: lookupId } : { id: lookupId };
-      // Strict mode to guarantee deep-link correctness
-      const built = await buildAlertConversationLink(linkInput, {
+      const builderInput = {
+        uuid: uuid || undefined,
+        legacyId: conv?.legacyId ?? undefined,
+        slug: typeof conv?.slug === "string" ? conv.slug : undefined,
+      };
+      const universal = await buildUniversalConversationLink(builderInput, {
         baseUrl: base,
         strictUuid: true,
+        verify: async (href) => !/\/r\/t\//.test(href),
       });
-      if (!built) {
-        logger?.warn?.({ convId, input: linkInput }, 'skip alert: UUID not resolvable (strict mode)');
+
+      const fallbackCandidates = [];
+      if (conv?.legacyId != null) fallbackCandidates.push(conv.legacyId);
+      if (conv?.legacy_id != null) fallbackCandidates.push(conv.legacy_id);
+      if (typeof conv?.slug === "string" && conv.slug.trim()) fallbackCandidates.push(conv.slug.trim());
+      const convIdStr = conv?.id != null ? String(conv.id).trim() : "";
+      if (convIdStr && !UUID_RE.test(convIdStr)) fallbackCandidates.push(convIdStr);
+      const idStr = id != null ? String(id).trim() : "";
+      if (idStr && !UUID_RE.test(idStr)) fallbackCandidates.push(idStr);
+      const legacyIdOrSlug = fallbackCandidates.find((val) => val != null && String(val).trim().length > 0) ?? null;
+
+      let conversationUuid = universal?.uuid || (UUID_RE.test(String(uuid ?? "")) ? String(uuid).toLowerCase() : null);
+      let conversationUrl = conversationUuid
+        ? buildSafeDeepLink(conversationUuid, conversationUuid)
+        : null;
+      let mintedLinkUsed = universal?.minted === true;
+
+      if (!conversationUrl) {
+        const fallbackLink = buildSafeDeepLink(legacyIdOrSlug, null);
+        conversationUrl = fallbackLink;
+        if (fallbackLink) {
+          const match = fallbackLink.match(/conversation=([0-9a-f-]+)/i);
+          if (match) {
+            conversationUuid = match[1].toLowerCase();
+            mintedLinkUsed = true;
+          }
+        }
+      }
+
+      if (!conversationUrl) {
+        logger?.warn?.({ convId, input: builderInput, legacyIdOrSlug }, 'skip alert: unable to build canonical deep link');
         metrics?.increment?.('alerts.skipped_no_uuid');
         skipped.push(convId);
         skippedCount++;
         continue;
       }
 
-      const resolverUrl = buildResolverLink({
-        identifier: lookupId,
-        uuid,
-        baseUrl: alertLinkBase(),
-      });
-      const conversationUrl = resolverUrl || built.url;
-      const conversationBackup = built.backupUrl || (resolverUrl ? built.url : conversationUrl);
-      const idDisplay = built.idDisplay || uuid || String(lookupId);
+      if (!conversationUuid) {
+        const match = conversationUrl.match(/conversation=([0-9a-f-]+)/i);
+        if (match) conversationUuid = match[1].toLowerCase();
+      }
+
+      if (mintedLinkUsed) {
+        console.warn(`conv ${id}: conversation UUID unavailable; using minted deep link`);
+      }
+
+      const idDisplay =
+        conversationUuid ||
+        (conv?.legacyId != null ? String(conv.legacyId) : undefined) ||
+        (typeof conv?.slug === "string" && conv.slug.trim()) ||
+        (typeof lookupId === "string" ? lookupId : String(lookupId));
 
       const fetchBase = messageOrigin || base;
       const saleHeaders = messageHeaders || authHeaders();
@@ -760,16 +802,21 @@ for (const { id } of toCheck) {
         console.warn(`conv ${id}: sale UUID resolution failed:`, err?.message || err);
       }
       if (!saleUuid && !saleResolutionError) {
-        console.warn(`conv ${id}: sale UUID unavailable; using fallback conversation link`);
+        const fallbackMsg = mintedLinkUsed
+          ? 'using minted deep link'
+          : 'using canonical deep link';
+        console.warn(`conv ${id}: sale UUID unavailable; ${fallbackMsg}`);
       }
-      const url = buildGuestExperienceLink({ baseUrl: base, saleUuid, conversationId: convId });
-      const backupUrl = conversationBackup || url;
+      const url = conversationUrl;
+      const backupUrl = conversationUrl;
       const saleFallbackNoteHtml = saleUuid
         ? ""
         : "\n    <p style=\"font-size:12px;color:#666\">Sale UUID unavailable; using conversation filter fallback.</p>";
       const saleFallbackNoteText = saleUuid
         ? ""
         : "\nSale UUID unavailable; using conversation filter fallback.";
+      const canonicalNoteHtml = `\n    <p style=\"font-size:12px;color:#666\">Canonical deep link:<br><a href=\"${backupUrl}\" target=\"_blank\" rel=\"noopener\">${backupUrl}</a></p>`;
+      const canonicalNoteText = `\nCanonical deep link: ${backupUrl}`;
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url} sale=${saleUuid || "fallback"}`
@@ -781,13 +828,11 @@ for (const { id } of toCheck) {
         log(`conv ${id}: duplicate alert suppressed`);
       } else {
         const key = dedupeKey(id, lastGuestMs);
-        const metricName = built.minted
+        const metricName = mintedLinkUsed
           ? 'alerts.sent_with_minted_link'
-          : resolverUrl
-          ? 'alerts.sent_with_resolver_link'
-          : built.kind === 'token'
+          : universal?.kind === 'token'
           ? 'alerts.sent_with_token_link'
-          : built.kind === 'legacy'
+          : universal?.kind === 'legacy'
           ? 'alerts.sent_with_legacy_shortlink'
           : 'alerts.sent_with_deep_link';
         try {
@@ -800,13 +845,13 @@ for (const { id } of toCheck) {
     <p>Conversation: <strong>${idDisplay}</strong></p>
     <p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p>
     ${saleFallbackNoteHtml}
-    <p style="font-size:12px;color:#666">If the token link fails, use this direct deep link:<br><a href="${backupUrl}" target="_blank" rel="noopener">${backupUrl}</a></p>
+    ${canonicalNoteHtml}
   `,
             text: `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
 Conversation: ${idDisplay}
 Open: ${url}
 ${saleFallbackNoteText}
-Backup deep link: ${backupUrl}`,
+${canonicalNoteText}`,
           });
           markAlerted(state, id, lastGuestMs);
           log(`dedupe_key=${key}`);
