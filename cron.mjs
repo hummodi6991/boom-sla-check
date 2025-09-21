@@ -9,6 +9,8 @@ import { buildUniversalConversationLink } from "./lib/alertLink.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
 import { resolveConversationUuidHedged } from "./apps/shared/lib/conversationUuid.js";
+import { extractSaleUuid, extractSaleUuidFromMessages } from "./lib/saleUuid.js";
+import { buildGuestExperienceLink } from "./lib/guestExperienceLink.js";
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 export { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
 const logger = console;
@@ -107,244 +109,28 @@ const getTs = (m) => {
   return Number.isFinite(v) ? v : 0;
 };
 
-const SALE_DIRECT_PATHS = [
-  ["sale_uuid"],
-  ["saleUuid"],
-  ["sale_id"],
-  ["saleId"],
-  ["saleid"],
-  ["sale", "uuid"],
-  ["sale", "sale_uuid"],
-  ["sale", "saleUuid"],
-  ["sale", "saleId"],
-  ["sale", "id"],
-  ["meta", "sale_uuid"],
-  ["meta", "saleUuid"],
-  ["meta", "sale", "uuid"],
-  ["meta", "sale", "sale_uuid"],
-  ["payload", "sale_uuid"],
-  ["payload", "saleUuid"],
-  ["payload", "sale", "uuid"],
-  ["payload", "sale", "sale_uuid"],
-  ["payload", "data", "sale_uuid"],
-  ["payload", "data", "saleUuid"],
-  ["payload", "data", "sale", "uuid"],
-  ["context", "sale_uuid"],
-  ["context", "saleUuid"],
-  ["details", "sale_uuid"],
-  ["details", "saleUuid"],
-  ["reservation", "sale_uuid"],
-  ["reservation", "saleUuid"],
-  ["reservation", "sale", "uuid"],
-  ["reservation", "sale", "sale_uuid"],
-  ["reservation", "sale", "saleUuid"],
-  ["meta", "reservation", "sale_uuid"],
-  ["meta", "reservation", "saleUuid"],
-  ["order", "sale_uuid"],
-  ["order", "saleUuid"],
-  ["order", "uuid"],
-  ["sale", "reservation", "uuid"],
-  ["latest_sale", "uuid"],
-  ["latestSale", "uuid"],
-  ["latest_sale_uuid"],
-  ["latestSaleUuid"],
-  ["linked_sale_uuid"],
-  ["related", "sale_uuid"],
-  ["related", "saleUuid"],
-  ["related_sale_uuid"],
-  ["relatedSaleUuid"],
-  ["entity_uuid"],
-  ["entityUuid"],
-  ["entity", "uuid"],
-  ["entity", "sale_uuid"],
-  ["entity", "sale", "uuid"],
-  ["target", "uuid"],
-  ["target_uuid"],
-  ["target", "sale_uuid"],
-  ["target", "sale", "uuid"],
-  ["resource_uuid"],
-  ["resourceUuid"],
-  ["resource", "uuid"],
-  ["resource", "sale_uuid"],
-  ["resource", "sale", "uuid"],
-  ["meta", "entity_uuid"],
-  ["meta", "target_uuid"],
-  ["meta", "resource_uuid"],
-];
-
-const SALE_NEST_KEYS = [
-  "sale",
-  "sales",
-  "meta",
-  "payload",
-  "data",
-  "context",
-  "details",
-  "detail",
-  "entity",
-  "entities",
-  "entity_data",
-  "entityData",
-  "target",
-  "targets",
-  "resource",
-  "resources",
-  "reservation",
-  "reservations",
-  "booking",
-  "bookings",
-  "related",
-  "relationships",
-  "relationship",
-  "links",
-  "link",
-  "result",
-  "results",
-  "body",
-  "message",
-  "messages",
-  "thread",
-  "items",
-  "item",
-  "extra",
-  "info",
-  "information",
-  "state",
-  "status",
-  "conversation",
-  "inlineThread",
-  "payloads",
-  "objects",
-  "entities_data",
-  "latest_sale",
-  "latestSale",
-  "history",
-];
-
-const SALE_KEY_PATTERN = /(sale|reservation|booking|folio|target|entity|resource|related|relationship|link|thread|message|payload|meta|data|context|detail|result|item|conversation|inline|history)/i;
-
-const pickUuid = (value) => {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (!UUID_RE.test(trimmed)) return null;
-  return trimmed.toLowerCase();
-};
-
-const getPath = (record, path) => {
-  let current = record;
-  for (const key of path) {
-    if (current == null) return undefined;
-    current = current[key];
-  }
-  return current;
-};
-
-const directSaleUuid = (record) => {
-  if (!record || typeof record !== "object") return null;
-  for (const path of SALE_DIRECT_PATHS) {
-    const candidate = pickUuid(getPath(record, path));
-    if (candidate) return candidate;
-  }
-  for (const [key, value] of Object.entries(record)) {
-    if (typeof value !== "string") continue;
-    const normalized = key.toLowerCase();
-    if (normalized.includes("sale") && normalized.includes("uuid")) {
-      const candidate = pickUuid(value);
-      if (candidate) return candidate;
-    }
-  }
-  return null;
-};
-
-const searchForSaleUuid = (value, seen = new Set()) => {
-  if (!value || typeof value !== "object") return null;
-  if (seen.has(value)) return null;
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = searchForSaleUuid(item, seen);
-      if (found) return found;
-    }
-    return null;
-  }
-
-  const direct = directSaleUuid(value);
-  if (direct) return direct;
-
-  for (const key of SALE_NEST_KEYS) {
-    if (key in value) {
-      const found = searchForSaleUuid(value[key], seen);
-      if (found) return found;
-    }
-  }
-
-  for (const [key, val] of Object.entries(value)) {
-    if (typeof val === "string") {
-      if (SALE_KEY_PATTERN.test(key)) {
-        const candidate = pickUuid(val);
-        if (candidate) return candidate;
-      }
-      continue;
-    }
-    if (typeof val === "object" && val) {
-      if (SALE_KEY_PATTERN.test(key) || SALE_NEST_KEYS.includes(key)) {
-        const found = searchForSaleUuid(val, seen);
-        if (found) return found;
-      }
-    }
-  }
-
-  return null;
-};
-
-const findSaleUuidInMessages = (messages) => {
-  if (!Array.isArray(messages) || messages.length === 0) return null;
-  const sorted = messages
-    .filter((m) => m && typeof m === "object")
-    .slice()
-    .sort((a, b) => getTs(b) - getTs(a));
-  for (const msg of sorted) {
-    const found = searchForSaleUuid(msg, new Set());
-    if (found) return found;
-  }
-  return null;
-};
-
 export async function resolveSaleUuid(conversationId, fetchJson, context = {}) {
   const { messages, rawMessages, conversation } = context || {};
 
-  const fromMessages = findSaleUuidInMessages(messages);
+  const fromMessages = extractSaleUuidFromMessages(messages);
   if (fromMessages) return fromMessages;
 
-  const fromRaw = searchForSaleUuid(rawMessages, new Set());
+  const fromRaw = extractSaleUuid(rawMessages, new Set());
   if (fromRaw) return fromRaw;
 
-  const fromConversation = searchForSaleUuid(conversation, new Set());
+  const fromConversation = extractSaleUuid(conversation, new Set());
   if (fromConversation) return fromConversation;
 
   if (typeof fetchJson === "function") {
     try {
       const convId = conversationId != null ? String(conversationId) : "";
       const detail = await fetchJson(`/api/conversations/${encodeURIComponent(convId)}`);
-      const fromDetail = searchForSaleUuid(detail, new Set());
+      const fromDetail = extractSaleUuid(detail, new Set());
       if (fromDetail) return fromDetail;
     } catch {}
   }
 
   return null;
-}
-
-export function buildGuestExperienceLink({ baseUrl, saleUuid, conversationId }) {
-  const base = (baseUrl || appUrl()).replace(/\/+$/, "");
-  const convId = conversationId != null ? String(conversationId) : "";
-  const encodedConv = encodeURIComponent(convId);
-  if (saleUuid && UUID_RE.test(String(saleUuid))) {
-    const normalized = String(saleUuid).toLowerCase();
-    return `${base}/dashboard/guest-experience/sales/${normalized}?via=sla&conversation=${encodedConv}`;
-  }
-  return `${base}/dashboard/guest-experience/all?conversation=${encodedConv}`;
 }
 
 const makeFetchJson = (baseUrl, headers = {}) => {
