@@ -1,6 +1,6 @@
 import { metrics } from '../../../lib/metrics';
 import { buildAlertConversationLink } from '../../../lib/conversationLink.js';
-import { appUrl } from '../../shared/lib/links';
+import { appUrl, makeConversationLink } from '../../shared/lib/links';
 import { signLink } from '../../../packages/linking/src/index.js';
 
 export async function buildAlertEmail(
@@ -91,8 +91,15 @@ export async function buildAlertEmail(
   if (!backupId) {
     backupId = built.legacyId || built.slug || '';
   }
-  const backupBase = process.env.ALERT_LINK_BASE?.replace(/\/+$/, '') || linkBase;
-  const backup = `${backupBase}/go/c/${encodeURIComponent(backupId)}`;
+  // IMPORTANT:
+  // Backup links must point at the *app* host, because /go/c/:token is served by the app,
+  // not the redirector. Using ALERT_LINK_BASE here produces broken links like
+  // https://go.boomnow.com/go/c/<id>. Always build the backup deep link on APP_URL.
+  const backupAppBase = appUrl().replace(/\/+$/, '');
+  const backup =
+    built.uuid
+      ? makeConversationLink({ uuid: built.uuid, baseUrl: backupAppBase })!
+      : `${backupAppBase}/go/c/${encodeURIComponent(backupId)}`;
   const metric = built.minted
     ? 'alerts.sent_with_minted_link'
     : built.kind === 'token'
