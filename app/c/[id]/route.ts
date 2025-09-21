@@ -11,10 +11,8 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   let to: string;
   if (uuid) {
     to = conversationDeepLinkFromUuid(uuid, { baseUrl: base });
-  } else if (/^\d+$/.test(raw)) {
-    to = `${base}/dashboard/guest-experience/all?legacyId=${encodeURIComponent(raw)}`;
   } else {
-    to = `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(raw)}`;
+    to = `${base}/go/c/${encodeURIComponent(raw)}`;
   }
   return NextResponse.redirect(to, 302);
 }

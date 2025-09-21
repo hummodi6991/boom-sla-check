@@ -27,7 +27,7 @@ test('legacy redirect resolves to uuid deep link', async () => {
   } catch (err) {
     location = extractRedirect(err)
   }
-  expect(location).toBe(`http://test/dashboard/guest-experience/all?conversation=${uuid}`)
+  expect(location).toBe(`http://test/go/c/${uuid}`)
 })
 
 test('legacy redirect mints deterministic uuid when mapping missing', async () => {
@@ -37,8 +37,7 @@ test('legacy redirect mints deterministic uuid when mapping missing', async () =
   } catch (err) {
     location = extractRedirect(err)
   }
-  expect(location).toMatch(/conversation=/)
-  expect(location).toMatch(/^http:\/\/test\/dashboard\/guest-experience\/all\?conversation=/)
+  expect(location).toMatch(/^http:\/\/test\/go\/c\//)
 })
 
 test('legacy redirect resolves via alias when conversation missing', async () => {
@@ -59,7 +58,7 @@ test('legacy redirect resolves via alias when conversation missing', async () =>
     location = extractRedirect(err)
   }
 
-  expect(location).toBe(`http://test/dashboard/guest-experience/all?conversation=${uuid}`)
+  expect(location).toBe(`http://test/go/c/${uuid}`)
 
   prisma.conversation_aliases._data.delete(legacyId)
 })

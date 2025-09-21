@@ -118,7 +118,7 @@ test('buildUniversalConversationLink returns token link for uuid', async () => {
 
 test('buildUniversalConversationLink degrades to deep link when token verification fails', async () => {
   const calls: string[] = [];
-  const deep = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  const deep = `${BASE}/go/c/${encodeURIComponent(uuid)}`;
   const res = await buildUniversalConversationLink(
     { uuid },
     {
@@ -149,7 +149,7 @@ test('buildUniversalConversationLink falls back to deep link when token mint fai
       verify: async (url) => {
         calls.push(url);
         expect(url).toBe(
-          `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
+          `${BASE}/go/c/${encodeURIComponent(uuid)}`
         );
         return true;
       },
@@ -160,7 +160,7 @@ test('buildUniversalConversationLink falls back to deep link when token mint fai
   );
   expect(res?.kind).toBe('deep-link');
   expect(res?.url).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
+    `${BASE}/go/c/${encodeURIComponent(uuid)}`
   );
   expect(calls.length).toBeGreaterThanOrEqual(2);
 });
@@ -172,7 +172,7 @@ test('buildUniversalConversationLink mints fallback uuid when strict mode enable
     { baseUrl: BASE, verify: async () => true, strictUuid: true }
   );
   const minted = mintUuidFromRaw(slug);
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted)}`;
+  const expected = `${BASE}/go/c/${encodeURIComponent(minted)}`;
   expect(res?.kind).toBe('deep-link');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
@@ -187,7 +187,7 @@ test('buildUniversalConversationLink uses resolver(s) to obtain uuid; mints when
     { baseUrl: BASE, verify: async () => true, strictUuid: true }
   );
   const minted = mintUuidFromRaw(String(legacyId));
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted)}`;
+  const expected = `${BASE}/go/c/${encodeURIComponent(minted)}`;
   expect(res?.kind).toBe('deep-link');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
@@ -263,7 +263,7 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  const expected = `${BASE}/go/c/${encodeURIComponent(uuid)}`;
   expect(res?.kind).toBe('deep-link');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
@@ -286,7 +286,7 @@ test('buildUniversalConversationLink uses resolver link when resolver mints uuid
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  const expected = `${BASE}/go/c/${encodeURIComponent(uuid)}`;
   expect(res?.kind).toBe('deep-link');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
@@ -310,7 +310,7 @@ test('buildUniversalConversationLink detects minted fallback without resolver de
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(minted)}`;
+  const expected = `${BASE}/go/c/${encodeURIComponent(minted)}`;
   expect(res?.kind).toBe('deep-link');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);
@@ -382,7 +382,7 @@ test('buildUniversalConversationLink verifies resolver link when resolver indica
     return { ok: true, json: async () => ({}) } as any;
   };
   const legacyId = '12345';
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  const expected = `${BASE}/go/c/${encodeURIComponent(uuid)}`;
   const res = await buildUniversalConversationLink(
     { uuid, legacyId },
     {
@@ -412,7 +412,7 @@ test('buildUniversalConversationLink falls back to deep link when token verifica
     }
   );
   expect(res?.kind).toBe('deep-link');
-  expect(res?.url).toBe(`${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`);
+  expect(res?.url).toBe(`${BASE}/go/c/${encodeURIComponent(uuid)}`);
 });
 
 test('buildUniversalConversationLink uses resolver link for minted identifiers even when strict mode disabled', async () => {
@@ -432,7 +432,7 @@ test('buildUniversalConversationLink uses resolver link for minted identifiers e
       },
     }
   );
-  const expected = `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`;
+  const expected = `${BASE}/go/c/${encodeURIComponent(uuid)}`;
   expect(res?.kind).toBe('deep-link');
   expect(res?.minted).toBe(true);
   expect(res?.url).toBe(expected);

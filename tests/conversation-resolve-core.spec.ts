@@ -66,6 +66,6 @@ test('resolveConversationUuid returns null for empty input', async () => {
 test('conversationDeepLink builds absolute deep link with base', () => {
   const uuid = '123e4567-e89b-12d3-a456-426614174000';
   const link = conversationDeepLink(uuid, 'https://app.example.com');
-  expect(link).toBe(`https://app.example.com/dashboard/guest-experience/all?conversation=${uuid}`);
+  expect(link).toBe(`https://app.example.com/go/c/${uuid}`);
 });
 

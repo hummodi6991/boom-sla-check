@@ -32,7 +32,7 @@ test('legacy redirect returns 302 even if DB throws', async () => {
     } catch (err) {
       location = extractRedirect(err);
     }
-    expect(location).toMatch(/conversation=/);
+    expect(location).toMatch(/\/go\/c\//);
   } finally {
     prisma.conversation.findFirst = originalFindFirst;
   }

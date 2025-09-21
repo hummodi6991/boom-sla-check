@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { normalizeConversation } from '../../../../src/conversation';
+import type { Conversation } from '../../../../src/conversation';
 import { useConversation } from './useConversation';
 
 function SkeletonConversation() {
@@ -31,6 +32,11 @@ export function conversationViewState(args: {
   return 'ready';
 }
 
+export function safeRelatedReservations(conversation?: Conversation | null) {
+  const related = conversation?.related_reservations;
+  return Array.isArray(related) ? related : [];
+}
+
 export default function GuestExperience({ initialConversationId }: { initialConversationId?: string }) {
   const { data, isLoading, error } = useConversation(initialConversationId);
 
@@ -47,8 +53,11 @@ export default function GuestExperience({ initialConversationId }: { initialConv
   });
 
   useEffect(() => {
-    if (initialConversationId && data) openDrawer(initialConversationId);
-  }, [initialConversationId, data]);
+    if (!initialConversationId) return;
+    if (!data) return;
+    if (!safe?.id) return;
+    openDrawer(safe.id);
+  }, [initialConversationId, data, safe?.id]);
 
   if (state === 'loading') return <SkeletonConversation />;
   if (state === 'error') return <InlineError message="Failed to load conversation." />;
@@ -61,7 +70,7 @@ export default function GuestExperience({ initialConversationId }: { initialConv
     );
   }
 
-  const relatedReservations = safe.related_reservations ?? [];
+  const relatedReservations = safeRelatedReservations(safe);
   const hasRelated = relatedReservations.length > 0;
 
   return (

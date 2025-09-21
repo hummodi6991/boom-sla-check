@@ -75,5 +75,5 @@ The hedged resolver emits spans named `resolveConversationUuidHedged`, and alert
 
 ## Redirector behaviour
 
-The stateless redirector (`apps/redirector`) verifies Ed25519 tokens against `LINK_PUBLIC_JWKS`, unwraps nested redirect parameters, and forwards users with `303 See Other` responses. Invalid or expired tokens fall back to `/link/help`; if a legacy conversation id is present, the redirector sends users to `/dashboard/guest-experience/all?legacyId=<id>` instead of the legacy CS route.
+The stateless redirector (`apps/redirector`) verifies Ed25519 tokens against `LINK_PUBLIC_JWKS`, unwraps nested redirect parameters, and forwards users with `303 See Other` responses. Invalid or expired tokens fall back to `/link/help`; if a legacy conversation id is present, the redirector sends users to `/go/c/<id>` instead of the legacy CS route.
 

@@ -3,6 +3,7 @@ import { verifyLinkToken } from '../../apps/shared/lib/linkToken';
 import { conversationDeepLinkFromUuid, appUrlFromRequest } from '../../apps/shared/lib/links';
 import { metrics } from '../../lib/metrics';
 import { setTestKeyEnv } from './testKeys';
+import { resolveConversationToken } from '../../app/go/c/[token]/route';
 
 type StartedServer = { server: http.Server; port: number };
 
@@ -101,6 +102,39 @@ export async function startTestServer(): Promise<StartedServer> {
         res.statusCode = 400;
         res.end('invalid token');
       }
+      return;
+    }
+
+    if (
+      (req.method === 'GET' || req.method === 'HEAD') &&
+      requestUrl.pathname.startsWith('/go/c/')
+    ) {
+      const rawToken = requestUrl.pathname.slice('/go/c/'.length);
+      let token = rawToken;
+      try {
+        token = decodeURIComponent(rawToken);
+      } catch {
+        token = rawToken;
+      }
+      const uuid = await resolveConversationToken(token);
+      if (uuid) {
+        const location = `/dashboard/guest-experience/all?conversation=${uuid}`;
+        res.statusCode = 302;
+        res.setHeader('Location', location);
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(req.method === 'HEAD' ? undefined : '');
+        return;
+      }
+      res.statusCode = 404;
+      res.setHeader('Cache-Control', 'no-store');
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(
+        '<!DOCTYPE html><html><head><title>Conversation not found</title></head><body><main><h1>Conversation not found</h1><p>The conversation link could not be resolved.</p></main></body></html>'
+      );
       return;
     }
 

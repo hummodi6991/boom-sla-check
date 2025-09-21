@@ -52,14 +52,14 @@ test.afterEach(() => {
 
 test('makeConversationLink builds ?conversation when uuid provided', () => {
   expect(makeConversationLink({ uuid })).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(uuid)}`
+    `${BASE}/go/c/${encodeURIComponent(uuid)}`
   );
 });
 
 test('makeConversationLink accepts baseUrl override', () => {
   expect(
     makeConversationLink({ uuid, baseUrl: 'http://localhost:4321' })
-  ).toBe(`http://localhost:4321/dashboard/guest-experience/all?conversation=${uuid}`);
+  ).toBe(`http://localhost:4321/go/c/${uuid}`);
 });
 
 test('makeConversationLink returns null when uuid missing', () => {
@@ -82,7 +82,7 @@ test('buildAlertConversationLink produces verified link with id display', async 
     { conversation_uuid: uuid },
     { baseUrl: BASE, verify: async () => true, strictUuid: true }
   );
-  expect(built?.url).toMatch(/\/r\/(t|conversation)\/|conversation=/);
+  expect(built?.url).toMatch(/\/r\/(t|conversation)\/|\/go\/c\//);
   expect(built?.idDisplay).toBe(uuid.toLowerCase());
 });
 
@@ -130,7 +130,7 @@ test('mailer uses uuid when available', async () => {
         res.payload?.conversation === uuid || res.payload?.uuid === uuid
       );
     }
-    if (url.includes('/dashboard/guest-experience/')) {
+    if (url.includes('/go/c/')) {
       return true;
     }
     return false;
@@ -183,7 +183,7 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
         decoded.payload?.conversation === uuid || decoded.payload?.uuid === uuid
       );
     }
-    if (url.includes('/dashboard/guest-experience/')) {
+    if (url.includes('/go/c/')) {
       return true;
     }
     return false;
@@ -228,7 +228,7 @@ test('mailer mints uuid when canonical mapping missing (strict mode)', async () 
   }
   expect(emails.length).toBe(1);
   const minted = mintUuidFromRaw('789');
-  expect(emails[0].html).toContain(`/c/${encodeURIComponent(minted ?? '')}`);
+  expect(emails[0].html).toContain(`/go/c/${encodeURIComponent(minted ?? '')}`);
   expect(metricsArr).toContain('alerts.sent_with_minted_link');
 });
 
@@ -257,6 +257,6 @@ test('mailer mints uuid for slug when resolver unavailable', async () => {
   }
   expect(emails.length).toBe(1);
   const minted = mintUuidFromRaw(slug);
-  expect(emails[0].html).toContain(`/c/${encodeURIComponent(minted ?? '')}`);
+  expect(emails[0].html).toContain(`/go/c/${encodeURIComponent(minted ?? '')}`);
   expect(metricsArr).toContain('alerts.sent_with_minted_link');
 });

@@ -4,8 +4,8 @@
   "type": "module",
   "private": true,
   "dependencies": {
-    "@vitalets/google-translate-api": "^8.0.0",
     "@hono/node-server": "^1.11.1",
+    "@vitalets/google-translate-api": "^8.0.0",
     "axios": "^1.6.8",
     "cockatiel": "^2.0.2",
     "hono": "^4.6.6",
