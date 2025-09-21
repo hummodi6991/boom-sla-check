@@ -8,8 +8,13 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const raw = params.id;
   const uuid = await tryResolveConversationUuid(raw);
   const base = appUrlFromRequest(req);
-  const to = uuid
-    ? conversationDeepLinkFromUuid(uuid, { baseUrl: base })
-    : `${base}/dashboard/guest-experience/cs?conversation=${encodeURIComponent(raw)}`;
+  let to: string;
+  if (uuid) {
+    to = conversationDeepLinkFromUuid(uuid, { baseUrl: base });
+  } else if (/^\d+$/.test(raw)) {
+    to = `${base}/dashboard/guest-experience/all?legacyId=${encodeURIComponent(raw)}`;
+  } else {
+    to = `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(raw)}`;
+  }
   return NextResponse.redirect(to, 302);
 }

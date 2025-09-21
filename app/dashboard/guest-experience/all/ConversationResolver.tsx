@@ -8,16 +8,19 @@ const UUID_RE =
 
 type Props = {
   initialConversationId?: string;
+  initialLegacyId?: string;
 };
 
 export default function ConversationResolver({
   initialConversationId,
+  initialLegacyId,
 }: Props) {
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [resolverError, setResolverError] = useState(false);
 
   useEffect(() => {
-    if (!initialConversationId) {
+    const raw = initialConversationId ?? initialLegacyId;
+    if (!raw) {
       setConversationId(undefined);
       setResolverError(false);
       return;
@@ -29,9 +32,9 @@ export default function ConversationResolver({
     async function resolve() {
       try {
         setResolverError(false);
-        const raw = String(initialConversationId);
+        const rawValue = String(raw);
         const res = await fetch(
-          `/api/resolve/conversation?raw=${encodeURIComponent(raw)}`,
+          `/api/resolve/conversation?raw=${encodeURIComponent(rawValue)}`,
           { signal: controller.signal }
         );
         if (!res.ok) {
@@ -43,33 +46,23 @@ export default function ConversationResolver({
         if (data?.uuid) {
           const normalized = String(data.uuid).toLowerCase();
           setConversationId(normalized);
-          if (
-            normalized &&
-            typeof window !== 'undefined' &&
-            window.history &&
-            normalized !== raw.toLowerCase()
-          ) {
+          if (normalized && typeof window !== 'undefined' && window.history) {
             try {
               const currentUrl = new URL(window.location.href);
               currentUrl.searchParams.set('conversation', normalized);
+              currentUrl.searchParams.delete('legacyId');
+              const newSearch = currentUrl.searchParams.toString();
+              const nextUrl = newSearch
+                ? `${currentUrl.pathname}?${newSearch}`
+                : currentUrl.pathname;
               window.history.replaceState(
                 window.history.state,
                 '',
-                `${currentUrl.pathname}?${currentUrl.search}`
+                nextUrl
               );
             } catch {
               // ignore history failures
             }
-          }
-          return;
-        }
-
-        if (data?.legacyId) {
-          if (typeof window !== 'undefined') {
-            const destination = `/dashboard/guest-experience/cs?legacyId=${encodeURIComponent(
-              String(data.legacyId)
-            )}`;
-            window.location.replace(destination);
           }
           return;
         }
@@ -89,7 +82,7 @@ export default function ConversationResolver({
       cancelled = true;
       controller.abort();
     };
-  }, [initialConversationId]);
+  }, [initialConversationId, initialLegacyId]);
 
   const resolvedConversation =
     typeof conversationId === 'string' && UUID_RE.test(conversationId)

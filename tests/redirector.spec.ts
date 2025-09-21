@@ -63,7 +63,7 @@ test('GET /u/:token with expired JWT redirects to legacy fallback', async () => 
   const res = await app.fetch(new Request(`http://redirect.example/u/${token}`, { method: 'GET' }));
   expect(res.status).toBe(303);
   expect(res.headers.get('location')).toBe(
-    'https://app.example.com/dashboard/guest-experience/cs?legacyId=1010993'
+    'https://app.example.com/dashboard/guest-experience/all?legacyId=1010993'
   );
 });
 

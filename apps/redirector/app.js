@@ -219,7 +219,7 @@ function getAudience() {
 
 function buildLegacyFallback(legacyId) {
   const base = cleanBaseUrl();
-  const url = new URL('/dashboard/guest-experience/cs', base + '/');
+  const url = new URL('/dashboard/guest-experience/all', base + '/');
   url.searchParams.set('legacyId', String(legacyId));
   return url.toString();
 }
