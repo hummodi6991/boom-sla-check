@@ -8,7 +8,7 @@ test('buildCanonicalDeepLink prefers uuid route', () => {
 
 test('buildCanonicalDeepLink falls back to legacy id', () => {
   const url = buildCanonicalDeepLink({ appUrl: 'https://app.example.com/', legacyId: 42 });
-  expect(url).toBe('https://app.example.com/dashboard/guest-experience/cs?legacyId=42');
+  expect(url).toBe('https://app.example.com/dashboard/guest-experience/all?legacyId=42');
 });
 
 test('buildCanonicalDeepLink throws without identifier', () => {

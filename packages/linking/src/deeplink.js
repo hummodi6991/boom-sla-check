@@ -1,5 +1,5 @@
 const UUID_PATH = '/dashboard/guest-experience/all';
-const LEGACY_PATH = '/dashboard/guest-experience/cs';
+const LEGACY_PATH = '/dashboard/guest-experience/all';
 
 function cleanBase(url) {
   const raw = String(url || '').trim();
