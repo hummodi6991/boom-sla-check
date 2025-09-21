@@ -3,7 +3,7 @@ import { sendAlert } from "./lib/email.js";
 import { appUrl } from "./lib/links.js";
 import { ensureAlertConversationLink } from "./lib/alertConversation.js";
 import { prisma } from "./lib/db.js";
-import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
+import { isDuplicateAlert, markAlerted, dedupeKey } from "./lib/dedupe.mjs";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";

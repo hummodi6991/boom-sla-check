@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: boom-sla-check
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   check:
