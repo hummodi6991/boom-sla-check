@@ -20,12 +20,21 @@ export async function buildAlertEmail(
     return null;
   }
   const privateJwk = process.env.LINK_PRIVATE_JWK;
-  const linkBase = (process.env.ALERT_LINK_BASE || 'https://go.boomnow.com').replace(/\/+$/, '');
+  const configuredLinkBase = process.env.ALERT_LINK_BASE;
+  const linkBase = (configuredLinkBase || 'https://go.boomnow.com').replace(/\/+$/, '');
   const kid = process.env.LINK_KID || 'link-1';
   const iss = process.env.LINK_ISSUER || 'sla-check';
   const aud = process.env.LINK_AUDIENCE || 'boom-app';
 
   let primary = built.url;
+
+  const requireSignedLinks = process.env.REQUIRE_SIGNED_ALERT_LINKS === '1';
+  if (requireSignedLinks && (!privateJwk || !configuredLinkBase)) {
+    metrics.increment('alerts.sent_with_unsigned_blocked');
+    throw new Error(
+      'Signed alert links required in production; configure LINK_PRIVATE_JWK/ALERT_LINK_BASE.'
+    );
+  }
 
   if (privateJwk) {
     try {
@@ -48,12 +57,30 @@ export async function buildAlertEmail(
       primary = `${linkBase}/u/${token}`;
     } catch (err) {
       logger?.warn?.({ err }, 'failed to sign alert link token');
+      if (requireSignedLinks) {
+        metrics.increment('alerts.sent_with_unsigned_blocked');
+        throw err;
+      }
     }
   } else {
     logger?.warn?.('LINK_PRIVATE_JWK missing; using fallback deep link');
   }
 
-  const backup = built.backupUrl || built.url;
+  let backupId = built.uuid || null;
+  if (!backupId && built.minted && typeof built.url === 'string') {
+    const match = built.url.match(/[?&]conversation=([^&#]+)/i);
+    if (match?.[1]) {
+      try {
+        backupId = decodeURIComponent(match[1]);
+      } catch {
+        backupId = match[1];
+      }
+    }
+  }
+  if (!backupId) {
+    backupId = built.legacyId || built.slug || '';
+  }
+  const backup = `${process.env.ALERT_LINK_BASE?.replace(/\/+$/, '') || linkBase}/c/${encodeURIComponent(backupId)}`;
   const metric = built.minted
     ? 'alerts.sent_with_minted_link'
     : built.kind === 'token'
