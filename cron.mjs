@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./lib/dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
-import { appUrl, makeConversationLink } from "./lib/links.js";
+import { appUrl, makeConversationLink, alertLinkBase, buildResolverLink } from "./lib/links.js";
 import { mintUuidFromRaw } from "./apps/shared/lib/canonicalConversationUuid.js";
 import { buildAlertConversationLink } from "./lib/conversationLink.js";
 import { prisma } from "./lib/db.js";
@@ -464,8 +464,13 @@ for (const { id } of toCheck) {
         continue;
       }
 
-      const url = built.url;
-      const backupUrl = built.backupUrl || url;
+      const resolverUrl = buildResolverLink({
+        identifier: lookupId,
+        uuid,
+        baseUrl: alertLinkBase(),
+      });
+      const url = resolverUrl || built.url;
+      const backupUrl = built.backupUrl || (resolverUrl ? built.url : url);
       const idDisplay = built.idDisplay || uuid || String(lookupId);
 
       console.log(
@@ -480,6 +485,8 @@ for (const { id } of toCheck) {
         const key = dedupeKey(id, lastGuestMs);
         const metricName = built.minted
           ? 'alerts.sent_with_minted_link'
+          : resolverUrl
+          ? 'alerts.sent_with_resolver_link'
           : built.kind === 'token'
           ? 'alerts.sent_with_token_link'
           : built.kind === 'legacy'
