@@ -683,6 +683,21 @@ export function createRedirectorApp() {
     return headOk({ 'Content-Type': 'application/json' });
   });
 
+  // Pass-through for universal deep links accidentally pointed at the redirector host.
+  // Always forward to the app host's /go/c/:token so these links never 404.
+  app.get('/go/c/:token', (c) => {
+    const base = cleanBaseUrl();
+    const token = c.req.param('token') || '';
+    const location = `${base}/go/c/${encodeURIComponent(token)}`;
+    return redirectResponse(c, location);
+  });
+  app.on('HEAD', '/go/c/:token', (c) => {
+    const base = cleanBaseUrl();
+    const token = c.req.param('token') || '';
+    const location = `${base}/go/c/${encodeURIComponent(token)}`;
+    return headSeeOther(location);
+  });
+
   app.get('/link/help', () => ok(fallbackHtml()));
   app.on('HEAD', '/link/help', () => headOk({ 'Content-Type': 'text/html; charset=utf-8' }));
 
