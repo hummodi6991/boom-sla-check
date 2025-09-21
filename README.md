@@ -57,8 +57,21 @@ Set the following variables so the check and cron runners can authenticate again
 
 - `RESOLVE_BASE_URL` – Boom app host that exposes `/api/internal/resolve-conversation` for HMAC-authenticated lookups.
 - `RESOLVE_SECRET` – shared secret used to sign internal resolve requests.
+- `HEDGE_MS` – hedge delay (milliseconds) before launching probe-based UUID resolution (defaults to `120`).
+- `RESOLVER_MAX_ATTEMPTS` – number of internal resolver attempts before opening the circuit breaker (defaults to `3`).
 
 These settings allow the jobs to resolve canonical UUIDs, construct verified deep links, and mail operators without exposing raw identifiers.
+
+## Observability
+
+Zero-code instrumentation can be enabled by loading OpenTelemetry auto-instrumentations when running the cron job:
+
+```bash
+OTEL_TRACES_EXPORTER=otlp OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=<endpoint> \
+  node --require @opentelemetry/auto-instrumentations-node/register cron.mjs
+```
+
+The hedged resolver emits spans named `resolveConversationUuidHedged`, and alert delivery is wrapped in `alert.send` spans.
 
 ## Redirector behaviour
 

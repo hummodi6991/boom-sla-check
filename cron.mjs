@@ -1,17 +1,19 @@
 // --- auth + logging + email helpers ---
 import { spawn } from "node:child_process";
 import nodemailer from "nodemailer";
-import { isDuplicateAlert, markAlerted, dedupeKey } from "./dedupe.mjs";
+import { isDuplicateAlert, markAlerted, dedupeKey } from "./lib/dedupe.mjs";
 import { selectTop50, assertTop50 } from "./src/lib/selectTop50.js";
 import { appUrl, makeConversationLink } from "./lib/links.js";
 import { mintUuidFromRaw } from "./apps/shared/lib/canonicalConversationUuid.js";
 import { buildAlertConversationLink } from "./lib/conversationLink.js";
 import { prisma } from "./lib/db.js";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
-import { resolveConversationUuid } from "./apps/shared/lib/conversationUuid.js";
+import { resolveConversationUuidHedged } from "./apps/shared/lib/conversationUuid.js";
+import { trace, SpanStatusCode } from '@opentelemetry/api';
 export { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
 const logger = console;
 const metrics = { increment: () => {} };
+const tracer = trace.getTracer('boom-sla-check');
 // Assumes ESM. Node 18+ provides global fetch. If you're on older Node, ensure node-fetch is installed & imported.
 
 // Accept a canonical UUID (v1–v5)
@@ -230,11 +232,35 @@ const log = (...a) => DEBUG && console.log(...a);
 
 // email
 async function sendAlertEmail({ to, subject, text, html }) {
-  if (!to) { console.warn("No ALERT_TO configured; skipping email"); return; }
-  const host = process.env.SMTP_HOST, user = process.env.SMTP_USER, pass = process.env.SMTP_PASS;
-  if (!host || !user || !pass) { console.warn("SMTP envs not fully set; skipping email"); return; }
-  const transporter = nodemailer.createTransport({ host, port: 587, secure: false, auth: { user, pass } });
-  await transporter.sendMail({ from: user, to, subject, text, html });
+  return tracer.startActiveSpan('alert.send', async (span) => {
+    span.setAttribute('alert.recipient', String(to || ''));
+    if (subject) span.setAttribute('alert.subject', String(subject));
+    const host = process.env.SMTP_HOST;
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+    try {
+      if (!to) {
+        span.addEvent('alert.skip', { reason: 'missing_recipient' });
+        console.warn("No ALERT_TO configured; skipping email");
+        return;
+      }
+      if (!host || !user || !pass) {
+        span.addEvent('alert.skip', { reason: 'missing_smtp_env' });
+        console.warn("SMTP envs not fully set; skipping email");
+        return;
+      }
+      const transporter = nodemailer.createTransport({ host, port: 587, secure: false, auth: { user, pass } });
+      const result = await transporter.sendMail({ from: user, to, subject, text, html });
+      span.addEvent('alert.sent');
+      return result;
+    } catch (error) {
+      span.recordException?.(error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error?.message || String(error) });
+      throw error;
+    } finally {
+      span.end();
+    }
+  });
 }
 
 // Walk any JSON shape and collect plausible conversation IDs
@@ -374,7 +400,7 @@ for (const { id } of toCheck) {
     let idForFetch = id;
     if (!UUID_RE.test(String(idForFetch))) {
       try {
-        const maybeUuid = await resolveConversationUuid(String(idForFetch), { skipRedirectProbe: false });
+        const maybeUuid = await resolveConversationUuidHedged(String(idForFetch), { skipRedirectProbe: false });
         if (maybeUuid && UUID_RE.test(maybeUuid)) idForFetch = maybeUuid.toLowerCase();
       } catch {}
     }
@@ -416,7 +442,7 @@ for (const { id } of toCheck) {
       // Build a universal conversation link
       const lookupId = conv?.uuid ?? conv?.id ?? id;
       const convId = id;
-      const uuid = await resolveConversationUuid(lookupId, {
+      const uuid = await resolveConversationUuidHedged(lookupId, {
         inlineThread,
         fetchFirstMessage: async (idOrSlug) => {
           const headers = authHeaders();
