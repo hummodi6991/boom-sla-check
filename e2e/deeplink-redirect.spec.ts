@@ -53,6 +53,28 @@ test('mailer link flows through redirector to deep link', async ({ page }) => {
   }
 });
 
+test('redirector forwards /go/c/:token to app /go/c/:token', async ({ page }) => {
+  const { server: appServer, port: appPort } = await startTestServer();
+  const redirect = await startRedirectorServer();
+  const originalTarget = process.env.TARGET_APP_URL;
+  try {
+    process.env.TARGET_APP_URL = `http://localhost:${appPort}`;
+    // Any token will do; we just assert the forward to the app host.
+    const badHostUrl = `http://localhost:${redirect.port}/go/c/991130`;
+    const res = await page.request.get(badHostUrl, { maxRedirects: 0 });
+    expect(res.status()).toBe(303);
+    expect(res.headers()['location']).toBe(`http://localhost:${appPort}/go/c/991130`);
+  } finally {
+    if (originalTarget !== undefined) {
+      process.env.TARGET_APP_URL = originalTarget;
+    } else {
+      delete process.env.TARGET_APP_URL;
+    }
+    await stopRedirectorServer(redirect);
+    await stopTestServer(appServer);
+  }
+});
+
 test('go/c/<uuid> loads conversation view', async ({ page }) => {
   const { server, port } = await startTestServer();
   await page.goto(`http://localhost:${port}/go/c/${uuid}`, { waitUntil: 'domcontentloaded' });

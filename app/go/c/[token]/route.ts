@@ -68,7 +68,9 @@ export async function resolveConversationToken(token: string | null | undefined)
   try {
     const uuid = await resolveConversationUuid(raw, {
       allowMintFallback: false,
-      skipRedirectProbe: true,
+      // Enable redirect probe so legacy ids / slugs succeed even when the
+      // internal resolver or alias cache is unavailable.
+      skipRedirectProbe: false,
     });
     if (uuid && UUID_RE.test(uuid)) {
       return uuid.toLowerCase();
