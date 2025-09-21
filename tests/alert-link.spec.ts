@@ -4,10 +4,12 @@ import { verifyLinkToken } from '../apps/shared/lib/linkToken';
 import { mintUuidFromRaw } from '../apps/shared/lib/canonicalConversationUuid.js';
 import { setTestKeyEnv } from './helpers/testKeys';
 
-const ORIGINAL_PRIVATE_KEY = process.env.LINK_PRIVATE_KEY_PEM;
-const ORIGINAL_PUBLIC_KEY = process.env.LINK_PUBLIC_KEY_PEM;
-const ORIGINAL_SIGNING_KID = process.env.LINK_SIGNING_KID;
+const ORIGINAL_PRIVATE_JWK = process.env.LINK_PRIVATE_JWK;
+const ORIGINAL_PUBLIC_JWKS = process.env.LINK_PUBLIC_JWKS;
+const ORIGINAL_SIGNING_KID = process.env.LINK_KID;
 const ORIGINAL_JWKS_URL = process.env.LINK_JWKS_URL;
+const ORIGINAL_LINK_ISSUER = process.env.LINK_ISSUER;
+const ORIGINAL_LINK_AUDIENCE = process.env.LINK_AUDIENCE;
 const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
 const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
 const ORIGINAL_APP_URL = process.env.APP_URL;
@@ -18,25 +20,35 @@ const ORIGINAL_RESOLVE_CONVERSATION = (globalThis as any).resolveConversationUui
 const uuid = '123e4567-e89b-12d3-a456-426614174000';
 
 function restoreEnv() {
-  if (ORIGINAL_PRIVATE_KEY !== undefined) {
-    process.env.LINK_PRIVATE_KEY_PEM = ORIGINAL_PRIVATE_KEY;
+  if (ORIGINAL_PRIVATE_JWK !== undefined) {
+    process.env.LINK_PRIVATE_JWK = ORIGINAL_PRIVATE_JWK;
   } else {
-    delete process.env.LINK_PRIVATE_KEY_PEM;
+    delete process.env.LINK_PRIVATE_JWK;
   }
-  if (ORIGINAL_PUBLIC_KEY !== undefined) {
-    process.env.LINK_PUBLIC_KEY_PEM = ORIGINAL_PUBLIC_KEY;
+  if (ORIGINAL_PUBLIC_JWKS !== undefined) {
+    process.env.LINK_PUBLIC_JWKS = ORIGINAL_PUBLIC_JWKS;
   } else {
-    delete process.env.LINK_PUBLIC_KEY_PEM;
+    delete process.env.LINK_PUBLIC_JWKS;
   }
   if (ORIGINAL_SIGNING_KID !== undefined) {
-    process.env.LINK_SIGNING_KID = ORIGINAL_SIGNING_KID;
+    process.env.LINK_KID = ORIGINAL_SIGNING_KID;
   } else {
-    delete process.env.LINK_SIGNING_KID;
+    delete process.env.LINK_KID;
   }
   if (ORIGINAL_JWKS_URL !== undefined) {
     process.env.LINK_JWKS_URL = ORIGINAL_JWKS_URL;
   } else {
     delete process.env.LINK_JWKS_URL;
+  }
+  if (ORIGINAL_LINK_ISSUER !== undefined) {
+    process.env.LINK_ISSUER = ORIGINAL_LINK_ISSUER;
+  } else {
+    delete process.env.LINK_ISSUER;
+  }
+  if (ORIGINAL_LINK_AUDIENCE !== undefined) {
+    process.env.LINK_AUDIENCE = ORIGINAL_LINK_AUDIENCE;
+  } else {
+    delete process.env.LINK_AUDIENCE;
   }
   if (ORIGINAL_RESOLVE_SECRET !== undefined) {
     process.env.RESOLVE_SECRET = ORIGINAL_RESOLVE_SECRET;
@@ -99,7 +111,9 @@ test('buildUniversalConversationLink returns token link for uuid', async () => {
   const token = parsed.pathname.split('/').pop();
   expect(token).toBeTruthy();
   const decoded = token ? await verifyLinkToken(token) : null;
-  expect(decoded?.payload?.conversation).toBe(uuid);
+  expect(
+    decoded?.payload?.conversation === uuid || decoded?.payload?.uuid === uuid
+  ).toBe(true);
 });
 
 test('buildUniversalConversationLink degrades to deep link when token verification fails', async () => {
@@ -125,8 +139,8 @@ test('buildUniversalConversationLink degrades to deep link when token verificati
 });
 
 test('buildUniversalConversationLink falls back to deep link when token mint fails', async () => {
-  delete process.env.LINK_PRIVATE_KEY_PEM;
-  delete process.env.LINK_PUBLIC_KEY_PEM;
+  delete process.env.LINK_PRIVATE_JWK;
+  delete process.env.LINK_PUBLIC_JWKS;
   const calls: unknown[] = [];
   const res = await buildUniversalConversationLink(
     { uuid },

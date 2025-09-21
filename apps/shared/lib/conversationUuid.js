@@ -1,37 +1,22 @@
-import { tryResolveConversationUuid } from '../../server/lib/conversations.js';
-import {
-  resolveViaInternalEndpoint,
-  resolveViaPublicEndpoint,
-} from '../../../lib/internalResolve.js';
-import { mintUuidFromRaw, isUuid } from './canonicalConversationUuid.js';
+import { resolveConversation } from '../../../packages/linking/src/index.js';
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i;
 
 export async function resolveConversationUuid(idOrSlug, opts = {}) {
   const raw = String(idOrSlug ?? '').trim();
   if (!raw) return null;
-  try {
-    const maybe = await tryResolveConversationUuid(raw, opts);
-    if (maybe) return maybe.toLowerCase();
-  } catch {}
-  try {
-    const viaInternal = await resolveViaInternalEndpoint(raw);
-    if (viaInternal) return viaInternal.toLowerCase();
-  } catch {
-    // fall through to public resolver / minting
+  const input = { allowMintFallback: opts.allowMintFallback };
+  if (UUID_RE.test(raw)) {
+    input.uuid = raw;
+  } else if (/^\d+$/.test(raw)) {
+    input.legacyId = raw;
+  } else {
+    input.slug = raw;
   }
-  try {
-    const viaPublic = await resolveViaPublicEndpoint(raw);
-    if (viaPublic) return viaPublic.toLowerCase();
-  } catch {
-    // fall through to minting
-  }
-  // ULC-v2: do not mint when the raw value is already a UUID; that produces broken links.
-  if (opts.allowMintFallback !== false && !isUuid(raw)) {
-    try {
-      const minted = mintUuidFromRaw(raw);
-      return minted ? minted.toLowerCase() : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
+  if (opts.inlineThread) input.inlineThread = opts.inlineThread;
+  if (opts.fetchFirstMessage) input.fetchFirstMessage = opts.fetchFirstMessage;
+  if (opts.skipRedirectProbe) input.skipRedirectProbe = opts.skipRedirectProbe;
+  if (opts.onDebug) input.onDebug = opts.onDebug;
+  const resolved = await resolveConversation(input);
+  return resolved?.uuid ?? null;
 }

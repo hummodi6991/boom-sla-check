@@ -1,49 +1,31 @@
 import { __test__ as linkTokenTestUtils } from '../../lib/linkTokensCore.js';
 
-export const TEST_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQCtzY8pUNfuZeks
-6J7wqZc/xxxX9A3xV+MiT+RCVaJ+pEHWgwLQcAiLHJohvQkU4p7WBHmgU+mjGUXD
-s7Ky4vBb2yNVWOwNv2xPJE0hhUO1zmwIL+2Lg0+8N7Q8ZVP/yO0C4z3hgRGi20cy
-u81NOhspsqSWqQ+Dh7c+SXalOIu+lqvnRvKY1MwqxlxSwfrMnVRe5FAM7zcVJaN6
-RLU034fCYpOpqj9XGTkBld6uWGkRghFvkV73iL0FkT+IhfGdmButYxAl7jujs3fo
-mYHig0wPEuea8DIVRi6u0TCpMJpxiu5mzpOPaN7pcTk5p6JFEeJQoc7TlA6rHC17
-bsnFWyrVAgMBAAECggEAHPi5hwUTYYl6Y4KJUAutCzQZHO4xTsw8L/GKVqZotlyS
-HvxqwS0Tt4C2jq4wr9sQ6BMJ5Thnp0jksLkpLhmXQHCYhLcUbjw9BTpDYzWQMmOs
-7XZzzgA/D9xnPnQTmv02yPbxT0BRHMkZprLYh6mKcpp1Rin7TI0YdhkP3n29CbFU
-RyDSBnDitigG0T8lKA9nXVl9qouAEtZrMDX94766m/vNX6VFpZdBlBUNlOkam6D7
-rRswa5cBT+Q0Ra+/bU/imzGmsgQoabiKUUJabeQcGZFEHy3EUsgx/3P10cPxj5BC
-zRGeZlIDsp58htgiZ39nSd060UzM8sSlfjnaNe4phwKBgQDrwX7EtPm8o9oLTmbL
-XEcteINWFIfVWEIgDHXWU/EgNv9IcbyGJj+FE2Ih2c5OCJaBjt7Y2opo4fGsiZys
-EOAm7VoD+tbRk5hcNbihpLM8CuVR6kY6fuLKu1wU+I8NO/FmVJsawvLf4fkHjD0P
-baa/+IppzY1M8Wa6w7EBEpJ9WwKBgQC8ui82iupq8742J97iXGqleGuRa65t+VX2
-WxeYJoyzndgIDyCaQACiPe6F0h8YhaGoOR2IWzkaM7vIzUFJFjUs3CZLk1zQgW6E
-4o/NmCXyYWNiPjSNnqXsabRHV2bOxr1dWA7zjo0r7L081fPdc2uVm4hjE+5zR6rH
-m9voyLV/jwKBgGwlO7CiT/kvtIMBOPhKYUBDiwO+sTy1mse2z4s8wFyFvf8OZWuo
-OfUimh5rGk8Dc38E+cbCIUHRe5opGhx4NUrGEEfJFifXK8oIvqQvuCRv3xf/fq2w
-rPpQjgH0rzJj7+2AHBJfoSgAMcs7knr0Usy3B09XglzsU7KSuCyEx3wHAoGBAJ8X
-nGEwLXhHTJs+dQcAvO4MWzFVQs92Fl78XyFlrcpkTw5MIkGlnmMmLgIlJQ146NN0
-gk7GB5bs8WnOjTBdRiow0x92dBFYaqAelPbNQX/XVP4mTgrsKBbo7I4PQZ0hr9QW
-PVRXYO4cPVIhUdfmSlTtrcVHsgT/7xkha/oJ5+ZFAoGBAITm+hf9mwGqwcQdmD6W
-c+ke5fcPtTllkJgakFTwt+zoOKNigU9xx9DEeefX53h0vmqB0oMN7nySUz5GV3uR
-y0lFv06irrRVmB8zxNn6mtmZzW7VZx3KKzwtCWLwk1s/JclrT/9ltOZHcOaPs3Ea
-D+P1k4sz8VxYDTTMGjB+Nt4N
------END PRIVATE KEY-----`;
+export const TEST_PRIVATE_JWK = {
+  crv: 'Ed25519',
+  d: 'LjDVPJHTMsGZixBY-SMpmvDqGq8_CUJ9FoEaFOKbh8k',
+  x: 'F-10BJTf1fc7okY313H4o8BlQDIHvjNT5YkDVu8aw5c',
+  kty: 'OKP',
+};
 
-export const TEST_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArc2PKVDX7mXpLOie8KmX
-P8ccV/QN8VfjIk/kQlWifqRB1oMC0HAIixyaIb0JFOKe1gR5oFPpoxlFw7OysuLw
-W9sjVVjsDb9sTyRNIYVDtc5sCC/ti4NPvDe0PGVT/8jtAuM94YERottHMrvNTTob
-KbKklqkPg4e3Pkl2pTiLvpar50bymNTMKsZcUsH6zJ1UXuRQDO83FSWjekS1NN+H
-wmKTqao/Vxk5AZXerlhpEYIRb5Fe94i9BZE/iIXxnZgbrWMQJe47o7N36JmB4oNM
-DxLnmvAyFUYurtEwqTCacYruZs6Tj2je6XE5OaeiRRHiUKHO05QOqxwte27JxVsq
-1QIDAQAB
------END PUBLIC KEY-----`;
+export const TEST_PUBLIC_JWK = {
+  crv: 'Ed25519',
+  x: 'F-10BJTf1fc7okY313H4o8BlQDIHvjNT5YkDVu8aw5c',
+  kty: 'OKP',
+};
 
 export function setTestKeyEnv(): void {
-  process.env.LINK_PRIVATE_KEY_PEM = TEST_PRIVATE_KEY;
-  process.env.LINK_PUBLIC_KEY_PEM = TEST_PUBLIC_KEY;
-  process.env.LINK_SIGNING_KID = 'test-key';
+  process.env.LINK_PRIVATE_JWK = JSON.stringify(TEST_PRIVATE_JWK);
+  process.env.LINK_PUBLIC_JWKS = JSON.stringify({
+    keys: [
+      { ...TEST_PUBLIC_JWK, use: 'sig', alg: 'EdDSA', kid: 'test-key' },
+    ],
+  });
+  process.env.LINK_KID = 'test-key';
+  process.env.LINK_ISSUER = 'sla-check';
+  process.env.LINK_AUDIENCE = 'boom-app';
   delete process.env.LINK_JWKS_URL;
   delete process.env.LINK_SECRET;
+  delete process.env.LINK_PRIVATE_KEY_PEM;
+  delete process.env.LINK_PUBLIC_KEY_PEM;
   linkTokenTestUtils?.resetCaches?.();
 }
