@@ -6,6 +6,7 @@ test('safeRelatedReservations handles undefined conversation data', () => {
   expect(safeRelatedReservations(undefined)).toEqual([]);
   expect(safeRelatedReservations(null)).toEqual([]);
   expect(safeRelatedReservations({ related_reservations: undefined } as any)).toEqual([]);
+  expect(safeRelatedReservations('not-an-object' as any)).toEqual([]);
 });
 
 // And when data exists, the helper surfaces it untouched.
