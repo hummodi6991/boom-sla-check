@@ -33,8 +33,12 @@ export function conversationViewState(args: {
 }
 
 export function safeRelatedReservations(conversation?: Conversation | null) {
-  const related = conversation?.related_reservations;
-  return Array.isArray(related) ? related : [];
+  if (!conversation || typeof conversation !== 'object') {
+    return [];
+  }
+
+  const related = (conversation as { related_reservations?: unknown }).related_reservations;
+  return Array.isArray(related) ? (related as Conversation['related_reservations']) : [];
 }
 
 export default function GuestExperience({ initialConversationId }: { initialConversationId?: string }) {
