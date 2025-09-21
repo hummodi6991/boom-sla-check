@@ -228,7 +228,7 @@ test('mailer mints uuid when canonical mapping missing (strict mode)', async () 
   }
   expect(emails.length).toBe(1);
   const minted = mintUuidFromRaw('789');
-  expect(emails[0].html).toContain(`conversation=${encodeURIComponent(minted ?? '')}`);
+  expect(emails[0].html).toContain(`/c/${encodeURIComponent(minted ?? '')}`);
   expect(metricsArr).toContain('alerts.sent_with_minted_link');
 });
 
@@ -257,6 +257,6 @@ test('mailer mints uuid for slug when resolver unavailable', async () => {
   }
   expect(emails.length).toBe(1);
   const minted = mintUuidFromRaw(slug);
-  expect(emails[0].html).toContain(`conversation=${encodeURIComponent(minted ?? '')}`);
+  expect(emails[0].html).toContain(`/c/${encodeURIComponent(minted ?? '')}`);
   expect(metricsArr).toContain('alerts.sent_with_minted_link');
 });

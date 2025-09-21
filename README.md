@@ -41,6 +41,12 @@ Key properties:
 - **Safe-link resilience** – The redirector unwraps nested `?url=` parameters and double-encoded paths to survive external redirectors.
 - **Fallback UX** – Expired or tampered tokens drop users on `/link/help`, a static landing page with retry instructions. When a legacy ID is present we still forward to `/dashboard/guest-experience/cs?legacyId=<id>`.
 
+Production guardrails:
+
+- Production **must** set `REQUIRE_SIGNED_ALERT_LINKS=1` so the mailer refuses to emit raw deep links.
+- If you ever see deep links in email HTML, double-check `LINK_PRIVATE_JWK` and `ALERT_LINK_BASE` on the worker deployment.
+- Optional: allow-list `go.boomnow.com` (or your custom `ALERT_LINK_BASE`) in Microsoft Safe Links to keep tokens intact.
+
 ### Operations cheatsheet
 
 - Populate the following env vars (see `.env.example`):

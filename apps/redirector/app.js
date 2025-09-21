@@ -21,6 +21,24 @@ function cleanBaseUrl() {
   return raw.replace(/\/+$/, '');
 }
 
+function allowedRedirectTarget(location) {
+  if (typeof location !== 'string' || location.length === 0) return false;
+  if (/^https?:\/\//i.test(location)) {
+    try {
+      const targetHost = new URL(cleanBaseUrl()).host;
+      const candidateHost = new URL(location).host;
+      return Boolean(targetHost) && candidateHost === targetHost;
+    } catch {
+      return false;
+    }
+  }
+  return location.startsWith('/');
+}
+
+function invalidRedirectResponse() {
+  return new Response(null, { status: 400, headers: { ...COMMON_HEADERS } });
+}
+
 function decodeLoop(value) {
   if (typeof value !== 'string') return '';
   let current = value;
@@ -158,6 +176,9 @@ function fallbackHtml() {
 }
 
 function seeOther(location) {
+  if (!allowedRedirectTarget(location)) {
+    return invalidRedirectResponse();
+  }
   return new Response(null, {
     status: 303,
     headers: { ...COMMON_HEADERS, Location: location },
@@ -179,6 +200,9 @@ function headOk(headers = {}) {
 }
 
 function headSeeOther(location) {
+  if (!allowedRedirectTarget(location)) {
+    return invalidRedirectResponse();
+  }
   return new Response(null, {
     status: 303,
     headers: { ...COMMON_HEADERS, Location: location },
