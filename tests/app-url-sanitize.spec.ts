@@ -16,12 +16,10 @@ test('APP_URL with CR/LF produces clean, single-line links', async () => {
   expect(appUrl()).toBe('https://app.boomnow.com');
   const uuid = '123e4567-e89b-12d3-a456-426614174000';
   const deep = makeConversationLink({ uuid });
-  expect(deep).toBe('https://app.boomnow.com/dashboard/guest-experience/all?conversation=123e4567-e89b-12d3-a456-426614174000');
+  expect(deep).toBe('https://app.boomnow.com/go/c/123e4567-e89b-12d3-a456-426614174000');
   const fallback = buildSafeDeepLink('991130', null);
   const minted = mintUuidFromRaw('991130');
-  expect(fallback).toBe(
-    `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${minted}`,
-  );
+  expect(fallback).toBe(`https://app.boomnow.com/go/c/${minted}`);
 
   if (OLD !== undefined) process.env.APP_URL = OLD; else delete process.env.APP_URL;
 });

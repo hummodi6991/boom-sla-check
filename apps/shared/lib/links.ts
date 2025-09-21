@@ -16,10 +16,8 @@ const normalizeBaseUrl = (input?: string | URL): string => {
 export function makeConversationLink({ uuid, baseUrl }: ConversationLinkArgs) {
   const base = normalizeBaseUrl(baseUrl);
   if (uuid && UUID_RE.test(String(uuid))) {
-    // Deep-link to the All page instead of CS
-    return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(
-      String(uuid).toLowerCase(),
-    )}`;
+    const normalized = String(uuid).toLowerCase();
+    return `${base}/go/c/${encodeURIComponent(normalized)}`;
   }
   return null;
 }

@@ -22,6 +22,61 @@ function findUuidInString(s) {
   return m ? m[0].toLowerCase() : null;
 }
 
+function extractUuidFromUniversalPath(value) {
+  if (!value) return null;
+  const match = String(value).match(/\/go\/c\/([^/?#]+)/i);
+  if (!match?.[1]) return null;
+  let token = match[1];
+  try {
+    token = decodeURIComponent(token);
+  } catch {
+    // ignore decode failures and use raw token
+  }
+  return UUID_RE.test(token) ? token.toLowerCase() : null;
+}
+
+function extractUuidFromCandidate(rawValue, baseUrl) {
+  if (rawValue == null) return null;
+  let value = String(rawValue).trim();
+  if (!value) return null;
+
+  // Strip wrapping quotes often present in meta refresh content attributes
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    value = value.slice(1, -1);
+  }
+
+  const directUniversal = extractUuidFromUniversalPath(value);
+  if (directUniversal) return directUniversal;
+
+  const queryMatch = value.match(/conversation=([0-9a-f-]{36})/i);
+  if (queryMatch?.[1] && UUID_RE.test(queryMatch[1])) {
+    return queryMatch[1].toLowerCase();
+  }
+
+  try {
+    const parsed = new URL(value, baseUrl);
+    const fromPath = extractUuidFromUniversalPath(parsed.pathname);
+    if (fromPath) return fromPath;
+    const fromQuery = parsed.searchParams.get('conversation');
+    if (fromQuery && UUID_RE.test(fromQuery)) {
+      return fromQuery.toLowerCase();
+    }
+  } catch {
+    // ignore URL parse failures
+  }
+
+  try {
+    const decoded = decodeURIComponent(value);
+    if (decoded !== value) {
+      return extractUuidFromCandidate(decoded, baseUrl);
+    }
+  } catch {
+    // ignore decode failures
+  }
+
+  return null;
+}
+
 async function findUuidByAliasLegacyId(legacyId) {
   if (!Number.isInteger(legacyId)) return null;
   try {
@@ -84,26 +139,25 @@ async function probeRedirectForUuid(idOrSlug) {
     // 1) Prefer HEAD with manual redirect
     const head = await fetch(url, { method: 'HEAD', redirect: 'manual', signal: ctrl.signal });
     let loc = head.headers.get('location') || '';
-    let hit = (loc.match(/conversation=([0-9a-f-]{36})/i)?.[1] || '').toLowerCase();
-    if (hit && UUID_RE.test(hit)) return hit;
+    let hit = extractUuidFromCandidate(loc, base);
+    if (hit) return hit;
 
     // 2) Fallback to GET with manual redirect
     const res = await fetch(url, { method: 'GET', redirect: 'manual', signal: ctrl.signal });
     loc = res.headers.get('location') || '';
-    hit = (loc.match(/conversation=([0-9a-f-]{36})/i)?.[1] || '').toLowerCase();
-    if (hit && UUID_RE.test(hit)) return hit;
+    hit = extractUuidFromCandidate(loc, base);
+    if (hit) return hit;
 
     // 3) If not a 3xx, parse the HTML body for meta-refresh or JS location.replace
     const body = await res.text().catch(() => '');
-    // <meta http-equiv="refresh" content="0; url=...conversation=<uuid>">
-    hit = (body.match(/conversation=([0-9a-f-]{36})/i)?.[1] || '').toLowerCase();
-    if (hit && UUID_RE.test(hit)) return hit;
+    const refresh = body.match(/url=([^"'>\s]+)/i)?.[1];
+    hit = extractUuidFromCandidate(refresh, base);
+    if (hit) return hit;
 
-    // location.replace("...conversation=<uuid>")
-    const js = body.match(/location\.replace\(["']([^"']+)["']\)/i)?.[1];
-    const q = js ? new URLSearchParams(js.split('?')[1] || '') : null;
-    const fromJs = q?.get('conversation');
-    if (fromJs && UUID_RE.test(fromJs)) return fromJs.toLowerCase();
+    // location.replace("/go/c/<uuid>")
+    const js = body.match(/location\.(?:replace|href)\(["']([^"']+)["']\)/i)?.[1];
+    const fromJs = extractUuidFromCandidate(js, base);
+    if (fromJs) return fromJs;
 
     // last resort: any raw UUID appearing in the body
     const raw = findUuidInString(body);

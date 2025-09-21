@@ -69,6 +69,21 @@ function parseFromUrl(urlString) {
   try {
     const url = new URL(urlString);
     const params = url.searchParams;
+    const universalMatch = url.pathname.match(/\/go\/c\/([^/]+)/);
+    if (universalMatch) {
+      let token = universalMatch[1] || '';
+      try {
+        token = decodeURIComponent(token);
+      } catch {
+        // ignore decode failures and use raw value
+      }
+      token = token.trim();
+      if (token) {
+        if (UUID_RE.test(token)) return { uuid: token.toLowerCase() };
+        if (/^\d+$/.test(token)) return { legacyId: token };
+        return { slug: token };
+      }
+    }
     const conversation = params.get('conversation');
     if (conversation && UUID_RE.test(conversation)) {
       return { uuid: conversation.toLowerCase() };
@@ -219,9 +234,7 @@ function getAudience() {
 
 function buildLegacyFallback(legacyId) {
   const base = cleanBaseUrl();
-  const url = new URL('/dashboard/guest-experience/all', base + '/');
-  url.searchParams.set('legacyId', String(legacyId));
-  return url.toString();
+  return `${base}/go/c/${encodeURIComponent(String(legacyId))}`;
 }
 
 async function handleConversationRedirect(record = {}) {

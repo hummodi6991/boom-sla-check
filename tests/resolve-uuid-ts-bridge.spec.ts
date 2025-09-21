@@ -10,7 +10,7 @@ test('TS conversations.ts re-exports robust JS implementation (redirect-probe wo
     global.fetch = (async () =>
       ({
         headers: new Map([
-          ['location', `https://app.boomnow.com/dashboard/guest-experience/all?conversation=${UUID}`],
+          ['location', `https://app.boomnow.com/go/c/${UUID}`],
         ]),
         text: async () => '',
       } as any)) as any;

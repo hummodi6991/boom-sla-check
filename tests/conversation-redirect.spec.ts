@@ -26,7 +26,7 @@ test('conversation redirect resolves known slug to deep link', async () => {
   } catch (err) {
     location = extractRedirect(err);
   }
-  expect(location).toBe(`http://test/dashboard/guest-experience/all?conversation=${uuid}`);
+  expect(location).toBe(`http://test/go/c/${uuid}`);
 });
 
 test('conversation redirect mints uuid when slug unknown', async () => {
@@ -36,6 +36,5 @@ test('conversation redirect mints uuid when slug unknown', async () => {
   } catch (err) {
     location = extractRedirect(err);
   }
-  expect(location).toMatch(/conversation=/);
-  expect(location).toMatch(/^http:\/\/test\/dashboard\/guest-experience\/all\?conversation=/);
+  expect(location).toMatch(/^http:\/\/test\/go\/c\//);
 });

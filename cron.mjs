@@ -33,10 +33,7 @@ export function buildSafeDeepLink(lookupId, uuid) {
     } catch {}
   }
   if (!raw) return `${base}/dashboard/guest-experience/all`;
-  if (/^\d+$/.test(raw)) {
-    return `${base}/dashboard/guest-experience/all?legacyId=${encodeURIComponent(raw)}`;
-  }
-  return `${base}/dashboard/guest-experience/all?conversation=${encodeURIComponent(raw)}`;
+  return `${base}/go/c/${encodeURIComponent(raw)}`;
 }
 
 // ---------------------------

@@ -1,5 +1,4 @@
-const UUID_PATH = '/dashboard/guest-experience/all';
-const LEGACY_PATH = '/dashboard/guest-experience/all';
+const UNIVERSAL_PREFIX = '/go/c/';
 
 function cleanBase(url) {
   const raw = String(url || '').trim();
@@ -10,14 +9,19 @@ function cleanBase(url) {
 export function buildCanonicalDeepLink(input = {}) {
   const base = cleanBase(input.appUrl);
   if (input.uuid) {
-    const url = new URL(UUID_PATH, base + '/');
-    url.searchParams.set('conversation', String(input.uuid));
-    return url.toString();
+    const token = String(input.uuid).trim().toLowerCase();
+    if (!token) throw new Error('identifier_required');
+    return `${base}${UNIVERSAL_PREFIX}${encodeURIComponent(token)}`;
   }
   if (input.legacyId != null) {
-    const url = new URL(LEGACY_PATH, base + '/');
-    url.searchParams.set('legacyId', String(input.legacyId));
-    return url.toString();
+    const token = String(input.legacyId).trim();
+    if (!token) throw new Error('identifier_required');
+    return `${base}${UNIVERSAL_PREFIX}${encodeURIComponent(token)}`;
   }
-  throw new Error('uuid_or_legacyId_required');
+  if (input.slug) {
+    const token = String(input.slug).trim();
+    if (!token) throw new Error('identifier_required');
+    return `${base}${UNIVERSAL_PREFIX}${encodeURIComponent(token)}`;
+  }
+  throw new Error('identifier_required');
 }

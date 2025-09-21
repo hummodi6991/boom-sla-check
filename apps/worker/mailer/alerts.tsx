@@ -68,19 +68,31 @@ export async function buildAlertEmail(
 
   let backupId = built.uuid || null;
   if (!backupId && built.minted && typeof built.url === 'string') {
-    const match = built.url.match(/[?&]conversation=([^&#]+)/i);
-    if (match?.[1]) {
-      try {
-        backupId = decodeURIComponent(match[1]);
-      } catch {
-        backupId = match[1];
+    try {
+      const parsed = new URL(built.url);
+      const pathMatch = parsed.pathname.match(/\/go\/c\/([^/]+)/);
+      if (pathMatch?.[1]) {
+        backupId = decodeURIComponent(pathMatch[1]);
+      } else {
+        const queryCandidate = parsed.searchParams.get('conversation');
+        if (queryCandidate) backupId = queryCandidate;
+      }
+    } catch {
+      const fallbackMatch = built.url.match(/[?&]conversation=([^&#]+)/i);
+      if (fallbackMatch?.[1]) {
+        try {
+          backupId = decodeURIComponent(fallbackMatch[1]);
+        } catch {
+          backupId = fallbackMatch[1];
+        }
       }
     }
   }
   if (!backupId) {
     backupId = built.legacyId || built.slug || '';
   }
-  const backup = `${process.env.ALERT_LINK_BASE?.replace(/\/+$/, '') || linkBase}/c/${encodeURIComponent(backupId)}`;
+  const backupBase = process.env.ALERT_LINK_BASE?.replace(/\/+$/, '') || linkBase;
+  const backup = `${backupBase}/go/c/${encodeURIComponent(backupId)}`;
   const metric = built.minted
     ? 'alerts.sent_with_minted_link'
     : built.kind === 'token'

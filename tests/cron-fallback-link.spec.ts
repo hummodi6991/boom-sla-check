@@ -7,7 +7,7 @@ test('cron fallback builds shortlinks when UUID is unavailable', async () => {
   delete (globalThis as any).__CRON_TEST__;
   const { buildSafeDeepLink } = mod as any;
   const a = buildSafeDeepLink('991130', null);
-  expect(a).toMatch(/dashboard\/guest-experience\/all\?conversation=/);
+  expect(a).toMatch(/\/go\/c\//);
   const b = buildSafeDeepLink('abc-slug', null);
-  expect(b).toMatch(/dashboard\/guest-experience\/all\?conversation=/);
+  expect(b).toMatch(/\/go\/c\//);
 });

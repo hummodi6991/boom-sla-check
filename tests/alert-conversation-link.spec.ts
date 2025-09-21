@@ -61,9 +61,7 @@ test('ensureAlertConversationLink mints uuid for numeric identifier when resolve
   expect(link?.uuid).toBe(expected);
   expect(link?.kind).toBe('deep-link');
   expect(link?.minted).toBe(true);
-  expect(link?.url).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected)}`
-  );
+  expect(link?.url).toBe(`${BASE}/go/c/${encodeURIComponent(expected)}`);
 });
 
 test('ensureAlertConversationLink extracts slug from inline thread and mints when needed', async () => {
@@ -71,7 +69,7 @@ test('ensureAlertConversationLink extracts slug from inline thread and mints whe
   const inlineThread = {
     messages: [
       { conversation_slug: 'inline-slug' },
-      { body: 'see https://app.example.com/dashboard/guest-experience/all?conversation=ignored' },
+      { body: 'see https://app.example.com/go/c/ignored' },
     ],
   };
   const link = await ensureAlertConversationLink(
@@ -87,9 +85,7 @@ test('ensureAlertConversationLink extracts slug from inline thread and mints whe
   expect(link?.uuid).toBe(expected);
   expect(link?.kind).toBe('deep-link');
   expect(link?.minted).toBe(true);
-  expect(link?.url).toBe(
-    `${BASE}/dashboard/guest-experience/all?conversation=${encodeURIComponent(expected)}`
-  );
+  expect(link?.url).toBe(`${BASE}/go/c/${encodeURIComponent(expected)}`);
 });
 
 test('ensureAlertConversationLink prefers resolver-supplied uuid', async () => {

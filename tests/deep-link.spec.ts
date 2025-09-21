@@ -6,13 +6,14 @@ import { startTestServer, stopTestServer } from './helpers/nextServer';
 test('deep-link to conversation loads without runtime errors', async ({ page }) => {
   const { server, port } = await startTestServer();
   const id = 'test-123';
-  await page.goto(`http://localhost:${port}/dashboard/guest-experience/all?conversation=${id}`);
+  await page.goto(`http://localhost:${port}/go/c/${id}`);
 
   // No fatal overlay/dialog appears
   const errorDialog = page.getByText(/TypeError: undefined is not an object/);
   await expect(errorDialog).toHaveCount(0);
 
-  // Page reaches a stable, interactive state
-  await expect(page).toHaveURL(/\/dashboard\/guest-experience\/all/);
+  // Unknown conversations render a friendly not-found page without crashing
+  await expect(page).toHaveURL(new RegExp(`/go/c/${id}$`));
+  await expect(page.getByRole('heading', { name: /conversation not found/i })).toBeVisible();
   await stopTestServer(server);
 });
