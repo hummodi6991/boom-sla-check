@@ -33,11 +33,10 @@ export function conversationViewState(args: {
 }
 
 export function safeRelatedReservations(conversation?: Conversation | null) {
-  if (!conversation || typeof conversation !== 'object') {
-    return [];
-  }
+  const related = (
+    conversation as { related_reservations?: unknown } | null | undefined
+  )?.related_reservations;
 
-  const related = (conversation as { related_reservations?: unknown }).related_reservations;
   return Array.isArray(related) ? (related as Conversation['related_reservations']) : [];
 }
 

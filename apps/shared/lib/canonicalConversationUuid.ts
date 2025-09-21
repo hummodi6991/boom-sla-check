@@ -1,28 +1,28 @@
 import {
   CONVERSATION_UUID_NAMESPACE_DEFAULT,
+  mintUuidFromLegacyId as jsMintUuidFromLegacyId,
+  mintUuidFromSlug as jsMintUuidFromSlug,
+  mintUuidFromRaw as jsMintUuidFromRaw,
+  isUuid as jsIsUuid,
   conversationUuidNamespace,
-  isUuid as coreIsUuid,
-  mintUuidFromLegacyId as coreMintUuidFromLegacyId,
-  mintUuidFromRaw as coreMintUuidFromRaw,
-  mintUuidFromSlug as coreMintUuidFromSlug,
-} from '../../../lib/conversationResolveCore.js';
+} from '../../../packages/conversation-uuid/index.js';
 
 export const CONV_UUID_NAMESPACE_FALLBACK = CONVERSATION_UUID_NAMESPACE_DEFAULT;
 
 export function mintUuidFromLegacyId(legacyId: number): string {
-  return coreMintUuidFromLegacyId(legacyId);
+  return jsMintUuidFromLegacyId(legacyId);
 }
 
 export function mintUuidFromSlug(slug: string): string {
-  return coreMintUuidFromSlug(slug);
+  return jsMintUuidFromSlug(slug);
 }
 
 export function mintUuidFromRaw(raw: string): string | null {
-  return coreMintUuidFromRaw(raw);
+  return jsMintUuidFromRaw(raw);
 }
 
 export function isUuid(v: string): boolean {
-  return coreIsUuid(v);
+  return jsIsUuid(v);
 }
 
 export function conversationNamespace(): string {
