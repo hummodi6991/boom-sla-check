@@ -157,6 +157,46 @@ test('mailer uses uuid when available', async () => {
   expect(metricsArr).toContain('alerts.sent_with_token_link');
 });
 
+test('mailer surfaces sales dashboard link when sale UUID present', async () => {
+  const saleUuid = '7e64e2d9-2f0b-4e46-a4ac-2a0c1d8af0a3';
+  const emails: any[] = [];
+  const logger = { warn: () => {} };
+  const verify = async (url: string) => {
+    if (url.includes('/u/')) {
+      const match = url.match(/\/u\/([^/?#]+)/);
+      if (!match) return false;
+      const res = await verifyLinkToken(match[1]);
+      return res.payload?.conversation === uuid || res.payload?.uuid === uuid;
+    }
+    if (url.includes('/r/t/')) {
+      const match = url.match(/\/r\/t\/([^/?#]+)/);
+      if (!match) return false;
+      const res = await verifyLinkToken(match[1]);
+      return res.payload?.conversation === uuid || res.payload?.uuid === uuid;
+    }
+    if (url.includes('/go/c/')) {
+      return true;
+    }
+    return false;
+  };
+
+  await simulateAlert(
+    { conversation_uuid: uuid, sale_uuid: saleUuid },
+    {
+      sendAlertEmail: (x: any) => emails.push(x),
+      logger,
+      verify,
+    }
+  );
+
+  expect(emails.length).toBe(1);
+  const html = emails[0].html;
+  expect(html).toContain('/dashboard/guest-experience/sales/');
+  const firstHref = html.match(/href="([^"]+)"/i)?.[1];
+  expect(firstHref?.includes('/dashboard/guest-experience/sales/')).toBe(true);
+  expect(html).toContain('https://go.boomnow.com/u/');
+});
+
 test('mailer resolves legacyId via internal endpoint and emits token link', async () => {
   process.env.RESOLVE_SECRET = 'secret';
   process.env.RESOLVE_BASE_URL = BASE;

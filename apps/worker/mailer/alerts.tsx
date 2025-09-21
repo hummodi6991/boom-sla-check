@@ -2,6 +2,8 @@ import { metrics } from '../../../lib/metrics';
 import { buildAlertConversationLink } from '../../../lib/conversationLink.js';
 import { appUrl, makeConversationLink } from '../../shared/lib/links';
 import { signLink } from '../../../packages/linking/src/index.js';
+import { buildGuestExperienceLink } from '../../../lib/guestExperienceLink.js';
+import { extractSaleUuid } from '../../../lib/saleUuid.js';
 
 export async function buildAlertEmail(
   event: { conversation_uuid?: string; legacyId?: number | string; slug?: string },
@@ -96,6 +98,20 @@ export async function buildAlertEmail(
   // not the redirector. Using ALERT_LINK_BASE here produces broken links like
   // https://go.boomnow.com/go/c/<id>. Always build the backup deep link on APP_URL.
   const backupAppBase = appUrl().replace(/\/+$/, '');
+  const conversationUuid = built.uuid || null;
+  let saleLink: string | null = null;
+  try {
+    const saleUuid = extractSaleUuid(event as any);
+    if (saleUuid && conversationUuid) {
+      saleLink = buildGuestExperienceLink({
+        baseUrl: backupAppBase,
+        saleUuid,
+        conversationId: conversationUuid,
+      });
+    }
+  } catch (err) {
+    logger?.warn?.({ err }, 'failed to build sale deep link');
+  }
   const backup =
     built.uuid
       ? makeConversationLink({ uuid: built.uuid, baseUrl: backupAppBase })!
@@ -108,5 +124,23 @@ export async function buildAlertEmail(
     ? 'alerts.sent_with_legacy_shortlink'
     : 'alerts.sent_with_deep_link';
   metrics.increment(metric);
-  return `<p>Alert for conversation <a href="${primary}">${primary}</a></p><p>Backup deep link: <a href="${backup}">${backup}</a></p>`;
+
+  const openLink = saleLink || primary;
+  const htmlSections = [
+    `<p>Alert for conversation <a href="${openLink}">${openLink}</a></p>`,
+  ];
+
+  if (saleLink && primary && primary !== saleLink) {
+    htmlSections.push(
+      `<p>Signed alert link: <a href="${primary}">${primary}</a></p>`
+    );
+  }
+
+  if (backup) {
+    htmlSections.push(
+      `<p>Backup deep link: <a href="${backup}">${backup}</a></p>`
+    );
+  }
+
+  return htmlSections.join('');
 }

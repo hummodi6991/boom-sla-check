@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { buildGuestExperienceLink } from '../lib/guestExperienceLink.js';
 
 async function loadCronModule() {
   (globalThis as any).__CRON_TEST__ = true;
@@ -49,7 +50,6 @@ test.describe('sale-aware cron helpers', () => {
   });
 
   test('buildGuestExperienceLink prefers sale route with fallback to conversation filter', () => {
-    const { buildGuestExperienceLink } = cronMod;
     const baseUrl = 'https://app.test.example';
     const conversationId = 'conv with space';
     const saleUuid = '7E64E2D9-2F0B-4E46-A4AC-2A0C1D8AF0A3';
