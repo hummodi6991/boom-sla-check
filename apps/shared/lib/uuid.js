@@ -1,3 +1,1 @@
-export function isUuid(v) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v ?? '');
-}
+export { isUuid } from '../../../packages/conversation-uuid/index.js';
