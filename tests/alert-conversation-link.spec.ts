@@ -5,9 +5,9 @@ import { setTestKeyEnv } from './helpers/testKeys';
 
 const BASE = 'https://app.example.com';
 const ORIGINAL_APP_URL = process.env.APP_URL;
-const ORIGINAL_PRIVATE_KEY = process.env.LINK_PRIVATE_KEY_PEM;
-const ORIGINAL_PUBLIC_KEY = process.env.LINK_PUBLIC_KEY_PEM;
-const ORIGINAL_SIGNING_KID = process.env.LINK_SIGNING_KID;
+const ORIGINAL_PRIVATE_JWK = process.env.LINK_PRIVATE_JWK;
+const ORIGINAL_PUBLIC_JWKS = process.env.LINK_PUBLIC_JWKS;
+const ORIGINAL_SIGNING_KID = process.env.LINK_KID;
 
 function restoreEnv() {
   if (ORIGINAL_APP_URL !== undefined) {
@@ -15,20 +15,20 @@ function restoreEnv() {
   } else {
     delete process.env.APP_URL;
   }
-  if (ORIGINAL_PRIVATE_KEY !== undefined) {
-    process.env.LINK_PRIVATE_KEY_PEM = ORIGINAL_PRIVATE_KEY;
+  if (ORIGINAL_PRIVATE_JWK !== undefined) {
+    process.env.LINK_PRIVATE_JWK = ORIGINAL_PRIVATE_JWK;
   } else {
-    delete process.env.LINK_PRIVATE_KEY_PEM;
+    delete process.env.LINK_PRIVATE_JWK;
   }
-  if (ORIGINAL_PUBLIC_KEY !== undefined) {
-    process.env.LINK_PUBLIC_KEY_PEM = ORIGINAL_PUBLIC_KEY;
+  if (ORIGINAL_PUBLIC_JWKS !== undefined) {
+    process.env.LINK_PUBLIC_JWKS = ORIGINAL_PUBLIC_JWKS;
   } else {
-    delete process.env.LINK_PUBLIC_KEY_PEM;
+    delete process.env.LINK_PUBLIC_JWKS;
   }
   if (ORIGINAL_SIGNING_KID !== undefined) {
-    process.env.LINK_SIGNING_KID = ORIGINAL_SIGNING_KID;
+    process.env.LINK_KID = ORIGINAL_SIGNING_KID;
   } else {
-    delete process.env.LINK_SIGNING_KID;
+    delete process.env.LINK_KID;
   }
 }
 

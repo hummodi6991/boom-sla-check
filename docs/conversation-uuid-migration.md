@@ -19,12 +19,11 @@ Steps for producers:
 
 ## Magic link signing keys
 
-Alert emails now use asymmetric RS256 link tokens. Provision a key pair and configure:
+Alert emails now use Ed25519-signed JWTs. Provision a key pair and configure:
 
-- `LINK_PRIVATE_KEY_PEM` (PKCS#8 private key)
-- Either `LINK_PUBLIC_KEY_PEM` (SPKI) **or** `LINK_JWKS_URL` pointing at the published JWKS endpoint
-- `LINK_SIGNING_KID` identifying the active key
+- `LINK_PRIVATE_JWK` (Ed25519 private JWK)
+- `LINK_PUBLIC_JWKS` containing the matching public key (or set `LINK_JWKS_URL` to a hosted JWKS endpoint)
+- `LINK_KID` identifying the active key in the JWKS
+- `LINK_ISSUER` / `LINK_AUDIENCE` to scope issued tokens
 
-Rotate the private key using your secrets manager and deploy the matching public key (or JWKS) so
-consumers can verify the links. Tokens expire after ~15 minutes; optionally provide `REDIS_URL` to enforce
-single-use semantics via the cache.
+Rotate keys by publishing the new public key in the JWKS, deploying the redirector, then updating the mailer with the new `LINK_PRIVATE_JWK` and `LINK_KID`. Tokens default to a 7-day lifetime; the redirector safely degrades to the legacy dashboard view when signatures fail.

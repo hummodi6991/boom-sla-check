@@ -89,7 +89,7 @@ export async function startTestServer(): Promise<StartedServer> {
       }
       try {
         const result = await verifyLinkToken(token);
-        const uuid = String(result.payload?.conversation || '');
+        const uuid = String(result.payload?.conversation || result.payload?.uuid || '');
         if (!uuid) throw new Error('invalid token');
         const baseUrl = appUrlFromRequest({ url: requestUrl.toString() });
         const location = conversationDeepLinkFromUuid(uuid, { baseUrl });

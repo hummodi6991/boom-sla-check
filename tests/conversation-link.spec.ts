@@ -12,9 +12,9 @@ import { setTestKeyEnv } from './helpers/testKeys';
 
 const BASE = process.env.APP_URL ?? 'https://app.boomnow.com';
 const uuid = '01890b14-b4cd-7eef-b13e-bb8c083bad60';
-const ORIGINAL_PRIVATE_KEY = process.env.LINK_PRIVATE_KEY_PEM;
-const ORIGINAL_PUBLIC_KEY = process.env.LINK_PUBLIC_KEY_PEM;
-const ORIGINAL_SIGNING_KID = process.env.LINK_SIGNING_KID;
+const ORIGINAL_PRIVATE_JWK = process.env.LINK_PRIVATE_JWK;
+const ORIGINAL_PUBLIC_JWKS = process.env.LINK_PUBLIC_JWKS;
+const ORIGINAL_SIGNING_KID = process.env.LINK_KID;
 const ORIGINAL_RESOLVE_SECRET = process.env.RESOLVE_SECRET;
 const ORIGINAL_RESOLVE_BASE_URL = process.env.RESOLVE_BASE_URL;
 
@@ -23,20 +23,20 @@ test.beforeEach(() => {
 });
 
 test.afterEach(() => {
-  if (ORIGINAL_PRIVATE_KEY !== undefined) {
-    process.env.LINK_PRIVATE_KEY_PEM = ORIGINAL_PRIVATE_KEY;
+  if (ORIGINAL_PRIVATE_JWK !== undefined) {
+    process.env.LINK_PRIVATE_JWK = ORIGINAL_PRIVATE_JWK;
   } else {
-    delete process.env.LINK_PRIVATE_KEY_PEM;
+    delete process.env.LINK_PRIVATE_JWK;
   }
-  if (ORIGINAL_PUBLIC_KEY !== undefined) {
-    process.env.LINK_PUBLIC_KEY_PEM = ORIGINAL_PUBLIC_KEY;
+  if (ORIGINAL_PUBLIC_JWKS !== undefined) {
+    process.env.LINK_PUBLIC_JWKS = ORIGINAL_PUBLIC_JWKS;
   } else {
-    delete process.env.LINK_PUBLIC_KEY_PEM;
+    delete process.env.LINK_PUBLIC_JWKS;
   }
   if (ORIGINAL_SIGNING_KID !== undefined) {
-    process.env.LINK_SIGNING_KID = ORIGINAL_SIGNING_KID;
+    process.env.LINK_KID = ORIGINAL_SIGNING_KID;
   } else {
-    delete process.env.LINK_SIGNING_KID;
+    delete process.env.LINK_KID;
   }
   if (ORIGINAL_RESOLVE_SECRET !== undefined) {
     process.env.RESOLVE_SECRET = ORIGINAL_RESOLVE_SECRET;
@@ -114,11 +114,26 @@ test('mailer uses uuid when available', async () => {
   const metricsArr: string[] = [];
   const logger = { warn: () => {} };
   const verify = async (url: string) => {
-    if (!url.includes('/r/t/')) return false;
-    const match = url.match(/\/r\/t\/([^/?#]+)/);
-    if (!match) return false;
-    const res = await verifyLinkToken(match[1]);
-    return res.payload?.conversation === uuid;
+    if (url.includes('/u/')) {
+      const match = url.match(/\/u\/([^/?#]+)/);
+      if (!match) return false;
+      const res = await verifyLinkToken(match[1]);
+      return (
+        res.payload?.conversation === uuid || res.payload?.uuid === uuid
+      );
+    }
+    if (url.includes('/r/t/')) {
+      const match = url.match(/\/r\/t\/([^/?#]+)/);
+      if (!match) return false;
+      const res = await verifyLinkToken(match[1]);
+      return (
+        res.payload?.conversation === uuid || res.payload?.uuid === uuid
+      );
+    }
+    if (url.includes('/dashboard/guest-experience/')) {
+      return true;
+    }
+    return false;
   };
   const orig = metrics.increment;
   metrics.increment = (n: string) => metricsArr.push(n);
@@ -129,15 +144,15 @@ test('mailer uses uuid when available', async () => {
   });
   metrics.increment = orig;
   expect(emails.length).toBe(1);
-  expect(emails[0].html).toContain('/r/t/');
+  expect(emails[0].html).toContain('https://go.boomnow.com/u/');
   const href = emails[0].html.match(/href="([^"]+)"/i)?.[1];
   expect(href).toBeDefined();
   const parsed = href ? new URL(href) : null;
-  expect(parsed?.pathname.startsWith('/r/t/')).toBe(true);
+  expect(parsed?.pathname.startsWith('/u/')).toBe(true);
   const token = parsed?.pathname.split('/').pop();
   if (!token) throw new Error('missing token in href');
   const decoded = await verifyLinkToken(token);
-  expect(decoded.payload?.conversation).toBe(uuid);
+  expect(decoded.payload?.conversation === uuid || decoded.payload?.uuid === uuid).toBe(true);
   expect(emails[0].html).toContain('Backup deep link');
   expect(metricsArr).toContain('alerts.sent_with_token_link');
 });
@@ -152,10 +167,26 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
   // Stub internal resolver
   global.fetch = async (_url: any) => ({ ok: true, json: async () => ({ uuid }) } as any);
   const verify = async (url: string) => {
-    const m = url.match(/\/r\/t\/([^/?#]+)/);
-    if (!m) return false;
-    const decoded = await verifyLinkToken(m[1]);
-    return decoded.payload?.conversation === uuid;
+    if (url.includes('/u/')) {
+      const m = url.match(/\/u\/([^/?#]+)/);
+      if (!m) return false;
+      const decoded = await verifyLinkToken(m[1]);
+      return (
+        decoded.payload?.conversation === uuid || decoded.payload?.uuid === uuid
+      );
+    }
+    if (url.includes('/r/t/')) {
+      const m = url.match(/\/r\/t\/([^/?#]+)/);
+      if (!m) return false;
+      const decoded = await verifyLinkToken(m[1]);
+      return (
+        decoded.payload?.conversation === uuid || decoded.payload?.uuid === uuid
+      );
+    }
+    if (url.includes('/dashboard/guest-experience/')) {
+      return true;
+    }
+    return false;
   };
   const orig = metrics.increment;
   metrics.increment = (n: string) => metricsArr.push(n);
@@ -169,7 +200,7 @@ test('mailer resolves legacyId via internal endpoint and emits token link', asyn
   expect(emails.length).toBe(1);
   const href = emails[0].html.match(/href="([^"]+)"/i)?.[1];
   expect(href).toBeDefined();
-  expect(href).toContain('/r/t/');
+  expect(href).toContain('https://go.boomnow.com/u/');
   expect(metricsArr).toContain('alerts.sent_with_token_link');
 });
 
