@@ -242,17 +242,24 @@ function aiMessageStatus(m) {
   return "unknown";
 }
 function classifyMessage(m) {
-  const by = String(firstDefined(
+  const byRaw = String(firstDefined(
     m.by, m.senderType, m.sender_type, m.sender?.role, m.author?.role, m.author_role, m.role
   ) || "").toLowerCase();
+  const byCanonical = byRaw.replace(/[^a-z]/g, "");
   const dir = String(firstDefined(m.direction, m.message_direction) || "").toLowerCase();
+  const directionRole = dir === "outbound" ? "agent" : dir === "inbound" ? "guest" : null;
   const isAI = !!firstDefined(m.generated_by_ai, m.is_ai_generated, m.is_ai, m.ai_generated);
   const ch  = String(firstDefined(m.channel, m.channel_type, m.channelName) || "").toLowerCase().replace(/[^a-z0-9]/g,"");
   if (ch === "aics") return { role: "agent", aiStatus: "approved" };
-  if (/(system|automation|policy|workflow)/.test(by)) return { role: "internal", aiStatus: "none" };
+  if (/(system|automation|policy|workflow)/.test(byCanonical)) return { role: "internal", aiStatus: "none" };
   if (isAI) return { role: "ai", aiStatus: aiMessageStatus(m) };
-  if (by && !/guest|customer|user/.test(by)) return { role: "agent", aiStatus: "none" };
-  if (dir === "outbound") return { role: "agent", aiStatus: "none" };
+  if (/(guest|customer)/.test(byRaw)) return { role: "guest", aiStatus: "none" };
+  if ((byCanonical === "user" || byCanonical === "users" || /\buser\b/.test(byRaw))) {
+    if (directionRole === "guest") return { role: "guest", aiStatus: "none" };
+    return { role: "agent", aiStatus: "none" };
+  }
+  if (byRaw) return { role: "agent", aiStatus: "none" };
+  if (directionRole) return { role: directionRole, aiStatus: "none" };
   return { role: "guest", aiStatus: "none" };
 }
 function tsOf(m) {

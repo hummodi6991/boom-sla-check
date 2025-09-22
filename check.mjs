@@ -427,7 +427,10 @@ function classifyMessage(m) {
   )
     .toString()
     .toLowerCase();
+  const byCanonical = by.replace(/[^a-z]/g, "");
+  const userToken = byCanonical === "user" || byCanonical === "users" || /\buser\b/.test(by);
   const dir       = (m.direction || m.message_direction || "").toString().toLowerCase();
+  const directionRole = dir === "inbound" ? "guest" : dir === "outbound" ? "agent" : null;
   const isAI      = Boolean(
     m.generated_by_ai || m.ai_generated || m.is_ai_generated ||
     m.generatedByAI || m.generatedByAi || m.aiGenerated || m.ai_generated_by
@@ -482,16 +485,16 @@ function classifyMessage(m) {
   ];
   const combo = `${moduleVal} ${msgType} ${body}`;
   const matches = sysKeywords.filter((k) => combo.includes(k));
-  if (matches.length >= 2 && !["guest", "customer", "user"].includes(by)) {
+  if (matches.length >= 2 && !["guest", "customer", "user", "users"].includes(byCanonical)) {
     return { role: "internal", aiStatus };
   }
   // Additional safeguard: explicit system/automation roles
-  if (["system","automation","policy","workflow"].includes(by)) {
+  if (["system","automation","policy","workflow"].includes(byCanonical)) {
     return { role: "internal", aiStatus };
   }
 
   // Guest messages explicitly marked
-  if (by === "guest" || by === "customer" || by === "user") {
+  if (byCanonical === "guest" || byCanonical === "customer" || /\bguest\b/.test(by) || /\bcustomer\b/.test(by)) {
     return { role: "guest", aiStatus };
   }
   // AI-generated messages need special handling to ensure that unapproved
@@ -505,6 +508,11 @@ function classifyMessage(m) {
     return { role: "ai", aiStatus };
   }
 
+  if (userToken) {
+    if (directionRole === "guest") return { role: "guest", aiStatus };
+    return { role: "agent", aiStatus };
+  }
+
   // Messages from the host/agent. In some datasets the role may be
   // recorded as 'host', 'agent', 'owner' or similar. Treat any non-guest
   // sender as agent by default.
@@ -514,8 +522,7 @@ function classifyMessage(m) {
 
   // Fallback to direction heuristics. Messages inbound to the system are
   // considered guest messages; outbound messages are agent replies.
-  if (dir === "inbound") return { role: "guest", aiStatus };
-  if (dir === "outbound") return { role: "agent", aiStatus };
+  if (directionRole) return { role: directionRole, aiStatus };
 
   // As a conservative default, treat unknown messages as guest messages to
   // avoid inadvertently suppressing SLA alerts.
