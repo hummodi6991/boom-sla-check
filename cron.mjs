@@ -1044,6 +1044,17 @@ for (const { id } of toCheck) {
           const guestSummaryText = summaryName
             ? `Guest ${summaryName} has been waiting for ${ageMin} minutes (SLA ${SLA_MIN}m).`
             : `A guest has been waiting for ${ageMin} minutes (SLA ${SLA_MIN}m).`;
+          const searchNameCandidate = summaryName && summaryName.toLowerCase() !== 'guest'
+            ? summaryName
+            : guestFullName && guestFullName.toLowerCase() !== 'guest'
+              ? guestFullName
+              : null;
+          const searchInstructionHtml = searchNameCandidate
+            ? `Search in Boom for <strong>${escapeHtml(searchNameCandidate)}</strong> to find the conversation.`
+            : 'Search in Boom using the guest name to find the conversation.';
+          const searchInstructionText = searchNameCandidate
+            ? `Search in Boom for "${searchNameCandidate}" to find the conversation.`
+            : 'Search in Boom using the guest name to find the conversation.';
           await sendAlertEmail({
             to,
             subject: `[Boom SLA] ${guestLabel} unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${idDisplay}`,
@@ -1056,19 +1067,15 @@ for (const { id } of toCheck) {
         <p style="margin:4px 0 12px;font-size:16px;font-weight:600;color:#0f172a;">👤 ${safeGuestFullName}</p>
         <p style="margin:0 0 8px;font-size:16px;line-height:1.5;">${guestSummaryHtml}</p>
         <p style="margin:0 0 16px;font-size:14px;color:#475569;">The SLA for a response is ${SLA_MIN} minutes.</p>
-        <div style="padding:16px;border-radius:8px;border:1px solid #e2e8f0;background-color:#f8fafc;">
-          <p style="margin:0 0 4px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Conversation ID</p>
-          <p style="margin:0;font-size:18px;font-weight:600;color:#0f172a;">${escapeHtml(idDisplay)}</p>
-        </div>
         ${saleFallbackNoteHtml}
-        <p style="margin:24px 0 0;font-size:13px;color:#475569;">Search for this conversation ID in Boom to follow up with the guest.</p>
+        <p style="margin:24px 0 0;font-size:13px;color:#475569;">${searchInstructionHtml}</p>
       </div>
     </body>
   </html>`,
             text: `Boom SLA Alert
 Guest: ${guestFullName}
 ${guestSummaryText}
-Conversation ID: ${idDisplay}
+${searchInstructionText}
 Respond in Boom to assist the guest.${saleFallbackNoteText}`,
           });
           markAlerted(state, id, lastGuestMs);
