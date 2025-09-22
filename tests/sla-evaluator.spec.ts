@@ -28,6 +28,37 @@ function iso(date: string) {
   return new Date(date);
 }
 
+test('Spanish closing is ignored without translation (gracias, adiós)', async () => {
+  // translator stub returns empty text, so detection must come from multilingual rule
+  const now = iso('2024-01-01T00:10:00Z');
+  const messages = [
+    { sent_at: '2024-01-01T00:00:00Z', by: 'guest', direction: 'inbound', body: 'gracias, adiós' },
+  ];
+  const result = await evaluate(messages, now, 5);
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe('no_breach');
+});
+
+test('Diacritics normalization: "adios" (without accent) is also treated as closing', async () => {
+  const now = iso('2024-01-01T00:10:00Z');
+  const messages = [
+    { sent_at: '2024-01-01T00:00:00Z', by: 'guest', direction: 'inbound', body: 'gracias, adios' },
+  ];
+  const result = await evaluate(messages, now, 5);
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe('no_breach');
+});
+
+test('Thanks alone in another language does not bypass SLA ("gracias")', async () => {
+  const now = iso('2024-01-01T00:10:00Z');
+  const messages = [
+    { sent_at: '2024-01-01T00:00:00Z', by: 'guest', direction: 'inbound', body: 'gracias' },
+  ];
+  const result = await evaluate(messages, now, 5);
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('guest_unanswered');
+});
+
 test('internal notes do not satisfy the SLA window', async () => {
   const now = iso('2024-01-01T00:10:00Z');
   const messages = [
