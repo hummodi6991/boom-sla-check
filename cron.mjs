@@ -997,12 +997,8 @@ for (const { id } of toCheck) {
         console.warn(`conv ${id}: sale UUID unavailable; ${fallbackMsg}`);
       }
       const url = conversationUrl;
-      const saleFallbackNoteHtml = saleUuid
-        ? ""
-        : "<p style=\"margin:16px 0 0;font-size:12px;color:#64748b\">Sale UUID unavailable; using conversation filter fallback.</p>";
-      const saleFallbackNoteText = saleUuid
-        ? ""
-        : "\nSale UUID unavailable; using conversation filter fallback.";
+      const saleFallbackNoteHtml = "";
+      const saleFallbackNoteText = "";
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url} sale=${saleUuid || "fallback"}`
