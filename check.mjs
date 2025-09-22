@@ -5,6 +5,7 @@ import { ensureAlertConversationLink } from "./lib/alertConversation.js";
 import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./lib/dedupe.mjs";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
+import { isConversationResolved } from "./src/lib/isResolved.js";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
 const logger = console;
@@ -1099,6 +1100,12 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
   // 3) Parse and evaluate
   const data = await res.json();
   const msgs = normalizeMessages(data);
+
+  // Guard: skip alerting entirely when the conversation already appears closed/resolved.
+  if (isConversationResolved(data, msgs)) {
+    console.log("Conversation is resolved/closed; skipping alert.");
+    return;
+  }
 
   // Make inline thread available to the resolver (prevents ReferenceError).
   // We only add keys that the resolver knows how to read.
