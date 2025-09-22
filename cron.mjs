@@ -914,8 +914,27 @@ for (const { id } of toCheck) {
   const result = await evaluateUnanswered(msgs, new Date(), SLA_MIN);
   if (!result.ok && result.reason === "guest_unanswered") {
     const ageMin = result.minsSinceAgent ?? SLA_MIN;
-    const lastGuestMs = result.lastGuestTs || Date.parse(conv?.last_guest_message_at || conv?.lastGuestMessageAt || 0);
-    if (!Number.isFinite(lastGuestMs) || shouldAlert(Date.now(), lastGuestMs)) {
+    const lastGuestMsEpoch =
+      result.lastGuestTs instanceof Date
+        ? result.lastGuestTs.getTime()
+        : (typeof result.lastGuestTs === "number" && Number.isFinite(result.lastGuestTs)
+            ? result.lastGuestTs
+            : Date.parse(conv?.last_guest_message_at || conv?.lastGuestMessageAt || 0));
+    if (!Number.isFinite(lastGuestMsEpoch) || shouldAlert(Date.now(), lastGuestMsEpoch)) {
+
+      // --- Final confirmation guard ---
+      // Re-fetch once before sending to avoid alerting a now-resolved breach due to stale data.
+      try {
+        const confirmHeaders = messageHeaders || authHeaders();
+        const confirmFetch = await fetchMessagesWithRetry(id, confirmHeaders, { attempts: 1, baseDelayMs: 150 });
+        if (confirmFetch?.ok) {
+          const confirm = await evaluateUnanswered(confirmFetch.messages, new Date(), SLA_MIN);
+          if (confirm.ok) {
+            log(`conv ${id}: resolved on confirm check (${confirm.reason}); skipping alert`);
+            continue;
+          }
+        }
+      } catch {}
 
       // Build a universal conversation link
       const lookupId = conv?.uuid ?? conv?.id ?? id;
@@ -1017,11 +1036,13 @@ for (const { id } of toCheck) {
       );
 
       // simple dedupe by conversation + last guest message timestamp
-      const { dup, state } = isDuplicateAlert(id, lastGuestMs);
+      // Prefer canonical UUID so the same conversation can't slip past dedupe when the list switches id shapes.
+      const dedupeId = conversationUuid || id;
+      const { dup, state } = isDuplicateAlert(dedupeId, lastGuestMsEpoch);
       if (dup) {
-        log(`conv ${id}: duplicate alert suppressed`);
+        log(`conv ${id}: duplicate alert suppressed (key=${dedupeId}:${lastGuestMsEpoch})`);
       } else {
-        const key = dedupeKey(id, lastGuestMs);
+        const key = dedupeKey(dedupeId, lastGuestMsEpoch);
         const metricName = mintedLinkUsed
           ? 'alerts.sent_with_minted_link'
           : universal?.kind === 'token'
@@ -1088,7 +1109,7 @@ ${guestSummaryText}
 ${searchInstructionText}
 Respond in Boom to assist the guest.${saleFallbackNoteText}`,
           });
-          markAlerted(state, id, lastGuestMs);
+          markAlerted(state, dedupeId, lastGuestMsEpoch);
           log(`dedupe_key=${key}`);
           alerted++;
         } catch (e) {
