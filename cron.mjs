@@ -717,7 +717,10 @@ async function sendAlertEmail({ to, subject, text, html }) {
         return;
       }
       const transporter = nodemailer.createTransport({ host, port: 587, secure: false, auth: { user, pass } });
-      const result = await transporter.sendMail({ from: user, to, subject, text, html });
+      const fromName = process.env.ALERT_FROM_NAME || "Boom SLA Alert";
+      const fromAddress = process.env.ALERT_FROM_ADDRESS || user;
+      const from = fromName ? { name: fromName, address: fromAddress } : fromAddress;
+      const result = await transporter.sendMail({ from, to, subject, text, html });
       span.addEvent('alert.sent');
       return result;
     } catch (error) {
@@ -976,12 +979,6 @@ for (const { id } of toCheck) {
         console.warn(`conv ${id}: conversation UUID unavailable; using minted deep link`);
       }
 
-      const idDisplay =
-        conversationUuid ||
-        (conv?.legacyId != null ? String(conv.legacyId) : undefined) ||
-        (typeof conv?.slug === "string" && conv.slug.trim()) ||
-        (typeof lookupId === "string" ? lookupId : String(lookupId));
-
       const fetchBase = messageOrigin || base;
       const saleHeaders = messageHeaders || authHeaders();
       let saleUuid = null;
@@ -1060,13 +1057,15 @@ for (const { id } of toCheck) {
             : 'Search in Boom using the guest name to find the conversation.';
           await sendAlertEmail({
             to,
-            subject: `[Boom SLA] ${guestLabel} unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${idDisplay}`,
+            subject: `[Boom SLA] Action needed – ${guestLabel} unanswered ${ageMin}m (> ${SLA_MIN}m)`,
             html: `<!doctype html>
   <html lang="en">
     <body style="margin:0;padding:24px;background-color:#f8fafc;font-family:'Inter','Segoe UI',Arial,sans-serif;color:#0f172a;">
       <div style="max-width:560px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
-        <p style="margin:0 0 24px;font-size:14px;font-weight:600;color:#0ea5e9;">Boom SLA Alert</p>
-        <h1 style="margin:0 0 16px;font-size:22px;font-weight:600;color:#0f172a;">Guest needs attention</h1>
+        <div style="margin:0 0 24px;padding:18px;border-radius:16px;background:linear-gradient(135deg,#0ea5e9,#6366f1);">
+          <p style="margin:0;font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#e0f2fe;">Boom SLA Alert</p>
+          <h1 style="margin:12px 0 0;font-size:24px;font-weight:700;color:#ffffff;">Guest needs attention</h1>
+        </div>
         <p style="margin:4px 0 12px;font-size:16px;font-weight:600;color:#0f172a;">👤 ${safeGuestFullName}</p>
         <p style="margin:0 0 8px;font-size:16px;line-height:1.5;">${guestSummaryHtml}</p>
         <p style="margin:0 0 16px;font-size:14px;color:#475569;">The SLA for a response is ${SLA_MIN} minutes.</p>

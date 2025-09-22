@@ -1171,8 +1171,10 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       <html lang="en">
         <body style="margin:0;padding:24px;background-color:#f8fafc;font-family:'Inter','Segoe UI',Arial,sans-serif;color:#0f172a;">
           <div style="max-width:560px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
-            <p style="margin:0 0 24px;font-size:14px;font-weight:600;color:#0ea5e9;">Boom SLA Alert</p>
-            <h1 style="margin:0 0 16px;font-size:22px;font-weight:600;color:#0f172a;">Guest needs attention</h1>
+            <div style="margin:0 0 24px;padding:18px;border-radius:16px;background:linear-gradient(135deg,#0ea5e9,#6366f1);">
+              <p style="margin:0;font-size:12px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#e0f2fe;">Boom SLA Alert</p>
+              <h1 style="margin:12px 0 0;font-size:24px;font-weight:700;color:#ffffff;">Guest needs attention</h1>
+            </div>
             <p style="margin:4px 0 12px;font-size:16px;font-weight:600;color:#0f172a;">👤 ${safeGuestFullName}</p>
             <p style="margin:0 0 8px;font-size:16px;line-height:1.5;">${guestSummaryHtml}</p>
             <p style="margin:0 0 16px;font-size:14px;color:#475569;">The SLA for a response is ${SLA_MINUTES} minutes.</p>

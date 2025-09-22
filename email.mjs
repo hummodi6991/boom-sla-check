@@ -11,6 +11,7 @@ import nodemailer from "nodemailer";
  *   - ALERT_TO
  * Optional:
  *   - ALERT_FROM_NAME
+ *   - ALERT_FROM_ADDRESS
  *
  * @param {object} opts
  * @param {string} opts.subject Email subject
@@ -23,7 +24,8 @@ export async function sendAlert({ subject, html, text }) {
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS;
   const to   = process.env.ALERT_TO;
-  const fromName = process.env.ALERT_FROM_NAME || "Boom SLA Bot";
+  const fromName = process.env.ALERT_FROM_NAME || "Boom SLA Alert";
+  const fromAddress = process.env.ALERT_FROM_ADDRESS || user;
 
   if (!host || !port || !user || !pass || !to) {
     console.log("Alert needed, but SMTP/recipient envs are not fully set.");
@@ -38,7 +40,7 @@ export async function sendAlert({ subject, html, text }) {
   });
 
   const message = {
-    from: `"${fromName}" <${user}>`,
+    from: fromName ? { name: fromName, address: fromAddress } : fromAddress,
     to,
     subject,
     text,
