@@ -551,7 +551,206 @@ function pickNameLike(obj) {
   return composed || (full ? String(full).trim() : null);
 }
 
-function extractGuestName(source) {
+const GUEST_ROLE_HINTS = [
+  "guest",
+  "customer",
+  "traveler",
+  "visitor",
+  "tenant",
+  "resident",
+  "renter",
+  "lead",
+  "prospect",
+  "user",
+];
+
+function roleMatchesGuest(value) {
+  if (value == null) return false;
+  const token = String(value).toLowerCase();
+  return GUEST_ROLE_HINTS.some((hint) => token.includes(hint));
+}
+
+function tryNameFromValue(value) {
+  if (!value) return null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === "object") {
+    return pickNameLike(value);
+  }
+  return null;
+}
+
+function isGuestParticipant(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  const flagKeys = [
+    "is_guest",
+    "isGuest",
+    "guest",
+    "is_customer",
+    "isCustomer",
+    "customer",
+    "is_primary_guest",
+    "isPrimaryGuest",
+    "primary_guest",
+    "primaryGuest",
+  ];
+  for (const key of flagKeys) {
+    const val = obj[key];
+    if (val === true || val === "true" || val === 1 || val === "1") return true;
+  }
+  const roleKeys = [
+    "role",
+    "type",
+    "kind",
+    "category",
+    "participant_role",
+    "participantRole",
+    "participant_type",
+    "participantType",
+    "user_type",
+    "userType",
+    "member_type",
+    "memberType",
+    "relationship",
+    "party",
+    "source",
+    "label",
+    "title",
+  ];
+  for (const key of roleKeys) {
+    if (roleMatchesGuest(obj[key])) return true;
+  }
+  return false;
+}
+
+function scanForGuestNameKeys(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  for (const [key, value] of Object.entries(obj)) {
+    const lower = key.toLowerCase();
+    if (!lower.includes("name")) continue;
+    if (!GUEST_ROLE_HINTS.some((hint) => lower.includes(hint))) continue;
+    const candidate = tryNameFromValue(value);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function findNameInParticipants(list) {
+  if (!Array.isArray(list)) return null;
+  for (const item of list) {
+    if (!isGuestParticipant(item)) continue;
+    const candidate =
+      tryNameFromValue(item) ||
+      tryNameFromValue(item?.profile) ||
+      tryNameFromValue(item?.user) ||
+      tryNameFromValue(item?.contact) ||
+      tryNameFromValue(item?.person) ||
+      tryNameFromValue(item?.member) ||
+      tryNameFromValue(item?.details) ||
+      tryNameFromValue(item?.info);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+function findGuestNameInObject(obj, visited = new Set(), depth = 0) {
+  if (obj == null || depth > 8) return null;
+  if (typeof obj !== "object") {
+    return typeof obj === "string" ? obj.trim() || null : null;
+  }
+  if (visited.has(obj)) return null;
+  visited.add(obj);
+
+  if (Array.isArray(obj)) {
+    const fromParticipants = findNameInParticipants(obj);
+    if (fromParticipants) return fromParticipants;
+    for (const item of obj) {
+      const nested = findGuestNameInObject(item, visited, depth + 1);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  const fromKeys = scanForGuestNameKeys(obj);
+  if (fromKeys) return fromKeys;
+
+  if (isGuestParticipant(obj)) {
+    const direct = pickNameLike(obj);
+    if (direct) return direct;
+  }
+
+  const directFields = [
+    obj.guest,
+    obj.guest_profile,
+    obj.guestProfile,
+    obj.customer,
+    obj.user,
+    obj.profile,
+    obj.contact,
+    obj.person,
+    obj.member,
+    obj.traveler,
+    obj.visitor,
+    obj.primary_guest,
+    obj.primaryGuest,
+  ];
+  for (const field of directFields) {
+    if (field == null) continue;
+    const candidate = tryNameFromValue(field);
+    if (candidate) return candidate;
+    const nested = findGuestNameInObject(field, visited, depth + 1);
+    if (nested) return nested;
+  }
+
+  const arraysToCheck = [
+    obj.participants,
+    obj.members,
+    obj.people,
+    obj.users,
+    obj.contacts,
+    obj.guests,
+    obj.attendees,
+  ];
+  for (const arr of arraysToCheck) {
+    if (!arr) continue;
+    const candidate = findNameInParticipants(arr);
+    if (candidate) return candidate;
+    const nested = findGuestNameInObject(arr, visited, depth + 1);
+    if (nested) return nested;
+  }
+
+  const nestedContainers = [
+    obj.context,
+    obj.payload,
+    obj.result,
+    obj.data,
+    obj.conversation,
+    obj.thread,
+    obj.details,
+    obj.info,
+    obj.raw,
+  ];
+  for (const container of nestedContainers) {
+    const nested = findGuestNameInObject(container, visited, depth + 1);
+    if (nested) return nested;
+  }
+
+  for (const value of Object.values(obj)) {
+    if (value == null) continue;
+    if (typeof value === "string") {
+      continue;
+    }
+    const nested = findGuestNameInObject(value, visited, depth + 1);
+    if (nested) return nested;
+  }
+
+  return null;
+}
+
+function extractGuestNameFromSource(source) {
+  if (!source) return null;
   const messages = Array.isArray(source) ? source : normalizeMessages(source);
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
@@ -568,11 +767,26 @@ function extractGuestName(source) {
       m.name;
     if (name && String(name).trim()) return String(name).trim();
   }
+
+  if (!Array.isArray(source)) {
+    const contextName = findGuestNameInObject(source);
+    if (contextName && String(contextName).trim()) return String(contextName).trim();
+  }
+
   return null;
 }
 
-function buildGuestLabel(source) {
-  const guestName = extractGuestName(source);
+function extractGuestName(...sources) {
+  const inputs = sources.length ? sources : [undefined];
+  for (const source of inputs) {
+    const name = extractGuestNameFromSource(source);
+    if (name) return name;
+  }
+  return null;
+}
+
+function buildGuestLabel(...sources) {
+  const guestName = extractGuestName(...sources);
   return guestName ? `Guest ${guestName}` : "Guest";
 }
 
@@ -760,8 +974,8 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       return;
     }
     const idDisplay = link.idDisplay || link.uuid || String(convId);
-    const guestLabel = buildGuestLabel(msgs);
-    const guestName = extractGuestName(msgs);
+    const guestLabel = buildGuestLabel(data, msgs);
+    const guestName = extractGuestName(data, msgs);
     const safeGuestName = guestName ? escapeHtml(guestName) : null;
     const waitMinutes = typeof result.minsSinceAgent === "number" ? result.minsSinceAgent : SLA_MINUTES;
     const guestSummaryHtml = safeGuestName
