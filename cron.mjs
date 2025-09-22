@@ -638,15 +638,12 @@ for (const { id } of toCheck) {
         console.warn(`conv ${id}: sale UUID unavailable; ${fallbackMsg}`);
       }
       const url = conversationUrl;
-      const backupUrl = conversationUrl;
       const saleFallbackNoteHtml = saleUuid
         ? ""
-        : "\n    <p style=\"font-size:12px;color:#666\">Sale UUID unavailable; using conversation filter fallback.</p>";
+        : "<p style=\"margin:16px 0 0;font-size:12px;color:#64748b\">Sale UUID unavailable; using conversation filter fallback.</p>";
       const saleFallbackNoteText = saleUuid
         ? ""
         : "\nSale UUID unavailable; using conversation filter fallback.";
-      const canonicalNoteHtml = `\n    <p style=\"font-size:12px;color:#666\">Canonical deep link:<br><a href=\"${backupUrl}\" target=\"_blank\" rel=\"noopener\">${backupUrl}</a></p>`;
-      const canonicalNoteText = `\nCanonical deep link: ${backupUrl}`;
 
       console.log(
         `ALERT: conv=${id} guest_unanswered=${ageMin}m > ${SLA_MIN}m -> email ${mask(to) || "(no recipient set)"} link=${url} sale=${saleUuid || "fallback"}`
@@ -668,21 +665,38 @@ for (const { id } of toCheck) {
         try {
           metrics?.increment?.(metricName);
           const guestLabel = buildGuestLabel(messagesRaw || msgs);
+          const guestName = extractGuestName(messagesRaw || msgs);
+          const safeGuestName = guestName ? escapeHtml(guestName) : null;
+          const guestSummaryHtml = safeGuestName
+            ? `Guest <strong>${safeGuestName}</strong> has been waiting for <strong>${ageMin} minutes</strong>.`
+            : `A guest has been waiting for <strong>${ageMin} minutes</strong>.`;
+          const guestSummaryText = guestName
+            ? `Guest ${guestName} has been waiting for ${ageMin} minutes (SLA ${SLA_MIN}m).`
+            : `A guest has been waiting for ${ageMin} minutes (SLA ${SLA_MIN}m).`;
           await sendAlertEmail({
             to,
             subject: `[Boom SLA] ${guestLabel} unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${idDisplay}`,
-            html: `
-    <p><strong>${escapeHtml(guestLabel)}</strong> appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).</p>
-    <p>Conversation: <strong>${idDisplay}</strong></p>
-    <p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p>
-    ${saleFallbackNoteHtml}
-    ${canonicalNoteHtml}
-  `,
-            text: `${guestLabel} appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
-Conversation: ${idDisplay}
-Open: ${url}
-${saleFallbackNoteText}
-${canonicalNoteText}`,
+            html: `<!doctype html>
+  <html lang="en">
+    <body style="margin:0;padding:24px;background-color:#f8fafc;font-family:'Inter','Segoe UI',Arial,sans-serif;color:#0f172a;">
+      <div style="max-width:560px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
+        <p style="margin:0 0 24px;font-size:14px;font-weight:600;color:#0ea5e9;">Boom SLA Alert</p>
+        <h1 style="margin:0 0 16px;font-size:22px;font-weight:600;color:#0f172a;">Guest needs attention</h1>
+        <p style="margin:0 0 8px;font-size:16px;line-height:1.5;">${guestSummaryHtml}</p>
+        <p style="margin:0 0 16px;font-size:14px;color:#475569;">The SLA for a response is ${SLA_MIN} minutes.</p>
+        <div style="padding:16px;border-radius:8px;border:1px solid #e2e8f0;background-color:#f8fafc;">
+          <p style="margin:0 0 4px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Conversation ID</p>
+          <p style="margin:0;font-size:18px;font-weight:600;color:#0f172a;">${escapeHtml(idDisplay)}</p>
+        </div>
+        ${saleFallbackNoteHtml}
+        <p style="margin:24px 0 0;font-size:13px;color:#475569;">Search for this conversation ID in Boom to follow up with the guest.</p>
+      </div>
+    </body>
+  </html>`,
+            text: `Boom SLA Alert
+${guestSummaryText}
+Conversation ID: ${idDisplay}
+Respond in Boom to assist the guest.${saleFallbackNoteText}`,
           });
           markAlerted(state, id, lastGuestMs);
           log(`dedupe_key=${key}`);
