@@ -12,6 +12,7 @@ import { resolveConversationUuidHedged } from "./apps/shared/lib/conversationUui
 import { extractSaleUuid, extractSaleUuidFromMessages } from "./lib/saleUuid.js";
 import { buildGuestExperienceLink } from "./lib/guestExperienceLink.js";
 import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { isConversationResolved } from "./src/lib/isResolved.js";
 export { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
 const logger = console;
 const metrics = { increment: () => {} };
@@ -891,6 +892,13 @@ for (const { id } of toCheck) {
       skippedCount++;
       continue;
     }
+  }
+
+  // Guard: don't alert for threads that already appear resolved/closed.
+  if (isConversationResolved(messagesRaw || conv, msgs)) {
+    log(`conv ${id}: resolved/closed – skipping`);
+    checked++;
+    continue;
   }
 
   // Make inline thread available to the resolver (prevents ReferenceError).
