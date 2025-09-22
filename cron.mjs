@@ -282,6 +282,50 @@ export async function evaluateUnanswered(messages, now = new Date(), slaMin = 15
     ? { ok:false, reason:"guest_unanswered", minsSinceAgent: Math.floor(diffMs/60000), lastGuestTs }
     : { ok:true, reason:"within_sla", minsSinceAgent: Math.floor(diffMs/60000), lastGuestTs };
 }
+
+function pickNameLike(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  const first = obj.first_name ?? obj.firstName ?? obj.given_name ?? obj.givenName ?? null;
+  const last  = obj.last_name  ?? obj.lastName  ?? obj.family_name ?? obj.familyName ?? null;
+  const full  = obj.full_name ?? obj.display_name ?? obj.displayName ?? obj.name ?? obj.username ?? null;
+  const composed = `${first || ''} ${last || ''}`.trim();
+  return composed || (full ? String(full).trim() : null);
+}
+
+function extractGuestName(source) {
+  const messages = Array.isArray(source) ? source : normalizeMessages(source);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m) continue;
+    const role = classifyMessage(m).role;
+    if (role !== 'guest') continue;
+    const name =
+      pickNameLike(m.sender) ||
+      pickNameLike(m.author) ||
+      pickNameLike(m.from) ||
+      m.sender_name || m.author_name || m.from_name || m.name;
+    if (name && String(name).trim()) return String(name).trim();
+  }
+  return null;
+}
+
+function buildGuestLabel(source) {
+  const guestName = extractGuestName(source);
+  return guestName ? `Guest ${guestName}` : 'Guest';
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
+
+export const __cronTest__ = {
+  pickNameLike,
+  extractGuestName,
+  buildGuestLabel,
+  escapeHtml,
+};
 if (typeof globalThis.__CRON_TEST__ === 'undefined') {
 
 const DEBUG  = !!process.env.DEBUG;
@@ -623,17 +667,18 @@ for (const { id } of toCheck) {
           : 'alerts.sent_with_deep_link';
         try {
           metrics?.increment?.(metricName);
+          const guestLabel = buildGuestLabel(messagesRaw || msgs);
           await sendAlertEmail({
             to,
-            subject: `[Boom SLA] Unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${idDisplay}`,
+            subject: `[Boom SLA] ${guestLabel} unanswered ${ageMin}m (> ${SLA_MIN}m) – conversation ${idDisplay}`,
             html: `
-    <p>Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).</p>
+    <p><strong>${escapeHtml(guestLabel)}</strong> appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).</p>
     <p>Conversation: <strong>${idDisplay}</strong></p>
     <p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p>
     ${saleFallbackNoteHtml}
     ${canonicalNoteHtml}
   `,
-            text: `Latest guest message appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
+            text: `${guestLabel} appears unanswered for ${ageMin} minutes (SLA ${SLA_MIN}m).
 Conversation: ${idDisplay}
 Open: ${url}
 ${saleFallbackNoteText}
