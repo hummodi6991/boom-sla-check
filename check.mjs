@@ -536,6 +536,56 @@ function tsOf(m) {
   return d && !isNaN(+d) ? d : null;
 }
 
+function pickNameLike(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  const first = obj.first_name ?? obj.firstName ?? obj.given_name ?? obj.givenName ?? null;
+  const last = obj.last_name ?? obj.lastName ?? obj.family_name ?? obj.familyName ?? null;
+  const full =
+    obj.full_name ??
+    obj.display_name ??
+    obj.displayName ??
+    obj.name ??
+    obj.username ??
+    null;
+  const composed = `${first || ""} ${last || ""}`.trim();
+  return composed || (full ? String(full).trim() : null);
+}
+
+function extractGuestName(source) {
+  const messages = Array.isArray(source) ? source : normalizeMessages(source);
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m) continue;
+    const role = classifyMessage(m).role;
+    if (role !== "guest") continue;
+    const name =
+      pickNameLike(m.sender) ||
+      pickNameLike(m.author) ||
+      pickNameLike(m.from) ||
+      m.sender_name ||
+      m.author_name ||
+      m.from_name ||
+      m.name;
+    if (name && String(name).trim()) return String(name).trim();
+  }
+  return null;
+}
+
+function buildGuestLabel(source) {
+  const guestName = extractGuestName(source);
+  return guestName ? `Guest ${guestName}` : "Guest";
+}
+
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[c]);
+}
+
 async function evaluate(messages, now = new Date(), slaMin = SLA_MINUTES) {
   // Determine whether the latest guest message has gone unanswered for
   // at least `slaMin` minutes. We build a chronologically sorted list
@@ -709,14 +759,35 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
-    const url = link.url;
     const idDisplay = link.idDisplay || link.uuid || String(convId);
-    const subj = `⚠️ Boom SLA: guest unanswered ≥ ${SLA_MINUTES}m`;
-    const text = `Guest appears unanswered ≥ ${SLA_MINUTES} minutes.\nConversation: ${idDisplay}\nOpen: ${url}`;
-    const html = `<p>Guest appears unanswered ≥ ${SLA_MINUTES} minutes.</p>
-      <p>Conversation: <strong>${idDisplay}</strong></p>
-      <p><a href="${url}" target="_blank" rel="noopener">Open conversation</a></p>
-      <p style="font-size:12px;color:#666">If the link doesn’t work, copy & paste this URL:<br>${url}</p>`;
+    const guestLabel = buildGuestLabel(msgs);
+    const guestName = extractGuestName(msgs);
+    const safeGuestName = guestName ? escapeHtml(guestName) : null;
+    const waitMinutes = typeof result.minsSinceAgent === "number" ? result.minsSinceAgent : SLA_MINUTES;
+    const guestSummaryHtml = safeGuestName
+      ? `Guest <strong>${safeGuestName}</strong> has been waiting for <strong>${waitMinutes} minutes</strong>.`
+      : `A guest has been waiting for <strong>${waitMinutes} minutes</strong>.`;
+    const guestSummaryText = guestName
+      ? `Guest ${guestName} has been waiting for ${waitMinutes} minutes (SLA ${SLA_MINUTES}m).`
+      : `A guest has been waiting for ${waitMinutes} minutes (SLA ${SLA_MINUTES}m).`;
+    const subj = `⚠️ Boom SLA: ${guestLabel} unanswered ≥ ${SLA_MINUTES}m`;
+    const html = `<!doctype html>
+      <html lang="en">
+        <body style="margin:0;padding:24px;background-color:#f8fafc;font-family:'Inter','Segoe UI',Arial,sans-serif;color:#0f172a;">
+          <div style="max-width:560px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
+            <p style="margin:0 0 24px;font-size:14px;font-weight:600;color:#0ea5e9;">Boom SLA Alert</p>
+            <h1 style="margin:0 0 16px;font-size:22px;font-weight:600;color:#0f172a;">Guest needs attention</h1>
+            <p style="margin:0 0 8px;font-size:16px;line-height:1.5;">${guestSummaryHtml}</p>
+            <p style="margin:0 0 16px;font-size:14px;color:#475569;">The SLA for a response is ${SLA_MINUTES} minutes.</p>
+            <div style="padding:16px;border-radius:8px;border:1px solid #e2e8f0;background-color:#f8fafc;">
+              <p style="margin:0 0 4px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Conversation ID</p>
+              <p style="margin:0;font-size:18px;font-weight:600;color:#0f172a;">${escapeHtml(idDisplay)}</p>
+            </div>
+            <p style="margin:24px 0 0;font-size:13px;color:#475569;">Search for this conversation ID in Boom to follow up with the guest.</p>
+          </div>
+        </body>
+      </html>`;
+    const text = `Boom SLA Alert\n${guestSummaryText}\nConversation ID: ${idDisplay}\nRespond in Boom to assist the guest.`;
     const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
     const key = dedupeKey(convId, lastGuestTs);
     const { dup, state } = isDuplicateAlert(convId, lastGuestTs);
