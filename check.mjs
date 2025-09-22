@@ -1118,7 +1118,7 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
   if (!result.ok && result.reason === "guest_unanswered") {
     const convId = usedKey || uniqKeys[0] || CONVERSATION_INPUT;
     const base = appUrl().replace(/\/+$/, "");
-    const link = await ensureAlertConversationLink(
+    const linkObj = await ensureAlertConversationLink(
       {
         primary: convId,
         additional: uniqKeys,
@@ -1126,11 +1126,27 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       },
       { baseUrl: base, strictUuid: true },
     );
-    if (!link) {
+    if (!linkObj) {
       logger.warn({ convId }, 'skip alert: cannot resolve conversation UUID');
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
+    // Final confirmation guard – re-fetch once more just before mailing to avoid alerting a resolved breach.
+    try {
+      const confirmKey = usedKey || convId;
+      if (confirmKey) {
+        const confirm = await fetchMessages(MESSAGES_URL_TMPL, confirmKey, { method: MESSAGES_METHOD, headers });
+        if (confirm.res && confirm.res.status === 200) {
+          const freshData = await confirm.res.json();
+          const freshMsgs = normalizeMessages(freshData);
+          const confirmEval = await evaluate(freshMsgs);
+          if (confirmEval.ok) {
+            console.log("Resolved on confirm check; no alert sent.");
+            return;
+          }
+        }
+      }
+    } catch {}
     const guestContext = data || msgs;
     const guestLabel = buildGuestLabel(guestContext);
     const guestFullName = deriveGuestFullName({
@@ -1190,15 +1206,18 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
         </body>
       </html>`;
     const text = `Boom SLA Alert\nGuest: ${guestFullName}\n${guestSummaryText}\n${searchInstructionText}\nRespond in Boom to assist the guest.`;
-    const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
-    const key = dedupeKey(convId, lastGuestTs);
-    const { dup, state } = isDuplicateAlert(convId, lastGuestTs);
+    const lastGuestTs = result.lastGuestTs instanceof Date
+      ? result.lastGuestTs.getTime()
+      : (typeof result.lastGuestTs === 'number' ? result.lastGuestTs : null);
+    const dedupeId = (linkObj?.uuid && UUID_RE.test(String(linkObj.uuid))) ? String(linkObj.uuid).toLowerCase() : convId;
+    const key = dedupeKey(dedupeId, lastGuestTs);
+    const { dup, state } = isDuplicateAlert(dedupeId, lastGuestTs);
     if (dup) {
-      console.log(`Duplicate alert suppressed for ${convId} (lastGuestTs=${lastGuestTs || 'n/a'})`);
+      console.log(`Duplicate alert suppressed for ${dedupeId} (lastGuestTs=${lastGuestTs || 'n/a'})`);
       console.log("No alert sent.");
     } else {
       await sendAlert({ subject: subj, text, html });
-      markAlerted(state, convId, lastGuestTs);
+      markAlerted(state, dedupeId, lastGuestTs);
       console.log(`dedupe_key=${key}`);
       console.log("⚠️ Alert email sent.");
     }
