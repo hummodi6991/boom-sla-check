@@ -105,3 +105,24 @@ test('approved AI responses clear the SLA', async () => {
   expect(result.ok).toBe(true);
   expect(result.reason).toBe('no_breach');
 });
+
+test('agent responses with senderType "user" clear the SLA', async () => {
+  const now = iso('2024-01-01T00:10:00Z');
+  const messages = [
+    { sent_at: '2024-01-01T00:00:00Z', senderType: 'guest', direction: 'inbound', body: 'Need help' },
+    { sent_at: '2024-01-01T00:02:00Z', senderType: 'user', direction: 'outbound', body: 'Sure, happy to help!' },
+  ];
+  const result = await evaluate(messages, now, 5);
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe('no_breach');
+});
+
+test('inbound messages tagged as "user" still count as guest messages', async () => {
+  const now = iso('2024-01-01T00:10:00Z');
+  const messages = [
+    { sent_at: '2024-01-01T00:00:00Z', senderType: 'user', direction: 'inbound', body: 'Checking in again' },
+  ];
+  const result = await evaluate(messages, now, 5);
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('guest_unanswered');
+});

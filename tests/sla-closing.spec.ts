@@ -58,6 +58,18 @@ test('treats "Thanks" without goodbye as non-closing', async () => {
   expect(res.ok).toBe(false);
 });
 
+test('agent replies with senderType user end the SLA window', async () => {
+  const { evaluateUnanswered } = await loadEvaluator();
+  const now = new Date();
+  const msgs = [
+    buildGuestMessage('Hello?', 10),
+    { role: 'agent', senderType: 'user', direction: 'outbound', timestamp: Date.now() - 9 * 60000 },
+  ];
+  const res = await evaluateUnanswered(msgs, now, 5);
+  expect(res.ok).toBe(true);
+  expect(res.reason).toBe('no_breach');
+});
+
 test('AI fallback honors confidence', async () => {
   const { isClosingStatement } = await import('../src/lib/isClosingStatement.js');
   process.env.USE_AI_INTENT = '1';
