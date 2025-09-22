@@ -18,6 +18,34 @@ test.describe('cron guest label helpers', () => {
     expect(helpers.extractGuestName(messages)).toBe('Jordan Q.');
   });
 
+  test('extractGuestName reads guest name from conversation context', async () => {
+    const helpers = await loadHelpers();
+    const payload = {
+      data: {
+        conversation: {
+          participants: [
+            { role: 'agent', profile: { full_name: 'Support Agent' } },
+            {
+              role: 'primary_guest',
+              profile: { first_name: 'Alex', last_name: 'Kim' },
+            },
+          ],
+        },
+      },
+    };
+    expect(helpers.extractGuestName(payload)).toBe('Alex Kim');
+  });
+
+  test('extractGuestName uses guest-specific string fields in context', async () => {
+    const helpers = await loadHelpers();
+    const payload = {
+      conversation: {
+        guest_full_name: 'Morgan Price',
+      },
+    };
+    expect(helpers.extractGuestName(payload)).toBe('Morgan Price');
+  });
+
   test('buildGuestLabel defaults when name missing', async () => {
     const helpers = await loadHelpers();
     const messages = [
