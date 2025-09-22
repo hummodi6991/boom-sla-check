@@ -780,6 +780,160 @@ function buildGuestLabel(source) {
   return guestName ? `Guest ${guestName}` : "Guest";
 }
 
+function deriveGuestFullName(context) {
+  if (!context) return "Guest";
+  if (Array.isArray(context)) {
+    const fromArray = extractGuestName(context);
+    return fromArray && fromArray.trim().length ? fromArray.trim() : "Guest";
+  }
+
+  const names = [];
+  const push = (...values) => {
+    for (const value of values) {
+      if (value == null) continue;
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed) names.push(trimmed);
+        continue;
+      }
+      if (Array.isArray(value)) {
+        const fromParticipants = findNameInParticipants(value);
+        if (fromParticipants) {
+          names.push(fromParticipants);
+        }
+        continue;
+      }
+      if (typeof value === "object") {
+        const direct = tryNameFromValue(value);
+        if (direct) {
+          names.push(direct);
+        }
+      }
+    }
+  };
+
+  const fromParts = (first, last) => {
+    const partA = first == null ? "" : String(first).trim();
+    const partB = last == null ? "" : String(last).trim();
+    const joined = [partA, partB].filter(Boolean).join(" ");
+    return joined || null;
+  };
+
+  const addGuestShapes = (guest) => {
+    if (!guest) return;
+    push(guest);
+    push(guest.profile, guest.person, guest.user, guest.contact, guest.details, guest.info);
+    push(guest.fullName, guest.full_name, guest.name, guest.display_name, guest.displayName);
+    push(guest.guestFullName, guest.guest_full_name);
+    push(
+      fromParts(
+        guest.preferred_first_name ?? guest.preferredFirstName ?? guest.first_name ?? guest.firstName ?? guest.given_name ?? guest.givenName,
+        guest.preferred_last_name ?? guest.preferredLastName ?? guest.last_name ?? guest.lastName ?? guest.family_name ?? guest.familyName,
+      ),
+    );
+  };
+
+  push(
+    context.guestFullName,
+    context.guest_full_name,
+    context.guestName,
+    context.guest_name,
+    fromParts(context.guestFirstName ?? context.guest_first_name, context.guestLastName ?? context.guest_last_name),
+  );
+  addGuestShapes(context.guest);
+
+  const conv = context.conversation || {};
+  push(
+    conv.guestFullName,
+    conv.guest_full_name,
+    conv.guestName,
+    conv.guest_name,
+    fromParts(conv.guestFirstName ?? conv.guest_first_name, conv.guestLastName ?? conv.guest_last_name),
+  );
+  addGuestShapes(conv.guest);
+  addGuestShapes(conv.primaryGuest);
+  addGuestShapes(conv.primary_guest);
+  addGuestShapes(context.primaryGuest);
+  addGuestShapes(context.primary_guest);
+  addGuestShapes(context.data?.guest);
+  addGuestShapes(context.data?.primary_guest);
+  addGuestShapes(context.payload?.guest);
+  addGuestShapes(context.payload?.primary_guest);
+  addGuestShapes(context.payload?.data?.guest);
+  addGuestShapes(context.payload?.data?.primary_guest);
+  addGuestShapes(context.raw?.guest);
+  addGuestShapes(context.raw?.primary_guest);
+
+  const participantGroups = [
+    context.participants,
+    context.members,
+    context.people,
+    context.users,
+    context.data?.participants,
+    context.data?.members,
+    context.data?.people,
+    context.data?.users,
+    context.payload?.participants,
+    context.payload?.members,
+    context.payload?.people,
+    context.payload?.users,
+    context.payload?.data?.participants,
+    context.payload?.data?.members,
+    context.payload?.data?.people,
+    context.payload?.data?.users,
+    context.raw?.participants,
+    context.raw?.members,
+    context.raw?.people,
+    context.raw?.users,
+    conv.participants,
+    conv.members,
+    conv.people,
+    conv.users,
+    conv.contacts,
+    conv.attendees,
+    conv.guests,
+  ];
+  for (const group of participantGroups) {
+    const name = findNameInParticipants(group);
+    if (name) names.push(name);
+  }
+
+  const messageSources = [
+    context.messages,
+    context.thread,
+    context.rawMessages,
+    context.raw?.messages,
+    context.raw?.thread,
+    context.data?.messages,
+    context.data?.thread,
+    context.payload?.messages,
+    context.payload?.thread,
+    context.payload?.data?.messages,
+    context.payload?.data?.thread,
+    conv.messages,
+    conv.thread,
+    conv.data?.messages,
+    conv.data?.thread,
+    context.raw?.messages,
+    context.raw?.thread,
+  ];
+  for (const source of messageSources) {
+    const name = extractGuestName(source);
+    if (name) names.push(name);
+  }
+
+  const normalized = [];
+  for (const candidate of names) {
+    if (!candidate) continue;
+    const trimmed = candidate.trim().replace(/\s+/g, " ");
+    if (!trimmed) continue;
+    if (!normalized.includes(trimmed)) normalized.push(trimmed);
+  }
+
+  const named = normalized.find((value) => value && value.toLowerCase() !== "guest");
+  return named || "Guest";
+}
+
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;",
@@ -966,14 +1120,34 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
     const idDisplay = link.idDisplay || link.uuid || String(convId);
     const guestContext = data || msgs;
     const guestLabel = buildGuestLabel(guestContext);
-    const guestName = extractGuestName(guestContext);
-    const safeGuestName = guestName ? escapeHtml(guestName) : null;
+    const guestFullName = deriveGuestFullName({
+      conversation: guestContext?.conversation,
+      guest:
+        guestContext?.guest ??
+        guestContext?.data?.guest ??
+        guestContext?.conversation?.guest ??
+        guestContext?.primary_guest ??
+        guestContext?.primaryGuest,
+      messages: msgs,
+      rawMessages: guestContext,
+      raw: guestContext,
+      data: guestContext?.data,
+      payload: guestContext?.payload,
+      thread: guestContext?.thread,
+    });
+    const safeGuestFullName = escapeHtml(guestFullName);
     const waitMinutes = typeof result.minsSinceAgent === "number" ? result.minsSinceAgent : SLA_MINUTES;
+    const summaryNameCandidate =
+      guestFullName && guestFullName !== "Guest"
+        ? guestFullName
+        : extractGuestName(guestContext);
+    const summaryName = summaryNameCandidate && summaryNameCandidate.trim().length ? summaryNameCandidate.trim() : null;
+    const safeGuestName = summaryName ? escapeHtml(summaryName) : null;
     const guestSummaryHtml = safeGuestName
       ? `Guest <strong>${safeGuestName}</strong> has been waiting for <strong>${waitMinutes} minutes</strong>.`
       : `A guest has been waiting for <strong>${waitMinutes} minutes</strong>.`;
-    const guestSummaryText = guestName
-      ? `Guest ${guestName} has been waiting for ${waitMinutes} minutes (SLA ${SLA_MINUTES}m).`
+    const guestSummaryText = summaryName
+      ? `Guest ${summaryName} has been waiting for ${waitMinutes} minutes (SLA ${SLA_MINUTES}m).`
       : `A guest has been waiting for ${waitMinutes} minutes (SLA ${SLA_MINUTES}m).`;
     const subj = `⚠️ Boom SLA: ${guestLabel} unanswered ≥ ${SLA_MINUTES}m`;
     const html = `<!doctype html>
@@ -982,6 +1156,7 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
           <div style="max-width:560px;margin:0 auto;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
             <p style="margin:0 0 24px;font-size:14px;font-weight:600;color:#0ea5e9;">Boom SLA Alert</p>
             <h1 style="margin:0 0 16px;font-size:22px;font-weight:600;color:#0f172a;">Guest needs attention</h1>
+            <p style="margin:4px 0 12px;font-size:16px;font-weight:600;color:#0f172a;">👤 ${safeGuestFullName}</p>
             <p style="margin:0 0 8px;font-size:16px;line-height:1.5;">${guestSummaryHtml}</p>
             <p style="margin:0 0 16px;font-size:14px;color:#475569;">The SLA for a response is ${SLA_MINUTES} minutes.</p>
             <div style="padding:16px;border-radius:8px;border:1px solid #e2e8f0;background-color:#f8fafc;">
@@ -992,7 +1167,7 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
           </div>
         </body>
       </html>`;
-    const text = `Boom SLA Alert\n${guestSummaryText}\nConversation ID: ${idDisplay}\nRespond in Boom to assist the guest.`;
+    const text = `Boom SLA Alert\nGuest: ${guestFullName}\n${guestSummaryText}\nConversation ID: ${idDisplay}\nRespond in Boom to assist the guest.`;
     const lastGuestTs = result.lastGuestTs instanceof Date ? result.lastGuestTs.getTime() : (result.lastGuestTs || null);
     const key = dedupeKey(convId, lastGuestTs);
     const { dup, state } = isDuplicateAlert(convId, lastGuestTs);

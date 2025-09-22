@@ -72,4 +72,20 @@ test.describe('cron guest label helpers', () => {
     const helpers = await loadHelpers();
     expect(helpers.escapeHtml('Guest <>&"\'')).toBe('Guest &lt;&gt;&amp;&quot;&#39;');
   });
+
+  test('deriveGuestFullName prefers conversation guest full name', async () => {
+    const helpers = await loadHelpers();
+    const payload = {
+      conversation: {
+        guest: { full_name: 'Jordan Example' },
+      },
+    };
+    expect(helpers.deriveGuestFullName(payload)).toBe('Jordan Example');
+  });
+
+  test('deriveGuestFullName falls back to Guest when no name available', async () => {
+    const helpers = await loadHelpers();
+    const payload = { conversation: { participants: [{ role: 'agent', profile: { full_name: 'Agent' } }] } };
+    expect(helpers.deriveGuestFullName(payload)).toBe('Guest');
+  });
 });
