@@ -459,7 +459,8 @@ function classifyMessage(m) {
     channelCandidates.find((v) => typeof v === "string" && v) || "";
   const channel = channelRaw.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (channel === "aics") {
-    return { role: "agent", aiStatus };
+    // Count AI CS as agent only when the suggestion is actually approved/sent.
+    return { role: aiStatus === "approved" ? "agent" : "ai", aiStatus };
   }
 
   // Identify system/internal notes or status-change events. Items such as
@@ -489,8 +490,13 @@ function classifyMessage(m) {
   if (matches.length >= 2 && !["guest", "customer", "user", "users"].includes(byCanonical)) {
     return { role: "internal", aiStatus };
   }
+  // Treat single-token automation/system/bot/auto-reply as internal unless inbound from a guest.
+  const automationTokens = ["system","automation","workflow","bot","autoresponder","autoreply","auto"];
+  if (automationTokens.some((t) => moduleVal.includes(t) || msgType.includes(t) || channel.includes(t)) && directionRole !== "guest") {
+    return { role: "internal", aiStatus };
+  }
   // Additional safeguard: explicit system/automation roles
-  if (["system","automation","policy","workflow"].includes(byCanonical)) {
+  if (["system","automation","policy","workflow","bot","autoresponder","autoreply","auto"].includes(byCanonical)) {
     return { role: "internal", aiStatus };
   }
 
@@ -503,7 +509,8 @@ function classifyMessage(m) {
   // explicit sender or is clearly outbound it should still count as an
   // agent response even when no approval metadata is present.
   if (isAI) {
-    if (aiStatus === "approved" || by || dir === "outbound" || COUNT_AI_AS_AGENT) {
+    const byIsAgentLike = /^(agent|host|owner|staff|support|operator|cs|service)$/.test(byCanonical);
+    if (aiStatus === "approved" || (dir === "outbound" && byIsAgentLike) || COUNT_AI_AS_AGENT) {
       return { role: "agent", aiStatus };
     }
     return { role: "ai", aiStatus };
