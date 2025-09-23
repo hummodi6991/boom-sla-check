@@ -517,8 +517,8 @@ function classifyMessage(m) {
   }
 
   if (userToken) {
-    if (directionRole === "guest") return { role: "guest", aiStatus };
-    return { role: "agent", aiStatus };
+    if (directionRole === "agent") return { role: "agent", aiStatus };
+    return { role: "guest", aiStatus };
   }
 
   // Messages from the host/agent. In some datasets the role may be
