@@ -486,9 +486,24 @@ function classifyMessage(m) {
     "assignment",
     "fun",
   ];
-  const combo = `${moduleVal} ${msgType} ${body}`;
-  const matches = sysKeywords.filter((k) => combo.includes(k));
-  if (matches.length >= 2 && !["guest", "customer", "user", "users"].includes(byCanonical)) {
+  const keywordMatches = new Set();
+  const structuredMatches = new Set();
+  for (const keyword of sysKeywords) {
+    if (moduleVal.includes(keyword) || msgType.includes(keyword)) {
+      keywordMatches.add(keyword);
+      structuredMatches.add(keyword);
+      continue;
+    }
+    if (body.includes(keyword)) {
+      keywordMatches.add(keyword);
+    }
+  }
+  if (
+    keywordMatches.size >= 2 &&
+    structuredMatches.size >= 1 &&
+    directionRole !== "guest" &&
+    !["guest", "customer", "user", "users"].includes(byCanonical)
+  ) {
     return { role: "internal", aiStatus };
   }
   // Treat single-token automation/system/bot/auto-reply as internal unless inbound from a guest.

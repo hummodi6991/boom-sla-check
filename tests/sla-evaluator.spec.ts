@@ -59,6 +59,16 @@ test('Thanks alone in another language does not bypass SLA ("gracias")', async (
   expect(result.reason).toBe('guest_unanswered');
 });
 
+test('guest questions mentioning status updates still trigger the SLA', async () => {
+  const now = iso('2024-01-01T00:10:00Z');
+  const messages = [
+    { sent_at: '2024-01-01T00:00:00Z', direction: 'inbound', body: 'Any status update on the repair?' },
+  ];
+  const result = await evaluate(messages, now, 5);
+  expect(result.ok).toBe(false);
+  expect(result.reason).toBe('guest_unanswered');
+});
+
 test('internal notes do not satisfy the SLA window', async () => {
   const now = iso('2024-01-01T00:10:00Z');
   const messages = [
