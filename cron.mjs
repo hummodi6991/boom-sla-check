@@ -251,17 +251,29 @@ function classifyMessage(m) {
   const directionRole = dir === "outbound" ? "agent" : dir === "inbound" ? "guest" : null;
   const isAI = !!firstDefined(m.generated_by_ai, m.is_ai_generated, m.is_ai, m.ai_generated);
   const ch  = String(firstDefined(m.channel, m.channel_type, m.channelName) || "").toLowerCase().replace(/[^a-z0-9]/g,"");
-  if (ch === "aics") return { role: "agent", aiStatus: "approved" };
-  if (/(system|automation|policy|workflow)/.test(byCanonical)) return { role: "internal", aiStatus: "none" };
-  if (isAI) return { role: "ai", aiStatus: aiMessageStatus(m) };
-  if (/(guest|customer)/.test(byRaw)) return { role: "guest", aiStatus: "none" };
+  const moduleVal = String(firstDefined(m.module, m.module_type) || "").toLowerCase();
+  const typeVal   = String(firstDefined(m.msg_type, m.type) || "").toLowerCase();
+  const aiStat = isAI ? aiMessageStatus(m) : "none";
+
+  // AI CS counts as agent only when approved/sent.
+  if (ch === "aics") return { role: aiStat === "approved" ? "agent" : "ai", aiStatus: aiStat };
+
+  // Treat single-token automation/system/bot/auto-reply as internal unless inbound.
+  const automationTokens = ['system','automation','workflow','bot','autoresponder','autoreply','auto','policy'];
+  const hasAutomation = automationTokens.some(t =>
+    byCanonical === t || moduleVal.includes(t) || typeVal.includes(t) || ch.includes(t)
+  );
+  if (hasAutomation && dir !== 'inbound') return { role: "internal", aiStatus: aiStat };
+
+  if (isAI) return { role: "ai", aiStatus: aiStat };
+  if (/(guest|customer)/.test(byRaw)) return { role: "guest", aiStatus: aiStat };
   if ((byCanonical === "user" || byCanonical === "users" || /\buser\b/.test(byRaw))) {
-    if (directionRole === "guest") return { role: "guest", aiStatus: "none" };
-    return { role: "agent", aiStatus: "none" };
+    if (directionRole === "guest") return { role: "guest", aiStatus: aiStat };
+    return { role: "agent", aiStatus: aiStat };
   }
-  if (byRaw) return { role: "agent", aiStatus: "none" };
-  if (directionRole) return { role: directionRole, aiStatus: "none" };
-  return { role: "guest", aiStatus: "none" };
+  if (byRaw) return { role: "agent", aiStatus: aiStat };
+  if (directionRole) return { role: directionRole, aiStatus: aiStat };
+  return { role: "guest", aiStatus: aiStat };
 }
 function tsOf(m) {
   const t = firstDefined(m.sent_at, m.sentAt, m.created_at, m.createdAt, m.timestamp, m.ts, m.time);
