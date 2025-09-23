@@ -6,6 +6,7 @@ import { prisma } from "./lib/db.js";
 import { isDuplicateAlert, markAlerted, dedupeKey } from "./lib/dedupe.mjs";
 import { isClosingStatement } from "./src/lib/isClosingStatement.js";
 import { isConversationResolved } from "./src/lib/isResolved.js";
+import { ensureVisibleInboundMessage, pickConversationIdForGuard } from "./lib/inboundGuard.js";
 
 const FORCE_RUN = process.env.FORCE_RUN === "1";
 const logger = console;
@@ -1223,6 +1224,25 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       console.log(`Duplicate alert suppressed for ${dedupeId} (lastGuestTs=${lastGuestTs || 'n/a'})`);
       console.log("No alert sent.");
     } else {
+      const guardCandidates = [
+        linkObj?.minted ? null : linkObj?.uuid,
+        linkObj?.conversation_uuid,
+        linkObj?.conversationId,
+        linkObj?.legacyId,
+        linkObj?.legacy_id,
+        ...uniqKeys,
+        usedKey,
+        CONVERSATION_INPUT,
+      ];
+      const guardConversationId = pickConversationIdForGuard(guardCandidates);
+      if (guardConversationId) {
+        const guardResult = await ensureVisibleInboundMessage(guardConversationId, { logger });
+        if (!guardResult.ok) {
+          metrics.increment('alerts.skipped_no_inbound');
+          console.log('No alert sent.');
+          return;
+        }
+      }
       await sendAlert({ subject: subj, text, html });
       markAlerted(state, dedupeId, lastGuestTs);
       console.log(`dedupe_key=${key}`);

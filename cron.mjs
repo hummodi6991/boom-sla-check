@@ -13,6 +13,7 @@ import { extractSaleUuid, extractSaleUuidFromMessages } from "./lib/saleUuid.js"
 import { buildGuestExperienceLink } from "./lib/guestExperienceLink.js";
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { isConversationResolved } from "./src/lib/isResolved.js";
+import { ensureVisibleInboundMessage, pickConversationIdForGuard } from "./lib/inboundGuard.js";
 export { resolveViaInternalEndpoint } from "./lib/internalResolve.js";
 const logger = console;
 const metrics = { increment: () => {} };
@@ -703,8 +704,11 @@ export function shouldAlertAge(ageMinutes, { slaMinutes, toleranceMinutes = 0 } 
   if (!Number.isFinite(age)) return true;
   const sla = Number(slaMinutes) || 0;
   const tolerance = Math.max(0, Number(toleranceMinutes) || 0);
-  // Trigger when age is at least SLA minus tolerance (i.e., allow small clock drift).
-  return age >= Math.max(0, sla - tolerance);
+  const threshold = Math.max(0, sla - tolerance);
+  if (age < threshold) return false;
+  // Require that the observed age meets or exceeds the SLA; tolerance only
+  // skips obviously short waits to allow for small clock drift.
+  return age >= sla;
 }
 
 export const __cronTest__ = {
@@ -1079,6 +1083,28 @@ for (const { id } of toCheck) {
           ? 'alerts.sent_with_legacy_shortlink'
           : 'alerts.sent_with_deep_link';
         try {
+          const guardCandidates = [
+            conv?.conversation_id,
+            conv?.conversationId,
+            conv?.id,
+            conv?.legacyId,
+            conv?.legacy_id,
+            conv?.uuid,
+            !mintedLinkUsed ? conversationUuid : null,
+            id,
+          ];
+          const guardConversationId = pickConversationIdForGuard(guardCandidates);
+          if (guardConversationId) {
+            const guardResult = await ensureVisibleInboundMessage(guardConversationId, {
+              logger,
+              context: { convId: id != null ? String(id) : undefined },
+            });
+            if (!guardResult.ok) {
+              metrics?.increment?.('alerts.skipped_no_inbound');
+              skippedCount++;
+              continue;
+            }
+          }
           metrics?.increment?.(metricName);
           const guestLabel = buildGuestLabel(messagesRaw || msgs);
           const guestFullName = deriveGuestFullName({
