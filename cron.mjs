@@ -739,7 +739,10 @@ async function sendAlertEmail({ to, subject, text, html }) {
         console.warn("SMTP envs not fully set; skipping email");
         return;
       }
-      const transporter = nodemailer.createTransport({ host, port: 587, secure: false, auth: { user, pass } });
+      // Respect SMTP_PORT and set TLS automatically for SMTPS (465)
+      const port = Number(process.env.SMTP_PORT || 587);
+      const secure = port === 465;
+      const transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
       const fromName = process.env.ALERT_FROM_NAME || "Boom SLA Alert";
       const fromAddress = process.env.ALERT_FROM_ADDRESS || user;
       const from = fromName ? { name: fromName, address: fromAddress } : fromAddress;
@@ -859,7 +862,11 @@ console.log(`starting per-conversation checks: ${toCheck.length} ids (using inli
 const SLA_MIN = Number(process.env.SLA_MINUTES ?? 5);
 const ALERT_TOL_MIN = Number(process.env.ALERT_TOLERANCE_MINUTES ?? 0.5); // small slack for drift
 const RECENT_WINDOW_MIN = parseInt(process.env.RECENT_WINDOW_MIN || "720", 10); // ignore threads idle >12h
-const MAX_ALERTS_PER_RUN = parseInt(process.env.MAX_ALERTS_PER_RUN || "5", 10);
+// Per-run alert cap: treat 0 or negative as "no limit" instead of disabling all alerts
+const __MAX_ALERTS_RAW = process.env.MAX_ALERTS_PER_RUN;
+const __MAX_ALERTS_PARSED = parseInt(__MAX_ALERTS_RAW ?? "", 10);
+const MAX_ALERTS_PER_RUN = Number.isFinite(__MAX_ALERTS_PARSED) ? __MAX_ALERTS_PARSED : 5;
+const ALERTS_LIMIT = MAX_ALERTS_PER_RUN <= 0 ? Number.POSITIVE_INFINITY : MAX_ALERTS_PER_RUN;
 
 function shouldAlert(nowMs, lastGuestMsgMs) {
   const ageMin = (nowMs - lastGuestMsgMs) / 60000;
@@ -873,7 +880,7 @@ const mask = (s) => s ? s.replace(/(.{2}).+(@.+)/, "$1***$2") : "";
 let checked = 0, alerted = 0, skippedCount = 0;
 const skipped = [];
 for (const { id } of toCheck) {
-  if (alerted >= MAX_ALERTS_PER_RUN) break;
+  if (alerted >= ALERTS_LIMIT) break;
   const conv = byId.get(String(id));
   let msgs = [];
   let messagesRaw = null;
