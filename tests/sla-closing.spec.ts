@@ -80,3 +80,11 @@ test('AI fallback honors confidence', async () => {
   delete (globalThis as any).aiClassify;
   delete process.env.USE_AI_INTENT;
 });
+
+test('shouldAlertAge keeps firing after long delays', async () => {
+  const mod = await loadEvaluator();
+  const { shouldAlertAge } = mod.__cronTest__;
+  expect(shouldAlertAge(5, { slaMinutes: 5, toleranceMinutes: 0.5 })).toBe(true);
+  expect(shouldAlertAge(45, { slaMinutes: 5, toleranceMinutes: 0.5 })).toBe(true);
+  expect(shouldAlertAge(4.9, { slaMinutes: 5, toleranceMinutes: 0.5 })).toBe(false);
+});

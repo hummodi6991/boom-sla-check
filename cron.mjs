@@ -698,12 +698,22 @@ function escapeHtml(s) {
   ));
 }
 
+export function shouldAlertAge(ageMinutes, { slaMinutes, toleranceMinutes = 0 } = {}) {
+  const age = Number(ageMinutes);
+  if (!Number.isFinite(age)) return true;
+  const sla = Number(slaMinutes) || 0;
+  const tolerance = Math.max(0, Number(toleranceMinutes) || 0);
+  if (age + tolerance < sla) return false;
+  return age >= sla;
+}
+
 export const __cronTest__ = {
   pickNameLike,
   extractGuestName,
   buildGuestLabel,
   deriveGuestFullName,
   escapeHtml,
+  shouldAlertAge,
 };
 if (typeof globalThis.__CRON_TEST__ === 'undefined') {
 
@@ -847,15 +857,14 @@ console.log(`starting per-conversation checks: ${toCheck.length} ids (using inli
 
 // SLA threshold in minutes (now defaulting to 5)
 const SLA_MIN = Number(process.env.SLA_MINUTES ?? 5);
-const CRON_INTERVAL_MIN = Number(process.env.CRON_INTERVAL_MINUTES ?? 5);
 const ALERT_TOL_MIN = Number(process.env.ALERT_TOLERANCE_MINUTES ?? 0.5); // small slack for drift
 const RECENT_WINDOW_MIN = parseInt(process.env.RECENT_WINDOW_MIN || "720", 10); // ignore threads idle >12h
 const MAX_ALERTS_PER_RUN = parseInt(process.env.MAX_ALERTS_PER_RUN || "5", 10);
 
 function shouldAlert(nowMs, lastGuestMsgMs) {
   const ageMin = (nowMs - lastGuestMsgMs) / 60000;
-  // Fire exactly once: when the age enters the SLA window for this run.
-  return ageMin >= SLA_MIN && ageMin < SLA_MIN + CRON_INTERVAL_MIN + ALERT_TOL_MIN;
+  // Fire when the SLA has been breached; dedupe prevents repeat mails.
+  return shouldAlertAge(ageMin, { slaMinutes: SLA_MIN, toleranceMinutes: ALERT_TOL_MIN });
 }
 
 const to = process.env.ALERT_TO || "";
