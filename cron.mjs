@@ -268,8 +268,8 @@ function classifyMessage(m) {
   if (isAI) return { role: "ai", aiStatus: aiStat };
   if (/(guest|customer)/.test(byRaw)) return { role: "guest", aiStatus: aiStat };
   if ((byCanonical === "user" || byCanonical === "users" || /\buser\b/.test(byRaw))) {
-    if (directionRole === "guest") return { role: "guest", aiStatus: aiStat };
-    return { role: "agent", aiStatus: aiStat };
+    if (directionRole === "agent") return { role: "agent", aiStatus: aiStat };
+    return { role: "guest", aiStatus: aiStat };
   }
   if (byRaw) return { role: "agent", aiStatus: aiStat };
   if (directionRole) return { role: directionRole, aiStatus: aiStat };
@@ -703,8 +703,8 @@ export function shouldAlertAge(ageMinutes, { slaMinutes, toleranceMinutes = 0 } 
   if (!Number.isFinite(age)) return true;
   const sla = Number(slaMinutes) || 0;
   const tolerance = Math.max(0, Number(toleranceMinutes) || 0);
-  if (age + tolerance < sla) return false;
-  return age >= sla;
+  // Trigger when age is at least SLA minus tolerance (i.e., allow small clock drift).
+  return age >= Math.max(0, sla - tolerance);
 }
 
 export const __cronTest__ = {
