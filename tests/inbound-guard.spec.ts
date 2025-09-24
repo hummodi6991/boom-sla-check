@@ -16,6 +16,11 @@ test('pickConversationIdForGuard returns lowercase uuid', () => {
   expect(picked).toBe('01890b14-b4cd-7eef-b13e-bb8c083bad60');
 });
 
+test('pickConversationIdForGuard prefers numeric anywhere in the list (uuid first)', () => {
+  const picked = pickConversationIdForGuard(['01890b14-b4cd-7eef-b13e-bb8c083bad60', '42']);
+  expect(picked).toBe('42');
+});
+
 test('pickConversationIdForGuard flattens nested arrays of candidates', () => {
   const picked = pickConversationIdForGuard(['', [' ', [''], ['987']], '01890B14-B4CD-7EEF-B13E-BB8C083BAD60']);
   expect(picked).toBe('987');
