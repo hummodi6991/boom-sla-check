@@ -16,6 +16,11 @@ test('pickConversationIdForGuard returns lowercase uuid', () => {
   expect(picked).toBe('01890b14-b4cd-7eef-b13e-bb8c083bad60');
 });
 
+test('pickConversationIdForGuard flattens nested arrays of candidates', () => {
+  const picked = pickConversationIdForGuard(['', [' ', [''], ['987']], '01890B14-B4CD-7EEF-B13E-BB8C083BAD60']);
+  expect(picked).toBe('987');
+});
+
 test('ensureVisibleInboundMessage skips when id missing', async () => {
   const calls: any[] = [];
   const result = await ensureVisibleInboundMessage('', {
