@@ -1154,6 +1154,35 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       metrics.increment('alerts.skipped_producer_violation');
       return;
     }
+    // --- DB guard: only alert when there is a visible inbound guest message
+    try {
+      const guardCandidates = [
+        linkObj?.uuid,
+        linkObj?.legacyId,
+        linkObj?.primary,
+        linkObj?.additional || [],
+        data?.conversation?.id,
+        data?.conversation?.uuid,
+        data?.conversation?.legacyId,
+        convId,
+      ];
+      const guardConversationId = pickConversationIdForGuard(guardCandidates);
+      if (guardConversationId) {
+        const guard = await ensureVisibleInboundMessage(guardConversationId, {
+          logger,
+          context: { convId: String(guardConversationId) },
+        });
+        if (!guard.ok) {
+          metrics.increment('alerts.skipped_no_inbound');
+          return; // skip sending on empty/no-inbound threads
+        }
+      }
+    } catch (e) {
+      // Be conservative: if guard fails unexpectedly, *do not* send an alert
+      logger?.warn?.({ error: e?.message, convId }, 'skip alert: inbound guard error');
+      metrics.increment?.('alerts.skipped_guard_error');
+      return;
+    }
     // Final confirmation guard – re-fetch once more just before mailing to avoid alerting a resolved breach.
     try {
       const confirmKey = usedKey || convId;
@@ -1239,25 +1268,6 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
       console.log(`Duplicate alert suppressed for ${dedupeId} (lastGuestTs=${lastGuestTs || 'n/a'})`);
       console.log("No alert sent.");
     } else {
-      const guardCandidates = [
-        linkObj?.minted ? null : linkObj?.uuid,
-        linkObj?.conversation_uuid,
-        linkObj?.conversationId,
-        linkObj?.legacyId,
-        linkObj?.legacy_id,
-        ...uniqKeys,
-        usedKey,
-        CONVERSATION_INPUT,
-      ];
-      const guardConversationId = pickConversationIdForGuard(guardCandidates);
-      if (guardConversationId) {
-        const guardResult = await ensureVisibleInboundMessage(guardConversationId, { logger });
-        if (!guardResult.ok) {
-          metrics.increment('alerts.skipped_no_inbound');
-          console.log('No alert sent.');
-          return;
-        }
-      }
       await sendAlert({ subject: subj, text, html });
       markAlerted(state, dedupeId, lastGuestTs);
       console.log(`dedupe_key=${key}`);
