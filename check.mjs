@@ -1156,15 +1156,16 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
     }
     // --- DB guard: only alert when there is a visible inbound guest message
     try {
+      // Prefer numeric conversation identifiers; UUIDs last as fallback.
       const guardCandidates = [
-        linkObj?.uuid,
+        data?.conversation?.id,
         linkObj?.legacyId,
+        data?.conversation?.legacyId,
         linkObj?.primary,
         linkObj?.additional || [],
-        data?.conversation?.id,
-        data?.conversation?.uuid,
-        data?.conversation?.legacyId,
         convId,
+        linkObj?.uuid,
+        data?.conversation?.uuid,
       ];
       const guardConversationId = pickConversationIdForGuard(guardCandidates);
       if (guardConversationId) {
