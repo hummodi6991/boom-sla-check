@@ -1098,6 +1098,8 @@ for (const { id } of toCheck) {
             const guardResult = await ensureVisibleInboundMessage(guardConversationId, {
               logger,
               context: { convId: id != null ? String(id) : undefined },
+              // Soft guard: use in-memory thread we just fetched/evaluated
+              messages: Array.isArray(msgs) ? msgs : undefined,
             });
             if (!guardResult.ok) {
               metrics?.increment?.('alerts.skipped_no_inbound');
