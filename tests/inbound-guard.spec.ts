@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   ensureVisibleInboundMessage,
+  LAST_GUEST_ANY_STATE_SQL,
   LAST_VISIBLE_INBOUND_SQL,
   pickConversationIdForGuard,
 } from '../lib/inboundGuard.js';
@@ -44,7 +45,7 @@ test('ensureVisibleInboundMessage reports skip when no inbound message found', a
   const result = await ensureVisibleInboundMessage('123', {
     logger: { warn: (...args: any[]) => logs.push(args) },
     query: async (sql: string, params: any[]) => {
-      expect(sql).toBe(LAST_VISIBLE_INBOUND_SQL);
+      expect([LAST_VISIBLE_INBOUND_SQL, LAST_GUEST_ANY_STATE_SQL]).toContain(sql);
       expect(params).toEqual(['123']);
       return null;
     },
@@ -66,6 +67,31 @@ test('ensureVisibleInboundMessage resolves when inbound message exists', async (
   expect(result.reason).toBe('found');
   expect(result.inbound).toEqual(expect.objectContaining({ id: 1 }));
   expect(logs).toHaveLength(0);
+});
+
+test('ensureVisibleInboundMessage short-circuits when in-memory messages show inbound guest', async () => {
+  const messages = [{ direction: 'inbound', by: 'guest', sent_at: new Date().toISOString() }];
+  const result = await ensureVisibleInboundMessage('123', {
+    messages,
+    query: async () => { throw new Error('should not be called'); },
+  });
+  expect(result.ok).toBe(true);
+  expect(['found_in_memory', 'found', 'found_any_state']).toContain(result.reason);
+});
+
+test('ensureVisibleInboundMessage falls back to relaxed SQL when strict query returns nothing', async () => {
+  const calls: string[] = [];
+  const result = await ensureVisibleInboundMessage('789', {
+    query: async (sql: string) => {
+      calls.push(sql);
+      if (sql === LAST_VISIBLE_INBOUND_SQL) return null; // strict misses
+      if (sql === LAST_GUEST_ANY_STATE_SQL) return { id: 99, created_at: new Date().toISOString() };
+      throw new Error('unexpected SQL');
+    },
+  });
+  expect(result.ok).toBe(true);
+  expect(result.reason).toBe('found_any_state');
+  expect(calls).toEqual([LAST_VISIBLE_INBOUND_SQL, LAST_GUEST_ANY_STATE_SQL]);
 });
 
 test('ensureVisibleInboundMessage tolerates db not configured errors', async () => {

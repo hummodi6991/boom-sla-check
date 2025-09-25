@@ -1172,6 +1172,8 @@ if (typeof globalThis.__CHECK_TEST__ === "undefined") {
         const guard = await ensureVisibleInboundMessage(guardConversationId, {
           logger,
           context: { convId: String(guardConversationId) },
+          // Prefer the latest re-fetch if available; else fall back to first pass
+          messages: Array.isArray(freshMsgs) && freshMsgs.length ? freshMsgs : (Array.isArray(msgs) ? msgs : undefined),
         });
         if (!guard.ok) {
           metrics.increment('alerts.skipped_no_inbound');
